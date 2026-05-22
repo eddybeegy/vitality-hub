@@ -76,3 +76,5 @@ docker-compose up --build
 - The project currently supports SQLite by default, with optional Postgres or MariaDB/MySQL via `DATABASE_TYPE`.
 - The Go wrapper is built automatically during `npm run dev` and `npm run build`.
 - Runtime SQLite artifacts such as `.db`, `.db-shm`, and `.db-wal` are excluded from source control by `.gitignore`.
+
+## KB
