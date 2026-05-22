@@ -2,7 +2,7 @@ services:
   vitality-hub:
     build: .
     image: vitality-hub:latest
-    container_name: vitality-hub
+    container_name: vitality
     ports:
       - "3000:3000"
     volumes:
