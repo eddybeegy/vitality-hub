@@ -1,0 +1,33 @@
+services:
+  vitality-hub:
+    build: .
+    image: vitality-hub:latest
+    container_name: vitality-hub
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - JWT_SECRET=${JWT_SECRET:-vitality-hub-secret}
+      - PORT=${PORT:-3000}
+      - NODE_ENV=${NODE_ENV:-production}
+      - APP_URL=${APP_URL:-http://localhost:3000}
+      - PATH=${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+      - DATABASE_TYPE=${DATABASE_TYPE:-sqlite}
+      - POSTGRES_URL=${POSTGRES_URL:-}
+      - SQLITE_PATH=${SQLITE_PATH:-/app/data/health.db}
+      - MARIADB_URL=${MARIADB_URL:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - WITHINGS_CLIENT_ID=${WITHINGS_CLIENT_ID:-}
+      - WITHINGS_CLIENT_SECRET=${WITHINGS_CLIENT_SECRET:-}
+      - HEVY_API_KEY=${HEVY_API_KEY:-}
+      - CRONOMETER_USERNAME=${CRONOMETER_USERNAME:-}
+      - CRONOMETER_PASSWORD=${CRONOMETER_PASSWORD:-}
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  data:
+  logs:

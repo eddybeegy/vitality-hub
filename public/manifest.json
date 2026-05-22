@@ -1,0 +1,21 @@
+{
+  "name": "Vitality Hub",
+  "short_name": "Vitality",
+  "description": "Unified health dashboard integrating Withings, Hevy, Cronometer, and Apple Health.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#10b981",
+  "icons": [
+    {
+      "src": "https://picsum.photos/seed/vitality/192/192",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://picsum.photos/seed/vitality/512/512",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

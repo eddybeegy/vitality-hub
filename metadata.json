@@ -1,0 +1,8 @@
+{
+  "name": "Vitality Hub",
+  "description": "Integrated health, workout, and nutrition analytics dashboard with secure custom AI provider insights.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
