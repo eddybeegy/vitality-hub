@@ -10,6 +10,5 @@ coverage/
 logs/
 .env*
 !.env.example
-
 .gemini/
 gha-creds-*.json
