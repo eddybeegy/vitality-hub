@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
 import { BarChart3, HeartPulse, Calendar, RefreshCw, Dumbbell, Send, User, Bot, Check, AlertCircle } from 'lucide-react';
 import { ChatMessage } from '../services/geminiService';
 import { InsightSkeleton } from './ui/Skeleton';
@@ -255,9 +254,8 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
 
         {content ? (
           <div className="prose prose-zinc dark:prose-invert max-w-none ai-response-container prose-xs">
-            <ReactMarkdown 
+            <ReactMarkdown
               remarkPlugins={[remarkGfm]}
-              rehypePlugins={[rehypeRaw]}
               components={{
                 h1: ({node, children, ...props}) => <h1 className="text-lg font-bold mb-2 text-zinc-900 dark:text-zinc-100 border-b border-black/5 dark:border-white/5 pb-1" {...props}>{children}</h1>,
                 h2: ({node, children, ...props}) => <h2 className="text-base font-bold mt-4 mb-2 text-zinc-800 dark:text-zinc-200 flex items-center gap-2" {...props}>{children}</h2>,

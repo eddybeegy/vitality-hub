@@ -1,4 +1,4 @@
-import { exec, execSync } from "child_process";
+import { execFile, execFileSync } from "child_process";
 import path from "path";
 import fs from "fs";
 import { parse } from "csv-parse/sync";
@@ -38,8 +38,9 @@ export const CronometerModule: DataSourceModule = {
     if (!fs.existsSync(binaryPath)) {
       logEvent('info', `Cronometer binary not found, attempting to build...`, 'cronometer');
       try {
-        const buildCmd = `cd go-wrapper && go mod tidy && go build -o gocronometer-wrapper main.go`;
-        const buildResult = execSync(buildCmd, { encoding: 'utf8' });
+        const goWrapperDir = path.join(process.cwd(), 'go-wrapper');
+        execFileSync('go', ['mod', 'tidy'], { cwd: goWrapperDir, encoding: 'utf8' });
+        const buildResult = execFileSync('go', ['build', '-o', 'gocronometer-wrapper', 'main.go'], { cwd: goWrapperDir, encoding: 'utf8' });
         logEvent('info', `Cronometer build successful: ${buildResult}`, 'cronometer');
       } catch (e: any) {
         logEvent('error', `Cronometer build failed: ${e.message}. Stderr: ${e.stderr}`, 'cronometer');
@@ -55,11 +56,12 @@ export const CronometerModule: DataSourceModule = {
 
     const formatDate = (date: Date) => date.toISOString().split('T')[0];
 
-    const cmd = `"${binaryPath}" -u "${username}" -p "${password}" -s "${formatDate(startDate)}" -e "${formatDate(endDate)}"`;
-    logEvent('info', `Executing Cronometer command: ${cmd}`, 'cronometer');
+    const args = ['-u', username, '-p', password, '-s', formatDate(startDate), '-e', formatDate(endDate)];
+    logEvent('info', `Executing Cronometer wrapper for user ${username.replace(/.(?=.{2})/g, '*')} (${formatDate(startDate)} to ${formatDate(endDate)})`, 'cronometer');
 
     return new Promise((resolve) => {
-      exec(cmd, async (error, stdout, stderr) => {
+      // execFile with an args array (no shell) prevents credential values being parsed as shell syntax.
+      execFile(binaryPath, args, async (error, stdout, stderr) => {
         if (error) {
           logEvent('error', `Cronometer sync failed: ${error.message}, Stderr: ${stderr}`, 'cronometer');
           return resolve({ success: false, message: error.message });

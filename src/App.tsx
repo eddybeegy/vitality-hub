@@ -97,6 +97,8 @@ export default function App() {
 
   const [recentSessionsCount, setRecentSessionsCount] = useState(10);
   const [workoutTypeFilter, setWorkoutTypeFilter] = useState<'all' | 'strength' | 'cardio'>('all');
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedRoutine) {
@@ -319,46 +321,74 @@ export default function App() {
             <Activity size={32} />
           </div>
           <h1 className="text-2xl font-bold text-center mb-2 text-zinc-900 dark:text-zinc-100">Welcome to Vitality Hub</h1>
-          <p className="text-zinc-500 dark:text-zinc-400 text-center mb-8">Sign in to access your health dashboard</p>
-          
+          <p className="text-zinc-500 dark:text-zinc-400 text-center mb-8">{authMode === 'login' ? 'Sign in to access your health dashboard' : 'Create your account to get started'}</p>
+
           <form onSubmit={async (e) => {
             e.preventDefault();
             const email = (e.target as any).email.value;
+            const password = (e.target as any).password.value;
+            setAuthError(null);
             try {
-              const res = await fetch('/api/auth/login', {
+              const res = await fetch(`/api/auth/${authMode}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email })
+                body: JSON.stringify({ email, password })
               });
+              const data = await res.json().catch(() => ({}));
               if (res.ok) {
-                const data = await res.json();
                 setUser(data.user);
                 window.location.reload();
               } else {
-                alert('Login failed');
+                setAuthError(data.error || (authMode === 'login' ? 'Login failed' : 'Registration failed'));
               }
             } catch (err) {
               console.error(err);
-              alert('Login failed');
+              setAuthError('Something went wrong. Please try again.');
             }
           }} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Email Address</label>
-              <input 
-                type="email" 
+              <input
+                type="email"
                 name="email"
                 required
+                autoComplete="email"
                 className="w-full px-4 py-3 rounded-xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-zinc-900 dark:text-zinc-100"
                 placeholder="you@example.com"
               />
             </div>
-            <button 
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Password</label>
+              <input
+                type="password"
+                name="password"
+                required
+                minLength={authMode === 'register' ? 8 : undefined}
+                autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
+                className="w-full px-4 py-3 rounded-xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-zinc-900 dark:text-zinc-100"
+                placeholder={authMode === 'register' ? 'At least 8 characters' : '••••••••'}
+              />
+            </div>
+            {authError && (
+              <p className="text-sm text-red-500 dark:text-red-400 text-center">{authError}</p>
+            )}
+            <button
               type="submit"
               className="w-full py-3 px-4 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-xl transition-colors shadow-md shadow-emerald-500/20"
             >
-              Continue
+              {authMode === 'login' ? 'Sign In' : 'Create Account'}
             </button>
           </form>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 text-center mt-6">
+            {authMode === 'login' ? "Don't have an account?" : 'Already have an account?'}{' '}
+            <button
+              type="button"
+              onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthError(null); }}
+              className="text-emerald-600 dark:text-emerald-400 font-semibold hover:underline"
+            >
+              {authMode === 'login' ? 'Register' : 'Sign in'}
+            </button>
+          </p>
         </div>
       </div>
     );

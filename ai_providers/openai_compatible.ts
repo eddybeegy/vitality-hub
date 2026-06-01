@@ -1,5 +1,6 @@
 import axios from "axios";
 import { AIProvider, AIConstraints, GenerateParams, GenerateResult } from "./types";
+import { assertSafeProviderUrl } from "./urlGuard";
 
 // Simple in-memory health cache for provider base URLs
 const providerHealth = new Map<string, { ok: boolean; checked: number }>();
@@ -9,6 +10,7 @@ export const UNHEALTHY_TTL_MS = 15 * 1000;  // 15 seconds for failed checks
 export async function probeProvider(rawUrl: string, id?: string, apiKey?: string): Promise<boolean> {
   const url = rawUrl.endsWith('/v1') ? rawUrl : (rawUrl.endsWith('/') ? `${rawUrl}v1` : `${rawUrl}/v1`);
   try {
+    await assertSafeProviderUrl(rawUrl, id === 'ollama');
     const headers: any = { 'Content-Type': 'application/json' };
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
     // Try OpenAI-compatible /v1/models
@@ -47,9 +49,10 @@ export const OpenAICompatibleProvider = (id: string, name: string, defaultBaseUr
       return [];
     }
     try {
+      await assertSafeProviderUrl(url, id === 'ollama');
       const headers: any = { 'Content-Type': 'application/json' };
       if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-      
+
       try {
         const response = await axios.get(`${url}/models`, { headers, timeout: 5000 });
         if (response.data && response.data.data) {
@@ -92,6 +95,7 @@ export const OpenAICompatibleProvider = (id: string, name: string, defaultBaseUr
 
   async generate({ model, prompt, maxTokens, apiKey, baseUrl, logEvent }: GenerateParams): Promise<GenerateResult> {
     const rawUrl = baseUrl || this.baseUrl;
+    await assertSafeProviderUrl(rawUrl, id === 'ollama');
     // Prefer the /v1 OpenAI-compatible prefix for Ollama when it's not already present
      let openAIUrl = rawUrl;
      if (id === 'ollama' && !rawUrl.includes('/v1')) {
