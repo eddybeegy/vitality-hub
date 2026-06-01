@@ -1461,61 +1461,62 @@ try {
  */
 async function checkScheduledRegeneration(userId: number) {
   try {
-    const updateIfDue = db.transaction(async (userId: number, nowStr: string) => {
-      const user = await db.prepare("SELECT ai_generation_times, timezone, daily_briefing_updated_at FROM users WHERE id = ?").get(userId) as any;
-      if (!user) return false;
+    const user = await db.prepare("SELECT ai_generation_times, timezone, daily_briefing_updated_at FROM users WHERE id = ?").get(userId) as any;
+    if (!user) return;
 
-      let times: string[] = [];
-      try {
-        times = JSON.parse(user.ai_generation_times || '["off", "off", "off"]');
-      } catch (e) {
-        times = ["off", "off", "off"];
+    let times: string[] = [];
+    try {
+      times = JSON.parse(user.ai_generation_times || '["off", "off", "off"]');
+    } catch (e) {
+      times = ["off", "off", "off"];
+    }
+
+    const activeTimes = times.filter(t => t && t !== 'off');
+    if (activeTimes.length === 0) return;
+
+    const timezone = user.timezone || undefined;
+    const now = new Date();
+    const nowStr = now.toISOString();
+
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: timezone
+    });
+    const currentTimeStr = formatter.format(now);
+
+    const [currH, currM] = currentTimeStr.split(':').map(Number);
+    const userLocalMinutes = currH * 60 + currM;
+
+    const todayStrFull = getTodayInTimezone(timezone, now);
+    let triggered = false;
+
+    for (const targetTime of activeTimes) {
+      const [targetH, targetM] = targetTime.split(':').map(Number);
+      const targetLocalMinutes = targetH * 60 + targetM;
+
+      let diff = userLocalMinutes - targetLocalMinutes;
+      // Handle midnight wrap-around: if userTime is early morning and target was late night, add 24 hours.
+      if (diff < -1200) {
+        diff += 1440;
       }
 
-      const activeTimes = times.filter(t => t && t !== 'off');
-      if (activeTimes.length === 0) return false;
+      if (diff >= 0 && diff <= 15) {
+        const targetDateTime = getDateTimeInTimezone(timezone, todayStrFull, targetTime);
+        if (now >= targetDateTime) {
+          const result = db.prepare(
+            "UPDATE users SET daily_briefing_updated_at = ? WHERE id = ? AND (daily_briefing_updated_at IS NULL OR daily_briefing_updated_at < ?)"
+          ).run(nowStr, userId, targetDateTime.toISOString());
 
-      const timezone = user.timezone || undefined;
-      const now = new Date();
-      
-      const formatter = new Intl.DateTimeFormat('en-GB', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-        timeZone: timezone
-      });
-      const currentTimeStr = formatter.format(now);
-      
-      const [currH, currM] = currentTimeStr.split(':').map(Number);
-      const userLocalMinutes = currH * 60 + currM;
-      
-      const lastUpdate = user.daily_briefing_updated_at ? new Date(user.daily_briefing_updated_at) : new Date(0);
-      const todayStrFull = getTodayInTimezone(timezone, now);
-      
-      for (const targetTime of activeTimes) {
-        const [targetH, targetM] = targetTime.split(':').map(Number);
-        const targetLocalMinutes = targetH * 60 + targetM;
-
-        let diff = userLocalMinutes - targetLocalMinutes;
-        // Handle midnight wrap-around: if userTime is early morning and target was late night, add 24 hours.
-        if (diff < -1200) {
-          diff += 1440;
-        }
-
-        if (diff >= 0 && diff <= 15) {
-          const targetDateTime = getDateTimeInTimezone(timezone, todayStrFull, targetTime);
-          if (now >= targetDateTime && lastUpdate < targetDateTime) {
+          if (result.changes > 0) {
             console.log(`[ai-scheduler] Triggering scheduled regeneration for user ${userId} at ${targetTime}`);
-            await db.prepare("UPDATE users SET daily_briefing_updated_at = ? WHERE id = ?").run(nowStr, userId);
-            return true;
+            triggered = true;
+            break;
           }
         }
       }
-      return false;
-    });
-
-    const nowStr = new Date().toISOString();
-    const triggered = await updateIfDue(userId, nowStr);
+    }
 
     if (triggered) {
       performAIGenerations(userId).catch(err => {
@@ -3707,6 +3708,7 @@ ${recoveryText}
       const syncKey = `${dateStr}-${hour}-${minute}`;
 
       if (lastSyncKey === syncKey) return;
+      lastSyncKey = syncKey;
 
       const systemTimes = await db.prepare("SELECT value FROM system_config WHERE key = 'ai_generation_times'").get() as any;
       const globalAITimes = systemTimes ? JSON.parse(systemTimes.value) : ['off', 'off', 'off'];
