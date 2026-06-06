@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { BarChart3, HeartPulse, Calendar, RefreshCw, Dumbbell, Send, User, Bot, Check, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { BarChart3, Calendar, RefreshCw, Dumbbell, Send, User, Bot, Check, AlertCircle, ChevronLeft, ChevronRight, Sparkles, Brain } from 'lucide-react';
 import { ChatMessage } from '../services/geminiService';
 import { InsightSkeleton } from './ui/Skeleton';
-import { logToServer, getLocalDateString, formatDateWithTimezone } from '../lib/utils';
+import { getLocalDateString, formatDateWithTimezone } from '../lib/utils';
 
 interface ApplyProgressionButtonProps {
   data: string;
@@ -18,19 +18,19 @@ const ApplyProgressionButton: React.FC<ApplyProgressionButtonProps> = ({ data })
     try {
       setStatus('loading');
       setErrorMessage('');
-      
+
       // Clean the data string
       const cleanData = data.trim();
       const startIndex = cleanData.indexOf('{');
       const endIndex = cleanData.lastIndexOf('}');
-      
+
       if (startIndex === -1 || endIndex === -1) {
         throw new Error("Invalid format: No JSON object found in the progression block.");
       }
-      
+
       const jsonStr = cleanData.substring(startIndex, endIndex + 1);
       const parsed = JSON.parse(jsonStr);
-      
+
       if (!parsed.routine_external_id) {
          throw new Error("No routine ID found for this workout. This usually means the workout wasn't linked to a Hevy routine.");
       }
@@ -63,11 +63,11 @@ const ApplyProgressionButton: React.FC<ApplyProgressionButtonProps> = ({ data })
 
   return (
     <div className="my-8 pb-4 border-b border-zinc-100 dark:border-zinc-800">
-      <button 
+      <button
         onClick={handleApply}
         disabled={status !== 'idle'}
         className={`w-full sm:w-auto px-8 py-4 rounded-2xl text-sm font-black tracking-tighter uppercase transition-all shadow-xl flex items-center justify-center gap-3 border-b-4 ${
-          status === 'success' ? 'bg-emerald-50 border-emerald-500 text-emerald-700' : 
+          status === 'success' ? 'bg-emerald-50 border-emerald-500 text-emerald-700' :
           status === 'error' ? 'bg-red-50 border-red-500 text-red-700' :
           'bg-blue-600 border-blue-800 text-white hover:bg-blue-700 hover:border-blue-900 scale-100 hover:scale-[1.02] active:scale-95 shadow-blue-200 dark:shadow-none'
         } disabled:opacity-70 disabled:scale-100`}
@@ -91,8 +91,7 @@ const ApplyProgressionButton: React.FC<ApplyProgressionButtonProps> = ({ data })
 };
 
 interface AIInsightsProps {
-  nutritionVitalsReview: any | null;
-  workoutProgressionReview: any | null;
+  combinedReview: any | null;
   insightsLastUpdated: Record<string, string>;
   isReviewLoading: boolean;
   checkAndRegenerateAI: (force: boolean, currentTargets?: any[], settings?: any, specificType?: string) => Promise<void>;
@@ -105,12 +104,12 @@ interface AIInsightsProps {
   selectedBatchId: string | null;
   setSelectedBatchId: (batchId: string | null) => void;
   fetchChatHistory: (date: string, batchId?: string | null) => Promise<void>;
-  mode: 'nutrition' | 'workout';
+  conversationMemory?: string;
+  conversationMemoryUpdatedAt?: string | null;
 }
 
 export const AIInsights: React.FC<AIInsightsProps> = ({
-  nutritionVitalsReview: currentNutritionReview,
-  workoutProgressionReview: currentWorkoutReview,
+  combinedReview,
   insightsLastUpdated,
   isReviewLoading,
   checkAndRegenerateAI,
@@ -123,7 +122,8 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
   selectedBatchId,
   setSelectedBatchId,
   fetchChatHistory,
-  mode,
+  conversationMemory,
+  conversationMemoryUpdatedAt,
 }) => {
   const [chatInput, setChatInput] = useState('');
   const today = getLocalDateString(timezone);
@@ -134,10 +134,10 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
     const message = chatInput;
     const date = selectedDate;
     setChatInput('');
-    
+
     const newUserMessage: ChatMessage = { role: 'user', content: message };
     setChatHistory(prev => [...prev, newUserMessage]);
-    
+
     const response = await handleChatSubmit(message, date, chatHistory);
     if (response) {
       fetchChatHistory(selectedDate, selectedBatchId);
@@ -262,34 +262,55 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
     }
   }, [availableDates, selectedDate]);
 
-  const getInsightForDate = (type: string) => {
-    const insight = allAIInsights.find(i => {
-      const dateMatch = i.date === selectedDate || (!i.date && selectedDate === today);
-      const batchMatch = !selectedBatchId || i.batch_id === selectedBatchId;
-      return i.type === type && dateMatch && batchMatch;
-    });
-
-    if (selectedDate === today && (!selectedBatchId || (currentNutritionReview?.batch_id === selectedBatchId || currentWorkoutReview?.batch_id === selectedBatchId))) {
+  const getInsightForDate = () => {
+    // Live state for today's latest combined review
+    if (selectedDate === today && combinedReview?.text && (!selectedBatchId || combinedReview.batch_id === selectedBatchId)) {
       return {
-        content: type === 'nutrition_vitals' ? currentNutritionReview?.text : currentWorkoutReview?.text,
-        updated_at: insightsLastUpdated[type],
-        provider: type === 'nutrition_vitals' ? currentNutritionReview?.provider : currentWorkoutReview?.provider,
-        model: type === 'nutrition_vitals' ? currentNutritionReview?.model : currentWorkoutReview?.model,
-        batch_id: type === 'nutrition_vitals' ? currentNutritionReview?.batch_id : currentWorkoutReview?.batch_id
+        content: combinedReview.text,
+        updated_at: insightsLastUpdated['combined'] || combinedReview.updated_at,
+        provider: combinedReview.provider,
+        model: combinedReview.model,
+        batch_id: combinedReview.batch_id
       };
     }
-    
-    return insight ? { 
-      content: insight.content, 
-      updated_at: insight.updated_at,
-      provider: insight.provider,
-      model: insight.model,
-      batch_id: insight.batch_id
-    } : { content: null, updated_at: undefined };
+
+    const combined = allAIInsights.find(i => {
+      const dateMatch = i.date === selectedDate || (!i.date && selectedDate === today);
+      const batchMatch = !selectedBatchId || i.batch_id === selectedBatchId;
+      return i.type === 'combined' && dateMatch && batchMatch;
+    });
+    if (combined) {
+      return {
+        content: combined.content,
+        updated_at: combined.updated_at,
+        provider: combined.provider,
+        model: combined.model,
+        batch_id: combined.batch_id
+      };
+    }
+
+    // Backward-compatibility: older insights were stored as separate nutrition/workout types.
+    const order: Record<string, number> = { nutrition_vitals: 0, workout_progression: 1 };
+    const legacy = allAIInsights.filter(i => {
+      const dateMatch = i.date === selectedDate;
+      const batchMatch = !selectedBatchId || i.batch_id === selectedBatchId;
+      return (i.type === 'nutrition_vitals' || i.type === 'workout_progression') && dateMatch && batchMatch;
+    }).sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9));
+
+    if (legacy.length) {
+      return {
+        content: legacy.map(i => i.content).join('\n\n---\n\n'),
+        updated_at: legacy[0].updated_at,
+        provider: legacy[0].provider,
+        model: legacy[0].model,
+        batch_id: legacy[0].batch_id
+      };
+    }
+
+    return { content: null, updated_at: undefined, provider: undefined, model: undefined, batch_id: undefined };
   };
 
-  const nutritionVitals = getInsightForDate('nutrition_vitals');
-  const workoutProgression = getInsightForDate('workout_progression');
+  const review = getInsightForDate();
 
   const batchesForSelectedDate = allAIInsights
     .filter(i => i.date === selectedDate)
@@ -308,12 +329,12 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
 
 
   const renderMarkdown = (
-    content: string | null, 
-    title: string, 
-    icon: React.ReactNode, 
-    lastUpdated: string | undefined, 
-    color: string, 
-    provider?: string, 
+    content: string | null,
+    title: string,
+    icon: React.ReactNode,
+    lastUpdated: string | undefined,
+    color: string,
+    provider?: string,
     model?: string,
     type?: string
   ) => {
@@ -341,7 +362,7 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                // This triggers regeneration for ONLY this insight type
+                // This triggers regeneration for the combined insight
                 checkAndRegenerateAI(true, undefined, undefined, type);
               }}
               disabled={isReviewLoading}
@@ -381,7 +402,7 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
                 code: (props) => {
                   const { children, className, node, ...rest } = props;
                   const match = /language-progression/.exec(className || '');
-                  
+
                   // Extraction helper to get text even if children is a complex object/array
                   const extractText = (nodes: any): string => {
                     if (typeof nodes === 'string') return nodes;
@@ -395,7 +416,7 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
                     const data = extractText(children);
                     return <ApplyProgressionButton data={data} />;
                   }
-                  
+
                   return (
                     <code className={className} {...rest}>
                       {children}
@@ -471,8 +492,8 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
                     }
                   }}
                   className={`date-button flex flex-col items-center justify-center min-w-[60px] flex-shrink-0 p-3 rounded-xl transition-all ${
-                    isSelected 
-                      ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200 dark:shadow-none scale-105' 
+                    isSelected
+                      ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200 dark:shadow-none scale-105'
                       : 'bg-zinc-50 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-700'
                   }`}
                   style={{ scrollSnapAlign: 'center' }}
@@ -539,27 +560,51 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
         )}
       </div>
 
-      {mode === 'nutrition' && renderMarkdown(
-        nutritionVitals.content, 
-        'Nutrition & Vitals', 
-        <HeartPulse size={18} />, 
-        nutritionVitals.updated_at, 
+      {/* What the AI is remembering from recent conversations */}
+      {conversationMemory && conversationMemory.trim() && (
+        <div className="bg-gradient-to-br from-violet-50 to-white dark:from-violet-950/30 dark:to-zinc-900 p-4 rounded-2xl border border-violet-200/60 dark:border-violet-900/40 shadow-sm">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-8 h-8 bg-violet-600 rounded-lg flex items-center justify-center text-white shadow-md">
+              <Brain size={18} />
+            </div>
+            <div>
+              <h2 className="text-base font-bold tracking-tight text-zinc-900 dark:text-zinc-100">Remembered from our chats</h2>
+              <span className="text-[9px] text-zinc-400 dark:text-zinc-500 font-medium">
+                Steering your insights{conversationMemoryUpdatedAt ? ` • Updated: ${formatDate(conversationMemoryUpdatedAt)}` : ''}
+              </span>
+            </div>
+          </div>
+          <div className="prose prose-zinc dark:prose-invert max-w-none prose-xs">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                ul: ({node, children, ...props}) => <ul className="space-y-1.5 list-none p-0 m-0" {...props}>{children}</ul>,
+                li: ({node, children, ...props}) => (
+                  <li className="flex items-start gap-2" {...props}>
+                    <div className="w-1 h-1 rounded-full bg-violet-500 mt-1.5 shrink-0" />
+                    <div className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">{children}</div>
+                  </li>
+                ),
+                p: ({node, children, ...props}) => <p className="text-zinc-600 dark:text-zinc-400 leading-relaxed text-xs m-0" {...props}>{children}</p>,
+              }}
+            >
+              {conversationMemory}
+            </ReactMarkdown>
+          </div>
+        </div>
+      )}
+
+      {renderMarkdown(
+        review.content,
+        'Health & Fitness Review',
+        <Sparkles size={18} />,
+        review.updated_at,
         'bg-emerald-600',
-        nutritionVitals.provider,
-        nutritionVitals.model,
-        'nutrition_vitals'
+        review.provider,
+        review.model,
+        'combined'
       )}
-      {mode === 'workout' && renderMarkdown(
-        workoutProgression.content, 
-        'Workout Progression', 
-        <Dumbbell size={18} />, 
-        workoutProgression.updated_at, 
-        'bg-blue-600',
-        workoutProgression.provider,
-        workoutProgression.model,
-        'workout_progression'
-      )}
-      
+
       <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm">
         <h2 className="text-base font-bold tracking-tight text-zinc-900 dark:text-zinc-100 mb-4">Ask AI about your data</h2>
         <div className="space-y-4 mb-4 h-[300px] overflow-y-auto pr-2">
@@ -588,7 +633,7 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
           )}
         </div>
         <div className="flex gap-2">
-          <input 
+          <input
             type="text"
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
@@ -596,7 +641,7 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
             placeholder="Ask a question..."
             className="flex-grow px-4 py-3 rounded-xl border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all text-zinc-900 dark:text-zinc-100"
           />
-          <button 
+          <button
             type="button"
             onClick={onSubmit}
             disabled={isChatLoading}

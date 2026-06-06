@@ -363,7 +363,9 @@ async function ensureSchema() {
       ai_generation_times: "TEXT DEFAULT '[\"off\", \"off\", \"off\"]'",
       metric_priorities: "TEXT",
       font_size: "TEXT DEFAULT 'medium'",
-      dashboard_widgets: "TEXT"
+      dashboard_widgets: "TEXT",
+      ai_conversation_memory: "TEXT",
+      ai_conversation_memory_updated_at: "DATETIME"
     },
     ai_configs: {
       id: "INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -1670,6 +1672,65 @@ async function checkScheduledRegeneration(userId: number) {
   }
 }
 
+  /**
+   * Distils the salient, durable points from a user's recent AI conversations into a
+   * compact memory that is fed back into future insight generations so they stay
+   * personalised and consistent. Only re-summarises when there are new messages.
+   * Returns the (possibly updated) memory string.
+   */
+  async function updateConversationMemory(user: any): Promise<string> {
+    const userId = user.id;
+    const existingMemory = user.ai_conversation_memory || '';
+    try {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 21);
+      const cutoffStr = cutoff.toISOString();
+
+      const messages = await db.prepare(
+        "SELECT role, content, timestamp FROM chat_history WHERE user_id = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT 40"
+      ).all(userId, cutoffStr) as any[];
+
+      if (!messages || messages.length === 0) return existingMemory;
+
+      const latestMessageTs = messages[0].timestamp;
+      const memoryUpdatedAt = user.ai_conversation_memory_updated_at;
+
+      // Nothing new since we last distilled the memory — reuse it.
+      if (memoryUpdatedAt && latestMessageTs && new Date(latestMessageTs) <= new Date(memoryUpdatedAt)) {
+        return existingMemory;
+      }
+
+      const transcript = [...messages].reverse()
+        .map(m => `${m.role === 'user' ? 'User' : 'Coach'}: ${String(m.content).slice(0, 600)}`)
+        .join('\n');
+
+      const memoryPrompt = `You maintain a concise, durable memory of what matters to this person so their AI health & fitness coach stays consistent and personalised across sessions.
+
+EXISTING MEMORY (may be empty):
+${existingMemory || '(none yet)'}
+
+RECENT CONVERSATION (oldest first):
+${transcript}
+
+Update the memory. Capture only durable, salient points: the user's stated goals, preferences, constraints, injuries or health concerns, dietary choices, recurring questions, and things they reacted positively or negatively to. Merge new information with the existing memory, drop anything now stale or contradicted, and keep it general (avoid day-specific numbers).
+
+Output ONLY a short markdown bullet list (max 10 bullets, one short line each). No preamble, no headings.`;
+
+      const { text } = await callAI(user, memoryPrompt, 1024);
+      const memory = (text || '').trim().slice(0, 4000);
+      if (memory) {
+        await db.prepare("UPDATE users SET ai_conversation_memory = ?, ai_conversation_memory_updated_at = ? WHERE id = ?")
+          .run(memory, new Date().toISOString(), userId);
+        logEvent('info', `Updated conversation memory for user ${userId}`, 'ai', userId);
+        return memory;
+      }
+      return existingMemory;
+    } catch (err: any) {
+      logEvent('warn', `Failed to update conversation memory: ${err.message}`, 'ai', userId);
+      return existingMemory;
+    }
+  }
+
   async function performAIGenerations(userId: number, typesToGenerate?: string[]) {
     const user = await db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as any;
     if (!user) {
@@ -1778,67 +1839,38 @@ async function checkScheduledRegeneration(userId: number) {
         return null;
       }).filter(Boolean);
 
-      const previousInsights = await db.prepare("SELECT type, content, date FROM ai_insights WHERE user_id = ? ORDER BY date DESC, updated_at DESC LIMIT 3").all(userId) as any[];
+      const previousInsights = await db.prepare("SELECT content, date FROM ai_insights WHERE user_id = ? AND type = 'combined' ORDER BY date DESC, updated_at DESC LIMIT 2").all(userId) as any[];
 
-      const workoutContext = JSON.stringify({
-        previous_insights_summaries: previousInsights.map(pi => ({ type: pi.type, date: pi.date, summary: pi.content.substring(0, 200) + "..." })),
-        body_weight_history_90_days: bodyWeightTrends,
-        daily_activity_metrics: aggregated.map(a => {
-          const compact: any = { date: a.date };
-          ['exercise_time', 'active_energy', 'steps', 'sleep'].forEach(k => {
-            if (a[k] && a[k] !== 0) compact[k] = typeof a[k] === 'number' ? Number(a[k].toFixed(2)) : a[k];
-          });
-          return compact;
-        }).slice(0, 14),
-        workouts_data: workouts.map((w: any) => {
-          const wExs = exercises.filter((ex: any) => ex.workout_id === w.id);
-          const routine = routines.find((r: any) => r.external_id === w.routine_external_id || r.name === w.name);
-          return {
-            id: w.id,
-            routine_id: routine?.id,
-            routine_external_id: routine?.external_id,
-            workout_name: w.name,
-            timestamp: w.timestamp,
-            duration_minutes: Math.round(w.duration / 60),
-            volume: w.volume,
-            exercises: wExs.map((ex: any) => {
-              const exSets = sets.filter((s: any) => s.exercise_id === ex.id);
-              if (ex.exercise_type === 'cardio') {
-                const totalDist = exSets.reduce((acc: number, s: any) => acc + (s.distance || 0), 0);
-                const totalTime = exSets.reduce((acc: number, s: any) => acc + (s.time || 0), 0);
-                const compactEx: any = { title: ex.exercise_title, sets: exSets.length };
-                if (totalDist > 0) compactEx.distance_meters = totalDist;
-                if (totalTime > 0) compactEx.duration_seconds = totalTime;
-                return compactEx;
-              } else {
-                return {
-                  title: ex.exercise_title,
-                  sets: exSets.map((s: any) => {
-                    const setObj: any = { reps: s.reps };
-                    if (s.weight !== null && s.weight !== undefined) setObj.weight_kg = s.weight;
-                    if (s.time > 0) setObj.duration_seconds = s.time;
-                    return setObj;
-                  })
-                };
-              }
-            })
-          };
-        }),
-        routines_available: routines.map((r: any) => ({
-          routine_id: r.id,
-          routine_external_id: r.external_id,
-          routine_name: r.name,
-          folder_name: r.folder_name,
-          exercises: routineExercises.filter((re: any) => re.routine_id === r.id).map((re: any) => ({
-            title: re.exercise_title,
-            sets_count: re.sets_count
-          }))
-        })),
-        targets: targets
+      // Compact recent-session summary: top working set per exercise as a progression proxy.
+      const workoutSummaries = workouts.slice(0, 12).map((w: any) => {
+        const wExs = exercises.filter((ex: any) => ex.workout_id === w.id);
+        return {
+          name: w.name,
+          date: w.timestamp,
+          duration_minutes: Math.round((w.duration || 0) / 60),
+          volume: w.volume || undefined,
+          exercises: wExs.slice(0, 8).map((ex: any) => {
+            const exSets = sets.filter((s: any) => s.exercise_id === ex.id);
+            if (ex.exercise_type === 'cardio') {
+              const totalDist = exSets.reduce((acc: number, s: any) => acc + (s.distance || 0), 0);
+              const totalTime = exSets.reduce((acc: number, s: any) => acc + (s.time || 0), 0);
+              const compactEx: any = { title: ex.exercise_title, sets: exSets.length };
+              if (totalDist > 0) compactEx.distance_meters = totalDist;
+              if (totalTime > 0) compactEx.duration_seconds = totalTime;
+              return compactEx;
+            }
+            const best = exSets.reduce((acc: any, s: any) => {
+              if (s.weight != null && (!acc || s.weight > acc.weight)) return s;
+              return acc;
+            }, null);
+            const compactEx: any = { title: ex.exercise_title, sets: exSets.length };
+            if (best) compactEx.top_set = { weight_kg: best.weight, reps: best.reps };
+            return compactEx;
+          })
+        };
       });
 
-      const nutritionContext = JSON.stringify({
-        previous_insights_summaries: previousInsights.map(pi => ({ type: pi.type, date: pi.date, summary: pi.content.substring(0, 200) + "..." })),
+      const combinedContext = JSON.stringify({
         body_weight_history_90_days: bodyWeightTrends,
         daily_metrics: aggregated.map(a => {
           const compact: any = { date: a.date };
@@ -1848,159 +1880,77 @@ async function checkScheduledRegeneration(userId: number) {
           return compact;
         }).slice(0, 25),
         meal_items_history: mealItems.slice(0, 20).map((m: any) => ({ name: m.name, calories: m.calories, timestamp: m.timestamp })),
+        recent_workouts: workoutSummaries,
+        routines_available: routines.map((r: any) => ({
+          routine_name: r.name,
+          folder_name: r.folder_name,
+          exercises: routineExercises.filter((re: any) => re.routine_id === r.id).map((re: any) => ({
+            title: re.exercise_title,
+            sets_count: re.sets_count
+          }))
+        })),
         targets: targets,
         medications: (() => {
           try {
             const parsed = user.medications ? JSON.parse(user.medications) : [];
-            return Array.isArray(parsed) ? (parsed.length > 10 ? parsed.slice(0, 10) : parsed) : [];
+            return Array.isArray(parsed) ? parsed.slice(0, 10) : [];
           } catch (e) {
             return [];
           }
         })()
       });
 
-      logEvent('debug', `Contexts constructed. Workout: ${Math.round(workoutContext.length / 1024)} KB, Nutrition: ${Math.round(nutritionContext.length / 1024)} KB`, 'ai', userId);
-
-      const nutritionPrompt = `Generate a detailed and conversational "Nutrition & Vitals" analysis for a ${user.age}y ${user.gender}. Targets: ${JSON.stringify(targets)}. Hints: ${user.ai_hints}. Data: ${nutritionContext}. 
- 
-CRITICAL: ONLY use the provided data. Do NOT hallucinate values. 
-- Distinguish strictly between 'Targets' and recent 'daily_metrics' values. 
-- Example: If a target for body fat is 20% but the latest 'daily_metrics' value for body fat is 21.9%, you MUST report 21.9% as the "Latest %".
-- Do NOT assume the user has reached their target if the data says otherwise.
-
-Structure:
-1. Latest Daily Summary: A markdown table for the most recent day of complete data (daily_metrics[0]). Include Calories In, Macros, Sleep, and HR.
-2. Progress vs Averages: Discuss trends based on the history in 'daily_metrics'. Compare the latest values to the 'avg' provided in the context (if available, otherwise calculate from the provided history).
-3. Nutrition & Targets: Evaluate recent intakes vs targets.
-4. Specific Meal Feedback: Mention 2-3 specific items from 'meal_items_history'.
-5. 3 Concise Actions: Based strictly on the data.
- 
-IMPORTANT: Refer to 'previous_insights_summaries' to avoid repeating old advice. Focus on what is NEW or CHANGING.
-Use Markdown. Be precise, analytical, and supportive.`;
+      logEvent('debug', `Combined context constructed: ${Math.round(combinedContext.length / 1024)} KB`, 'ai', userId);
 
       const today = getTodayInTimezone(user.timezone || undefined);
       const batchId = Date.now().toString();
       const batchTime = new Date().toISOString();
 
-      // 1. Generate Nutrition & Vitals
-      if (!typesToGenerate || typesToGenerate.includes('nutrition_vitals')) {
+      // Single unified review covering nutrition, training, body/vitals and progress vs targets.
+      if (!typesToGenerate || typesToGenerate.includes('combined')) {
         try {
-          const { text, provider, model } = await callAI(user, nutritionPrompt);
+          // Refresh the durable memory of what the user cares about from recent conversations,
+          // then let it steer this regeneration.
+          const conversationMemory = await updateConversationMemory(user);
+
+          const combinedPrompt = `You are a ${user.ai_persona || 'supportive expert health & fitness coach'} writing a single, unified health & fitness review for a ${user.age || ''}y ${user.gender || 'person'}. Focus area: ${user.ai_focus || 'General Health'}.
+${conversationMemory ? `\nWHAT THIS PERSON CARES ABOUT (remembered from recent conversations — let this steer what you emphasise and the advice you give):\n${conversationMemory}\n` : ''}${previousInsights.length ? `\nYOUR PREVIOUS REVIEWS (summaries — build on these and focus on what is NEW or CHANGING; do not repeat old advice verbatim):\n${previousInsights.map(pi => `- ${pi.date}: ${String(pi.content).substring(0, 250)}...`).join('\n')}\n` : ''}
+User hints: ${user.ai_hints || 'None'}
+Targets: ${JSON.stringify(targets)}
+
+DATA (the ONLY source of truth — never invent values; distinguish strictly between targets and actual recent values):
+${combinedContext}
+
+Write ONE cohesive review in Markdown covering ALL of the following, in this order:
+
+## 📊 Progress vs Targets
+A markdown table comparing each target to the user's latest/recent actuals from the data, with Trend and Progress columns. Use the most recent real value; never assume a target has been met.
+
+## 🥗 Nutrition
+Review recent calories & macros vs targets using daily_metrics and meal_items_history. Call out 2-3 specific foods or patterns.
+
+## 🏋️ Training
+Review workout consistency, volume and intensity from recent_workouts. Note progression on key lifts (compare top sets over time) and suggest concrete next-session progressions, referencing routines_available where relevant.
+
+## ❤️ Body & Vitals
+Review body composition (weight, body fat, muscle mass) trends and vitals (resting HR, sleep, HRV) from the data.
+
+## 🎯 Focus Now
+3-4 concise, specific, data-driven actions. Where it connects, tie these back to what this person cares about.
+
+Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" tone` : 'supportive'}. Strictly Markdown.`;
+
+          const { text, provider, model } = await callAI(user, combinedPrompt);
           if (text) {
             await db.prepare(`
-              INSERT INTO ai_insights (user_id, type, content, date, provider, model, batch_id, updated_at) 
+              INSERT INTO ai_insights (user_id, type, content, date, provider, model, batch_id, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(userId, 'nutrition_vitals', text, today, provider, model, batchId, batchTime);
+            `).run(userId, 'combined', text, today, provider, model, batchId, batchTime);
 
-            logEvent('info', `Generated nutrition_vitals insight for user ${userId}`, 'ai', userId);
+            logEvent('info', `Generated combined insight for user ${userId}`, 'ai', userId);
           }
         } catch (err: any) {
-          logEvent('error', `Failed to generate nutrition_vitals insight: ${err.message}`, 'ai', userId);
-        }
-      }
-
-      // 2. Generate Workout Progression (Serialized sequentially to avoid resource overload/timeouts on local/cloud runtimes)
-      if (!typesToGenerate || typesToGenerate.includes('workout_progression')) {
-        try {
-          const workoutCtx = JSON.parse(workoutContext);
-          
-          // Deduplicate: Only analyze the latest workout for each unique routine name
-          const seenRoutines = new Set();
-          const uniqueWorkouts = (workoutCtx.workouts_data || []).filter((w: any) => {
-            if (seenRoutines.has(w.workout_name)) return false;
-            seenRoutines.add(w.workout_name);
-            return true;
-          });
-
-          const recentWorkoutsToAnalyze = uniqueWorkouts.slice(0, 5); 
-          
-          if (recentWorkoutsToAnalyze.length === 0) {
-            logEvent('info', 'No recent workouts to analyze for progression', 'ai', userId);
-            return;
-          }
-
-          logEvent('info', `Generating sequential workout progression (${recentWorkoutsToAnalyze.length} workouts) for user ${userId}`, 'ai', userId);
-          
-          const results = [];
-
-          logEvent('info', `Sequential generation (1/3): Generating consistency summary...`, 'ai', userId);
-          const summaryRes = await callAI(user, `Generate a short (2-3 sentence) summary of overall workout consistency and effort for the last 7 days based on this context: ${workoutContext}. Focus on total sessions vs targets. Markdown format.`);
-          results.push(summaryRes);
-          
-          logEvent('info', `Sequential generation (2/3): Analyzing ${recentWorkoutsToAnalyze.length} workouts...`, 'ai', userId);
-          for (let i = 0; i < recentWorkoutsToAnalyze.length; i++) {
-            const w = recentWorkoutsToAnalyze[i];
-            logEvent('debug', `Analyzing workout ${i + 1}/${recentWorkoutsToAnalyze.length}: ${w.workout_name}`, 'ai', userId);
-            const wRes = await callAI(user, `
-              Analyze this specific workout from the user's history and suggest progressions for the NEXT time they do this routine: ${JSON.stringify(w)}
-              
-              Look at the available routine structure: ${JSON.stringify(workoutCtx.routines_available.find((r: any) => r.routine_external_id === w.routine_external_id || r.routine_name === w.workout_name))}
-              
-              Format your response exactly as follows:
-              ### WORKOUT: ${w.workout_name} (${new Date(w.timestamp).toLocaleDateString('en-GB')})
-              
-              STRICT TABLE FORMAT:
-              You MUST output a SINGLE markdown table for this workout breakdown. 
-              - ANY exercise mentioned MUST have a suggested progression (increase weight or reps).
-              - Columns MUST be exactly: | Exercise | Set | Target Reps | Target Weight (kg) |
-              
-              Example:
-              | Exercise | Set | Target Reps | Target Weight (kg) |
-              | :--- | :--- | :--- | :--- |
-              | Bench Press | 1 | 8 | 62.5 |
-              | Bench Press | 2 | 8 | 62.5 |
-
-              After the table, provide one specific "Progression Target" sentence.
-              
-              CRITICAL: You MUST include this hidden data block at the end (it will be used to update the routine). 
-              ${'```progression'}
-              {
-                "routine_external_id": "${w.routine_external_id || ''}",
-                "routine_title": "${w.workout_name}",
-                "progressions": [
-                  { 
-                    "exercise_title": "Full Exercise Name", 
-                    "sets": [{ "reps": 8, "weight_kg": 62.5 }, { "reps": 8, "weight_kg": 62.5 }] 
-                  }
-                ]
-              }
-              ${'```'}
-            `);
-            results.push(wRes);
-          }
-          
-          logEvent('info', `Sequential generation (3/3): Generating recovery mobility advice...`, 'ai', userId);
-          const recoveryRes = await callAI(user, `Based on the workout volume and types in this data: ${JSON.stringify(recentWorkoutsToAnalyze)}, provide 3 concise bullet points for recovery or mobility advice. Markdown format.`);
-          results.push(recoveryRes);
-          
-          const summaryText = results[0].text;
-          const recoveryText = results[results.length - 1].text;
-          const workoutBreakdowns = results.slice(1, -1).map(r => r.text).join('\n\n---\n\n');
-
-          const finalContent = `
-# Workout Progression Analysis
-
-## Overview
-${summaryText}
-
----
-
-${workoutBreakdowns}
-
----
-
-## Recovery & Mobility Advice
-${recoveryText}
-          `.trim();
-
-          await db.prepare(`
-            INSERT INTO ai_insights (user_id, type, content, date, provider, model, batch_id, updated_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(userId, 'workout_progression', finalContent, today, results[0].provider, results[0].model, batchId, batchTime);
-          
-          logEvent('info', `Generated combined workout_progression insight for user ${userId}`, 'ai', userId);
-        } catch (err: any) {
-          logEvent('error', `Broken-down workout generation failed: ${err.message}`, 'ai', userId);
+          logEvent('error', `Failed to generate combined insight: ${err.message}`, 'ai', userId);
         }
       }
     } catch (error: any) {
@@ -3246,7 +3196,7 @@ ${recoveryText}
     } else {
       const type = req.query.type as string;
       logEvent('info', `Manual AI insights regeneration requested${type ? ` for type ${type}` : ''}`, 'ai', userId);
-      await performAIGenerations(userId, type ? [type] : ['nutrition_vitals', 'workout_progression']);
+      await performAIGenerations(userId, type ? [type] : ['combined']);
     }
 
     try {
@@ -3292,6 +3242,21 @@ ${recoveryText}
 
   app.post("/api/ai-insights", requireAuth, express.json(), postAIInsights);
   app.post("/api/ai/insights", requireAuth, express.json(), postAIInsights);
+
+  // Durable "salient points" memory distilled from the user's recent conversations.
+  // Surfaced in the UI so the user can see what is steering their insights.
+  await app.get("/api/ai/memory", requireAuth, async (req: any, res) => {
+    try {
+      const row = await db.prepare("SELECT ai_conversation_memory, ai_conversation_memory_updated_at FROM users WHERE id = ?").get(req.user.id) as any;
+      res.json({
+        memory: row?.ai_conversation_memory || '',
+        updated_at: row?.ai_conversation_memory_updated_at || null
+      });
+    } catch (e: any) {
+      logEvent('error', `Failed to fetch conversation memory: ${e.message}`, 'api');
+      res.status(500).json({ error: e.message });
+    }
+  });
 
   // AI Models Cache
   let availableGeminiModels: string[] = ["gemini-flash-latest", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite"];
@@ -3899,7 +3864,7 @@ ${recoveryText}
         }
         
         const isAITime = aiGenerationTimes.includes(localTimeStr);
-        const aiTypesToGenerate = isAITime ? ['nutrition_vitals', 'workout_progression'] : [];
+        const aiTypesToGenerate = isAITime ? ['combined'] : [];
 
         if (isSyncTime) {
           logEvent('warn', `Scheduled background sync for ${user.email} (${localHour}:${localMinute})`, 'system', userId);

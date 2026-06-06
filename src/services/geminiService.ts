@@ -214,10 +214,7 @@ export interface CombinedReviewData extends HealthData {
   gender: string;
   height?: number;
   nextWorkoutDay?: string;
-  aiInsightsForDate?: {
-    nutrition: string | null;
-    workout: string | null;
-  };
+  combinedInsightForDate?: string | null;
   chatDate?: string;
   aiHints?: any;
 }
@@ -690,7 +687,7 @@ export async function chatWithData(
     Targets: ${sortedTargets.filter(t => t.value > 0).map(t => `${t.label}: ${t.value}${t.unit}`).join(', ')}
     Persona: ${data.ai_persona || 'Coach'}. Focus: ${data.ai_focus || 'Health'}. Hints: ${data.aiHints || 'None'}
     
-    ${data.aiInsightsForDate ? `Insights: Nut: ${typeof data.aiInsightsForDate.nutrition === 'string' ? data.aiInsightsForDate.nutrition.substring(0,100) : ''}... Work: ${typeof data.aiInsightsForDate.workout === 'string' ? data.aiInsightsForDate.workout.substring(0,100) : ''}...` : ''}
+    ${typeof data.combinedInsightForDate === 'string' && data.combinedInsightForDate ? `Latest insight summary: ${data.combinedInsightForDate.substring(0, 200)}...` : ''}
     
     Data: ${JSON.stringify({
       weight_90_days: weightHistory90Days,

@@ -5,22 +5,23 @@ interface AIState {
   chatHistory: ChatMessage[];
   isChatLoading: boolean;
   isReviewLoading: boolean;
-  nutritionVitalsReview: any | null;
-  workoutProgressionReview: any | null;
+  combinedReview: any | null;
   allAIInsights: any[];
   insightsLastUpdated: Record<string, string>;
   aiProviders: any[];
   selectedBatchId: string | null;
+  conversationMemory: string;
+  conversationMemoryUpdatedAt: string | null;
   setChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   setIsChatLoading: (isLoading: boolean) => void;
   setAIProviders: (updater: any[] | ((prev: any[]) => any[])) => void;
-  setNutritionVitalsReview: (review: any | null) => void;
-  setWorkoutProgressionReview: (review: any | null) => void;
+  setCombinedReview: (review: any | null) => void;
   setAllAIInsights: (insights: any[] | ((prev: any[]) => any[])) => void;
   setInsightsLastUpdated: (updated: Record<string, string> | ((prev: Record<string, string>) => Record<string, string>)) => void;
   setSelectedBatchId: (batch_id: string | null) => void;
   fetchAIInsights: () => Promise<void>;
   fetchAIProviders: () => Promise<void>;
+  fetchConversationMemory: () => Promise<void>;
   fetchChatHistory: (date: string, batchId?: string | null) => Promise<void>;
   handleChatSubmit: (message: string, date: string, currentChatHistory: ChatMessage[], settings: any, targets: any) => Promise<string | null>;
   checkAndRegenerateAI: (force?: boolean, currentTargets?: any[], settings?: any, specificType?: string) => Promise<void>;
@@ -31,12 +32,13 @@ export const useAIStore = create<AIState>((set, get) => ({
   chatHistory: [],
   isChatLoading: false,
   isReviewLoading: false,
-  nutritionVitalsReview: null,
-  workoutProgressionReview: null,
+  combinedReview: null,
   allAIInsights: [],
   insightsLastUpdated: {},
   aiProviders: [],
   selectedBatchId: null,
+  conversationMemory: '',
+  conversationMemoryUpdatedAt: null,
   setChatHistory: (updater) => set((state) => ({
     chatHistory: typeof updater === 'function' ? updater(state.chatHistory) : updater
   })),
@@ -44,8 +46,7 @@ export const useAIStore = create<AIState>((set, get) => ({
   setAIProviders: (updater) => set((state) => ({
     aiProviders: typeof updater === 'function' ? updater(state.aiProviders) : updater
   })),
-  setNutritionVitalsReview: (nutritionVitalsReview) => set({ nutritionVitalsReview }),
-  setWorkoutProgressionReview: (workoutProgressionReview) => set({ workoutProgressionReview }),
+  setCombinedReview: (combinedReview) => set({ combinedReview }),
   setAllAIInsights: (updater) => set((state) => ({
     allAIInsights: typeof updater === 'function' ? updater(state.allAIInsights) : updater
   })),
@@ -59,7 +60,7 @@ export const useAIStore = create<AIState>((set, get) => ({
       if (res.ok) {
         const data = await res.json();
         set({ aiProviders: data.providers });
-        
+
         // Expose constraints globally for the service to use
         const constraints: Record<string, any> = {};
         data.providers.forEach((p: any) => {
@@ -71,13 +72,24 @@ export const useAIStore = create<AIState>((set, get) => ({
       console.error("Fetch AI providers failed", e);
     }
   },
+  fetchConversationMemory: async () => {
+    try {
+      const res = await fetch('/api/ai/memory');
+      if (res.ok) {
+        const data = await res.json();
+        set({ conversationMemory: data.memory || '', conversationMemoryUpdatedAt: data.updated_at || null });
+      }
+    } catch (e) {
+      console.error("Fetch conversation memory failed", e);
+    }
+  },
   fetchAIInsights: async () => {
     try {
       const res = await fetch('/api/ai/insights');
       if (res.ok) {
         const data = await res.json();
         const insightsArray = data.insights || data;
-        
+
         set({
           allAIInsights: insightsArray,
           insightsLastUpdated: insightsArray.reduce((acc: any, i: any) => {
@@ -87,31 +99,26 @@ export const useAIStore = create<AIState>((set, get) => ({
             return acc;
           }, {})
         });
-        
-        // Find today's insights
+
+        // Find today's combined insight
         const { getLocalDateString } = await import('../lib/utils');
         const { useSettingsStore } = await import('./useSettingsStore');
         const timezone = useSettingsStore.getState().settings?.timezone;
         const today = getLocalDateString(timezone);
         const { selectedBatchId } = get();
-        
-        let nutrition = null;
-        let workout = null;
-        
+
+        let combined = null;
+
         if (selectedBatchId) {
-          nutrition = insightsArray.find((i: any) => i.type === 'nutrition_vitals' && i.batch_id === selectedBatchId);
-          workout = insightsArray.find((i: any) => i.type === 'workout_progression' && i.batch_id === selectedBatchId);
+          combined = insightsArray.find((i: any) => i.type === 'combined' && i.batch_id === selectedBatchId);
         } else {
-          nutrition = insightsArray.find((i: any) => i.type === 'nutrition_vitals' && i.date === today);
-          workout = insightsArray.find((i: any) => i.type === 'workout_progression' && i.date === today);
-          
-          // If we found today's insights but didn't have a batch selected, select the latest batch
-          if (nutrition && !get().selectedBatchId) set({ selectedBatchId: nutrition.batch_id });
-          else if (workout && !get().selectedBatchId) set({ selectedBatchId: workout.batch_id });
+          combined = insightsArray.find((i: any) => i.type === 'combined' && i.date === today);
+
+          // If we found today's insight but didn't have a batch selected, select the latest batch
+          if (combined && !get().selectedBatchId) set({ selectedBatchId: combined.batch_id });
         }
-        
-        if (nutrition) set({ nutritionVitalsReview: { text: nutrition.content, provider: nutrition.provider, model: nutrition.model, updated_at: nutrition.updated_at, batch_id: nutrition.batch_id } });
-        if (workout) set({ workoutProgressionReview: { text: workout.content, provider: workout.provider, model: workout.model, updated_at: workout.updated_at, batch_id: workout.batch_id } });
+
+        if (combined) set({ combinedReview: { text: combined.content, provider: combined.provider, model: combined.model, updated_at: combined.updated_at, batch_id: combined.batch_id } });
       }
     } catch (e) {
       console.error("Fetch AI insights failed", e);
@@ -142,7 +149,7 @@ export const useAIStore = create<AIState>((set, get) => ({
   },
   checkAndRegenerateAI: async (force = false, currentTargets, settings, specificType) => {
     console.log("checkAndRegenerateAI called", { force, currentTargets, settings, specificType });
-    const { isReviewLoading, fetchAIInsights } = get();
+    const { isReviewLoading, fetchAIInsights, fetchConversationMemory } = get();
     if (isReviewLoading) {
       console.log("checkAndRegenerateAI: already loading, returning");
       return;
@@ -156,20 +163,11 @@ export const useAIStore = create<AIState>((set, get) => ({
 
     set({ isReviewLoading: true });
     try {
-      if (specificType) {
-        // Generate only the requested type serially, then fetch and update
-        await fetch(`/api/ai/insights?force=true&type=${specificType}`);
-        await fetchAIInsights();
-      } else {
-        // Generate all types serially one after another, updating the state after each one completes!
-        const types = ['nutrition_vitals', 'workout_progression'];
-        for (const type of types) {
-          console.log(`Starting sequential generation of ${type}...`);
-          await fetch(`/api/ai/insights?force=true&type=${type}`);
-          await fetchAIInsights();
-          console.log(`Finished sequential generation of ${type} and updated page!`);
-        }
-      }
+      const type = specificType || 'combined';
+      await fetch(`/api/ai/insights?force=true&type=${type}`);
+      await fetchAIInsights();
+      // The regeneration refreshes conversation memory server-side; pull the latest.
+      await fetchConversationMemory();
     } catch (e) {
       console.error("checkAndRegenerateAI failed", e);
     } finally {
@@ -191,20 +189,16 @@ export const useAIStore = create<AIState>((set, get) => ({
 
       const res = await fetch('/api/ai/data');
       const data = await res.json();
-      
-      const { nutritionVitalsReview, workoutProgressionReview, allAIInsights } = get();
+
+      const { combinedReview, allAIInsights } = get();
       const today = new Date().toISOString().split('T')[0];
-      let nutritionInsight = null;
-      let workoutInsight = null;
-      
+      let combinedInsight = null;
+
       if (date === today) {
-        nutritionInsight = nutritionVitalsReview;
-        workoutInsight = workoutProgressionReview;
+        combinedInsight = combinedReview?.text || null;
       } else {
-        const nInsight = allAIInsights.find(i => i.type === 'nutrition_vitals' && i.date === date);
-        const wInsight = allAIInsights.find(i => i.type === 'workout_progression' && i.date === date);
-        nutritionInsight = nInsight ? nInsight.content : null;
-        workoutInsight = wInsight ? wInsight.content : null;
+        const cInsight = allAIInsights.find(i => i.type === 'combined' && i.date === date);
+        combinedInsight = cInsight ? cInsight.content : null;
       }
 
       const commonData = {
@@ -223,10 +217,7 @@ export const useAIStore = create<AIState>((set, get) => ({
         ai_persona: settings.ai_persona || 'Encouraging Coach',
         ai_focus: settings.ai_focus || 'General Health',
         aiHints: settings.ai_hints || '',
-        aiInsightsForDate: {
-          nutrition: nutritionInsight,
-          workout: workoutInsight
-        },
+        combinedInsightForDate: combinedInsight,
         chatDate: date
       };
 

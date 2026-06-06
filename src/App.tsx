@@ -29,7 +29,8 @@ import {
   Pill,
   Plus,
   Eye,
-  EyeOff
+  EyeOff,
+  Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -84,12 +85,13 @@ export default function App() {
     modules, setSummaryData, setIsSyncing, setLastAppleHealthSync, setLogs, setLogFilter, setDebugMetrics, setLastMetrics, setExpandedWorkouts,
     fetchSummary, fetchLogs, fetchLastAppleHealthSync, syncModule, fetchModules, toggleModule, updateModuleSettings, purgeModuleData, syncAllModules, refreshSummary
   } = useHealthStore();
-  const { 
-    nutritionVitalsReview, workoutProgressionReview, insightsLastUpdated, isReviewLoading,
-    setNutritionVitalsReview, setWorkoutProgressionReview, setInsightsLastUpdated,
+  const {
+    combinedReview, insightsLastUpdated, isReviewLoading,
+    setCombinedReview, setInsightsLastUpdated,
     fetchAIInsights, checkAndRegenerateAI, fetchAIProviders,
     chatHistory, setChatHistory, isChatLoading, handleChatSubmit, allAIInsights,
-    selectedBatchId, setSelectedBatchId, fetchChatHistory
+    selectedBatchId, setSelectedBatchId, fetchChatHistory,
+    conversationMemory, conversationMemoryUpdatedAt, fetchConversationMemory
   } = useAIStore();
   const { activeTab, selectedRoutine, toast, setActiveTab, setSelectedRoutine, hideToast, showToast } = useUIStore();
 
@@ -154,7 +156,8 @@ export default function App() {
             fetchSummary(),
             fetchTargets(),
             fetchAIInsights(),
-            fetchAIProviders()
+            fetchAIProviders(),
+            fetchConversationMemory()
           ]);
         }
       } catch (e) {
@@ -432,8 +435,7 @@ export default function App() {
           <NavIcon icon={<LayoutDashboard size={20} />} active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
           <NavIcon icon={<Activity size={20} />} active={activeTab === 'activity'} onClick={() => setActiveTab('activity')} />
           <NavIcon icon={<Dumbbell size={20} />} active={activeTab === 'workouts'} onClick={() => setActiveTab('workouts')} />
-          <NavIcon icon={<Utensils size={20} />} active={activeTab === 'ai-nutrition'} onClick={() => setActiveTab('ai-nutrition')} title="Nutrition AI" />
-          <NavIcon icon={<Dumbbell size={20} className="rotate-45" />} active={activeTab === 'ai-workout'} onClick={() => setActiveTab('ai-workout')} title="Workout AI" />
+          <NavIcon icon={<Sparkles size={20} />} active={activeTab === 'ai-insights'} onClick={() => setActiveTab('ai-insights')} title="AI Insights" />
           <NavIcon icon={<Utensils size={20} />} active={activeTab === 'nutrition'} onClick={() => setActiveTab('nutrition')} />
           {user?.role === 'admin' && (
             <NavIcon icon={<Users size={20} />} active={activeTab === 'admin'} onClick={() => setActiveTab('admin')} />
@@ -455,8 +457,7 @@ export default function App() {
       <nav className="md:hidden fixed bottom-0 left-0 w-full bg-white/80 dark:bg-zinc-900/80 backdrop-blur-lg border-t border-black/5 dark:border-white/5 flex items-center justify-around px-4 py-3 z-50 overflow-x-auto">
         <NavIcon icon={<LayoutDashboard size={20} />} active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} className="w-10 h-10 rounded-xl" />
         <NavIcon icon={<Dumbbell size={20} />} active={activeTab === 'workouts'} onClick={() => setActiveTab('workouts')} className="w-10 h-10 rounded-xl" />
-        <NavIcon icon={<Utensils size={20} />} active={activeTab === 'ai-nutrition'} onClick={() => setActiveTab('ai-nutrition')} className="w-10 h-10 rounded-xl" />
-        <NavIcon icon={<Dumbbell size={20} className="rotate-45" />} active={activeTab === 'ai-workout'} onClick={() => setActiveTab('ai-workout')} className="w-10 h-10 rounded-xl" />
+        <NavIcon icon={<Sparkles size={20} />} active={activeTab === 'ai-insights'} onClick={() => setActiveTab('ai-insights')} className="w-10 h-10 rounded-xl" />
         <NavIcon icon={<Utensils size={20} />} active={activeTab === 'nutrition'} onClick={() => setActiveTab('nutrition')} className="w-10 h-10 rounded-xl" />
         <NavIcon icon={<Settings size={20} />} active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} className="w-10 h-10 rounded-xl" />
       </nav>
@@ -540,10 +541,9 @@ export default function App() {
               )}
 
 
-              {activeTab === 'ai-nutrition' && (
-                <AIInsightsTab 
-                  nutritionVitalsReview={nutritionVitalsReview}
-                  workoutProgressionReview={workoutProgressionReview}
+              {activeTab === 'ai-insights' && (
+                <AIInsightsTab
+                  combinedReview={combinedReview}
                   insightsLastUpdated={insightsLastUpdated}
                   isReviewLoading={isReviewLoading}
                   checkAndRegenerateAI={(force, _, __, specificType) => checkAndRegenerateAI(force, targets, settings, specificType)}
@@ -556,27 +556,8 @@ export default function App() {
                   selectedBatchId={selectedBatchId}
                   setSelectedBatchId={setSelectedBatchId}
                   fetchChatHistory={fetchChatHistory}
-                  mode="nutrition"
-                />
-              )}
-
-              {activeTab === 'ai-workout' && (
-                <AIInsightsTab 
-                  nutritionVitalsReview={nutritionVitalsReview}
-                  workoutProgressionReview={workoutProgressionReview}
-                  insightsLastUpdated={insightsLastUpdated}
-                  isReviewLoading={isReviewLoading}
-                  checkAndRegenerateAI={(force, _, __, specificType) => checkAndRegenerateAI(force, targets, settings, specificType)}
-                  chatHistory={chatHistory}
-                  setChatHistory={setChatHistory}
-                  isChatLoading={isChatLoading}
-                  handleChatSubmit={(msg, date, history) => handleChatSubmit(msg, date, history, settings, targets)}
-                  allAIInsights={allAIInsights}
-                  timezone={settings.timezone}
-                  selectedBatchId={selectedBatchId}
-                  setSelectedBatchId={setSelectedBatchId}
-                  fetchChatHistory={fetchChatHistory}
-                  mode="workout"
+                  conversationMemory={conversationMemory}
+                  conversationMemoryUpdatedAt={conversationMemoryUpdatedAt}
                 />
               )}
 

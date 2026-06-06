@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-type Tab = 'dashboard' | 'activity' | 'workouts' | 'nutrition' | 'settings' | 'profile' | 'ai-nutrition' | 'ai-workout' | 'logs' | 'debug' | 'targets' | 'admin' | 'metric-priority' | 'dashboard-layout';
+type Tab = 'dashboard' | 'activity' | 'workouts' | 'nutrition' | 'settings' | 'profile' | 'ai-insights' | 'logs' | 'debug' | 'targets' | 'admin' | 'metric-priority' | 'dashboard-layout';
 
 interface ToastState {
   message: string;

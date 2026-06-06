@@ -3,8 +3,7 @@ import { motion } from 'motion/react';
 import { AIInsights } from './AIInsights';
 
 interface AIInsightsTabProps {
-  nutritionVitalsReview: any;
-  workoutProgressionReview: any;
+  combinedReview: any;
   insightsLastUpdated: Record<string, string>;
   isReviewLoading: boolean;
   checkAndRegenerateAI: (force?: boolean, currentTargets?: any[], settings?: any, specificType?: string) => Promise<void>;
@@ -17,12 +16,12 @@ interface AIInsightsTabProps {
   selectedBatchId: string | null;
   setSelectedBatchId: (batchId: string | null) => void;
   fetchChatHistory: (date: string, batchId?: string | null) => Promise<void>;
-  mode: 'nutrition' | 'workout';
+  conversationMemory?: string;
+  conversationMemoryUpdatedAt?: string | null;
 }
 
 export const AIInsightsTab: React.FC<AIInsightsTabProps> = React.memo(({
-  nutritionVitalsReview,
-  workoutProgressionReview,
+  combinedReview,
   insightsLastUpdated,
   isReviewLoading,
   checkAndRegenerateAI,
@@ -35,19 +34,19 @@ export const AIInsightsTab: React.FC<AIInsightsTabProps> = React.memo(({
   selectedBatchId,
   setSelectedBatchId,
   fetchChatHistory,
-  mode,
+  conversationMemory,
+  conversationMemoryUpdatedAt,
 }) => {
   return (
-    <motion.div 
-      key={`ai-${mode}`}
+    <motion.div
+      key="ai-insights"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
       className="max-w-4xl mx-auto"
     >
-      <AIInsights 
-        nutritionVitalsReview={nutritionVitalsReview}
-        workoutProgressionReview={workoutProgressionReview}
+      <AIInsights
+        combinedReview={combinedReview}
         insightsLastUpdated={insightsLastUpdated}
         isReviewLoading={isReviewLoading}
         checkAndRegenerateAI={checkAndRegenerateAI}
@@ -60,7 +59,8 @@ export const AIInsightsTab: React.FC<AIInsightsTabProps> = React.memo(({
         selectedBatchId={selectedBatchId}
         setSelectedBatchId={setSelectedBatchId}
         fetchChatHistory={fetchChatHistory}
-        mode={mode}
+        conversationMemory={conversationMemory}
+        conversationMemoryUpdatedAt={conversationMemoryUpdatedAt}
       />
     </motion.div>
   );
