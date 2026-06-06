@@ -51,6 +51,16 @@ export const AppleHealthModule: DataSourceModule = {
       }
     };
 
+    const getMetricName = (metric: any): string => {
+      const candidates = [metric.name, metric.type, metric.metricType, metric.identifier, metric.id];
+      for (const candidate of candidates) {
+        if (candidate && typeof candidate === 'string') {
+          return candidate;
+        }
+      }
+      return '';
+    };
+
     const extractDate = (ts: any): string | null => {
       const normalized = normalizeTimestamp(ts);
       const match = normalized.match(/^(\d{4}-\d{2}-\d{2})/);
@@ -61,16 +71,17 @@ export const AppleHealthModule: DataSourceModule = {
     console.log(`[Apple Health Sync] Starting sync for user ${userId}. Received ${metrics.length} metric types.`);
     
     for (const metric of metrics) {
-      let dataPoints = metric.data || (metric.qty !== undefined || metric.value !== undefined ? [metric] : []);
+      let dataPoints = metric.data || metric.metrics || metric.values || metric.samples || (metric.qty !== undefined || metric.value !== undefined ? [metric] : []);
       if (!Array.isArray(dataPoints)) dataPoints = [dataPoints];
-      if (metric.name?.toLowerCase().includes('vo2')) {
-        console.log(`[Apple Health Sync] Found VO2 metric: ${metric.name}, datapoints: ${dataPoints.length}`);
+      const metricName = getMetricName(metric);
+      if (metricName.toLowerCase().includes('vo2')) {
+        console.log(`[Apple Health Sync] Found VO2 metric: ${metricName}, datapoints: ${dataPoints.length}`);
         if (dataPoints.length > 0) {
           console.log(`[Apple Health Sync] First VO2 point: ${JSON.stringify(dataPoints[0])}`);
         }
       }
       for (const dp of dataPoints) {
-        const rawTs = dp.date ?? dp.start ?? dp.startDate ?? dp.end ?? dp.endDate ?? new Date().toISOString();
+        const rawTs = dp.date ?? dp.start ?? dp.startDate ?? dp.end ?? dp.endDate ?? dp.timestamp ?? dp.start_time ?? dp.end_time ?? new Date().toISOString();
         const day = extractDate(rawTs);
         if (day) uniqueDays.add(day);
       }
@@ -79,23 +90,26 @@ export const AppleHealthModule: DataSourceModule = {
     let count = 0;
     db.transaction(() => {
       for (const metric of metrics) {
-        const rawName = metric.name;
+        let rawName = getMetricName(metric);
+        if (!rawName && metric.name === undefined && metric.type === undefined) {
+          continue;
+        }
         const normalizedName = rawName.toLowerCase().replace(/\s+/g, '_');
-        const cleanName = METRIC_MAP[normalizedName] || METRIC_MAP[rawName];
+        const cleanName = METRIC_MAP[normalizedName] || METRIC_MAP[rawName] || METRIC_MAP[metric.type] || METRIC_MAP[metric.identifier] || METRIC_MAP[metric.id];
         
         if (!cleanName) {
-          if (rawName.toLowerCase().includes('vo2')) {
+          if (typeof rawName === 'string' && rawName.toLowerCase().includes('vo2')) {
             console.log(`[Apple Health Sync] Failed to map metric: ${rawName}`);
           }
           continue;
         }
 
         const unit = metric.units || metric.unit || "";
-        let dataPoints = metric.data || (metric.qty !== undefined || metric.value !== undefined ? [metric] : []);
+        let dataPoints = metric.data || metric.metrics || metric.values || metric.samples || (metric.qty !== undefined || metric.value !== undefined ? [metric] : []);
         if (!Array.isArray(dataPoints)) dataPoints = [dataPoints];
 
         for (const dp of dataPoints) {
-          const rawTs = dp.date ?? dp.start ?? dp.startDate ?? dp.end ?? dp.endDate ?? new Date().toISOString();
+          const rawTs = dp.date ?? dp.start ?? dp.startDate ?? dp.end ?? dp.endDate ?? dp.timestamp ?? dp.start_time ?? dp.end_time ?? new Date().toISOString();
           const ts = normalizeTimestamp(rawTs);
 
           if (cleanName === 'blood_pressure') {

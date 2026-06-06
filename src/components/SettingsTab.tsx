@@ -108,6 +108,31 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
   }, [settings.ai_provider, settings.ai_base_url, settings.ai_api_key, refreshModels]);
 
   const availableModels = currentProvider?.models || [];
+  const [exportUrl, setExportUrl] = React.useState<string | null>(null);
+  const [exportLoading, setExportLoading] = React.useState(false);
+  const [exportError, setExportError] = React.useState<string | null>(null);
+
+  const fetchExportUrl = React.useCallback(async () => {
+    setExportLoading(true);
+    setExportError(null);
+    try {
+      const res = await fetch('/api/export-token');
+      if (!res.ok) throw new Error('Unable to fetch export URL');
+      const data = await res.json();
+      setExportUrl(data.url || null);
+    } catch (err: any) {
+      setExportError(err?.message || 'Failed to load export URL');
+      setExportUrl(null);
+    } finally {
+      setExportLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (modules.some(m => m.id === 'apple_health' || m.id === 'apple_workouts')) {
+      fetchExportUrl();
+    }
+  }, [modules, fetchExportUrl]);
 
   return (
     <motion.div 
@@ -377,6 +402,58 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
                             <Trash2 size={14} />
                           </button>
                         </div>
+                        {(module.id === 'apple_health' || module.id === 'apple_workouts') && (
+                          <div className="rounded-3xl border border-dashed border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 p-4 space-y-3">
+                            <div className="flex items-start justify-between gap-4">
+                              <div>
+                                <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Apple Health Auto Export URL</p>
+                                <p className="text-xs text-zinc-500 dark:text-zinc-400">Paste this URL into the Apple Health Auto Export app so Vitality Hub can receive your data.</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={fetchExportUrl}
+                                disabled={exportLoading}
+                                className="px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-xs font-semibold text-zinc-700 dark:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-all"
+                              >
+                                Refresh
+                              </button>
+                            </div>
+                            {exportLoading ? (
+                              <p className="text-xs text-zinc-500">Loading export URL…</p>
+                            ) : exportError ? (
+                              <p className="text-xs text-rose-600">{exportError}</p>
+                            ) : exportUrl ? (
+                              <>
+                                <div className="rounded-2xl border border-black/5 dark:border-white/10 bg-white dark:bg-zinc-950 p-3 text-xs font-mono text-zinc-800 dark:text-zinc-100 overflow-x-auto">
+                                  {exportUrl}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      try {
+                                        await navigator.clipboard.writeText(exportUrl);
+                                      } catch (err) {
+                                        console.error('Copy failed', err);
+                                      }
+                                    }}
+                                    className="px-3 py-1.5 rounded-xl bg-emerald-500 text-white text-xs font-semibold hover:bg-emerald-600 transition-all"
+                                  >
+                                    Copy URL
+                                  </button>
+                                </div>
+                                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                                  Use the full URL in the Apple Health Auto Export app. If the URL includes <span className="font-mono">?token=...</span>, keep it exactly as shown for authenticated uploads.
+                                </p>
+                                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                                  If your iPhone is on the same local network, local uploads may still work without a token, but remote or cloud sync requires the token parameter.
+                                </p>
+                              </>
+                            ) : (
+                              <p className="text-xs text-zinc-500">Unable to load export URL. Try refreshing or check your login status.</p>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

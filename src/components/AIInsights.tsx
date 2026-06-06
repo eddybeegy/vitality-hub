@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { BarChart3, HeartPulse, Calendar, RefreshCw, Dumbbell, Send, User, Bot, Check, AlertCircle } from 'lucide-react';
+import { BarChart3, HeartPulse, Calendar, RefreshCw, Dumbbell, Send, User, Bot, Check, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { ChatMessage } from '../services/geminiService';
 import { InsightSkeleton } from './ui/Skeleton';
 import { logToServer, getLocalDateString, formatDateWithTimezone } from '../lib/utils';
@@ -144,14 +144,115 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
     }
   };
 
-  // Get unique dates from allAIInsights, sorted descending
-  // Ensure today is always in the list so the Regenerate button is never hidden
-  const availableDates = Array.from(new Set([today, ...allAIInsights.map(i => i.date || today)])).sort((a, b) => b.localeCompare(a));
+  // Build a contiguous list of recent dates for the selector (fallback to insights-derived dates)
+  // This makes the day scroller navigable even on days with no AI insights.
+  const DAYS_TO_SHOW = 30;
+  const recentDates: string[] = [];
+  for (let i = 0; i < DAYS_TO_SHOW; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const iso = d.toISOString().split('T')[0];
+    recentDates.push(iso);
+  }
+
+  const insightDates = Array.from(new Set(allAIInsights.map(i => i.date).filter(Boolean)));
+  const merged = Array.from(new Set([today, ...recentDates, ...insightDates]));
+  const availableDates = merged.sort((a, b) => b.localeCompare(a));
 
   // Fetch chat history when selectedDate or selectedBatchId changes
   React.useEffect(() => {
     fetchChatHistory(selectedDate, selectedBatchId);
   }, [selectedDate, selectedBatchId, fetchChatHistory]);
+
+  const scrollerRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Use native scrolling and CSS scroll-snap for a better touch experience.
+  React.useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+      let startX = 0;
+      let startY = 0;
+      let lastX = 0;
+      let isDragging = false;
+      let moved = false;
+      let disabledButtons: HTMLElement[] = [];
+      let active = false; // whether the touch started inside the scroller
+
+      const onDocTouchStart = (e: TouchEvent) => {
+        if (e.touches.length !== 1) return;
+        const t = e.touches[0];
+        if (!el.contains(e.target as Node)) return;
+        active = true;
+        startX = t.clientX;
+        startY = t.clientY;
+        lastX = startX;
+        isDragging = false;
+        moved = false;
+      };
+
+      const onDocTouchMove = (e: TouchEvent) => {
+        if (!active) return;
+        if (e.touches.length !== 1) return;
+        const x = e.touches[0].clientX;
+        const y = e.touches[0].clientY;
+        const dxTotal = x - startX;
+        const dyTotal = y - startY;
+
+        if (!isDragging) {
+          if (Math.abs(dxTotal) > Math.abs(dyTotal) && Math.abs(dxTotal) > 6) {
+            isDragging = true;
+            // disable pointer events on child buttons while dragging so touchmove scrolls
+            try {
+              const btns = Array.from(el.querySelectorAll('button, .date-button')) as HTMLElement[];
+              disabledButtons = btns.filter(b => b.style.pointerEvents !== 'none');
+              disabledButtons.forEach(b => { b.style.pointerEvents = 'none'; });
+            } catch (err) {
+              // ignore
+            }
+          } else {
+            return; // allow the page to handle vertical scroll
+          }
+        }
+
+        e.preventDefault();
+        const dx = x - lastX;
+        el.scrollLeft -= dx;
+        lastX = x;
+        moved = true;
+      };
+
+      const onDocTouchEnd = (e: TouchEvent) => {
+        if (!active) return;
+        if (moved) {
+          const suppress = (ev: MouseEvent) => {
+            ev.stopImmediatePropagation();
+            ev.preventDefault();
+            document.removeEventListener('click', suppress, true);
+          };
+          document.addEventListener('click', suppress, true);
+          setTimeout(() => document.removeEventListener('click', suppress, true), 50);
+        }
+        isDragging = false;
+        moved = false;
+        active = false;
+        try {
+          disabledButtons.forEach(b => { b.style.pointerEvents = ''; });
+          disabledButtons = [];
+        } catch (err) {
+          // ignore
+        }
+      };
+
+      document.addEventListener('touchstart', onDocTouchStart, { passive: true, capture: true });
+      document.addEventListener('touchmove', onDocTouchMove, { passive: false, capture: true });
+      document.addEventListener('touchend', onDocTouchEnd, { passive: true, capture: true });
+
+      return () => {
+        document.removeEventListener('touchstart', onDocTouchStart as any, true);
+        document.removeEventListener('touchmove', onDocTouchMove as any, true);
+        document.removeEventListener('touchend', onDocTouchEnd as any, true);
+      };
+  }, [scrollerRef]);
 
 
   // If selectedDate is not in availableDates and availableDates is not empty, set it to the most recent
@@ -343,8 +444,9 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
     <div className="space-y-8">
       {/* Date Scroller */}
       <div className="flex flex-col md:flex-row gap-4 items-start md:items-center">
-        <div className="bg-white dark:bg-zinc-900 p-2 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm overflow-x-auto flex-grow">
-          <div className="flex gap-2 min-w-max px-2">
+        <div className="relative w-full max-w-full">
+          <div ref={scrollerRef} style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain', scrollSnapType: 'x mandatory' }} className="w-full max-w-full bg-white dark:bg-zinc-900 p-2 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm overflow-x-auto">
+            <div className="flex gap-2 flex-nowrap min-w-max px-2">
             {availableDates.map(date => {
               const isSelected = selectedDate === date;
               const dateObj = new Date(date);
@@ -353,25 +455,64 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
               const monthName = dateObj.toLocaleDateString('en-US', { month: 'short', timeZone: timezone });
 
               return (
-                <button
+                <div
                   key={date}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => {
                     setSelectedDate(date);
                     setSelectedBatchId(null); // Reset batch when date changes
                   }}
-                  className={`flex flex-col items-center justify-center min-w-[60px] p-3 rounded-xl transition-all ${
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setSelectedDate(date);
+                      setSelectedBatchId(null);
+                    }
+                  }}
+                  className={`date-button flex flex-col items-center justify-center min-w-[60px] flex-shrink-0 p-3 rounded-xl transition-all ${
                     isSelected 
                       ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200 dark:shadow-none scale-105' 
                       : 'bg-zinc-50 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-700'
                   }`}
+                  style={{ scrollSnapAlign: 'center' }}
                 >
                   <span className="text-[9px] font-bold uppercase tracking-wider mb-1">{dayName}</span>
                   <span className="text-lg font-black leading-none mb-1">{dayNum}</span>
                   <span className="text-[9px] font-medium opacity-80">{monthName}</span>
-                </button>
+                </div>
               );
             })}
+            </div>
           </div>
+
+          {/* Left chevron */}
+          <button
+            aria-label="Scroll left"
+            onClick={() => {
+              const el = scrollerRef.current;
+              if (!el) return;
+              const step = Math.floor(el.clientWidth * 0.6);
+              el.scrollBy({ left: -step, behavior: 'smooth' });
+            }}
+            className="absolute left-1 top-1/2 -translate-y-1/2 bg-white/80 dark:bg-zinc-900/80 backdrop-blur rounded-full p-1 shadow-sm"
+          >
+            <ChevronLeft size={18} />
+          </button>
+
+          {/* Right chevron */}
+          <button
+            aria-label="Scroll right"
+            onClick={() => {
+              const el = scrollerRef.current;
+              if (!el) return;
+              const step = Math.floor(el.clientWidth * 0.6);
+              el.scrollBy({ left: step, behavior: 'smooth' });
+            }}
+            className="absolute right-1 top-1/2 -translate-y-1/2 bg-white/80 dark:bg-zinc-900/80 backdrop-blur rounded-full p-1 shadow-sm"
+          >
+            <ChevronRight size={18} />
+          </button>
         </div>
 
         {batchesForSelectedDate.length > 0 && (
