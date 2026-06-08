@@ -12,3 +12,5 @@ logs/
 !.env.example
 .gemini/
 gha-creds-*.json
+backups/
+.claude/
