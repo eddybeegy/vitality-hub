@@ -132,12 +132,12 @@ func login(client *http.Client, email, password string) (string, string, error) 
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal login request: %w", err)
+		return "", "", fmt.Errorf("failed to marshal login request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", loginEndpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("failed to create login request: %w", err)
+		return "", "", fmt.Errorf("failed to create login request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -145,13 +145,13 @@ func login(client *http.Client, email, password string) (string, string, error) 
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("login request failed: %w", err)
+		return "", "", fmt.Errorf("login request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read login response: %w", err)
+		return "", "", fmt.Errorf("failed to read login response: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "DEBUG: login status=%d\n", resp.StatusCode)
@@ -161,12 +161,12 @@ func login(client *http.Client, email, password string) (string, string, error) 
 	var loginResp LoginResponse
 	err = json.Unmarshal(respBody, &loginResp)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse login response: %w", err)
+		return "", "", fmt.Errorf("failed to parse login response: %w", err)
 	}
 
 	// Check if login failed
 	if loginResp.Result == "FAIL" || loginResp.Error != "" {
-		return "", fmt.Errorf("login failed: %s", loginResp.Error)
+		return "", "", fmt.Errorf("login failed: %s", loginResp.Error)
 	}
 
 	// Try to get token from response body first
