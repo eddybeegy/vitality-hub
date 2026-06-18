@@ -28,6 +28,8 @@ type LoginResponse struct {
 	Result  string `json:"result"`
 	Error   string `json:"error"`
 	Token   string `json:"token"`
+	SessionKey string `json:"sessionKey"`
+	JWTSignature string `json:"JWTSignature"`
 	Data    map[string]interface{} `json:"data"`
 }
 
@@ -44,6 +46,22 @@ type DiaryEntry struct {
 type DiaryResponse struct {
 	Foods []DiaryEntry `json:"foods"`
 	Date  string       `json:"date"`
+}
+
+type AuthBlock struct {
+	UserID  string `json:"userId"`
+	Token   string `json:"token"`
+	API     int    `json:"api"`
+	OS      string `json:"os"`
+	Build   string `json:"build"`
+	Flavour string `json:"flavour"`
+}
+
+type DiaryRequest struct {
+	Auth      AuthBlock              `json:"auth"`
+	Day       string                 `json:"day"`
+	LastSeen  int                    `json:"lastSeen"`
+	Config    map[string]interface{} `json:"config"`
 }
 
 func main() {
@@ -87,7 +105,7 @@ func main() {
 	}
 
 	// Login and get session token
-	sessionToken, err := login(client, *username, *password)
+	sessionToken, userID, err := login(client, *username, *password)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error logging in: %v\n", err)
 		os.Exit(1)
@@ -96,14 +114,14 @@ func main() {
 	fmt.Fprintf(os.Stderr, "DEBUG: login successful, received session token\n")
 
 	// Fetch diary entries for each day in range and output as CSV
-	err = fetchAndOutputDiary(ctx, client, sessionToken, startDate, endDate)
+	err = fetchAndOutputDiary(ctx, client, sessionToken, userID, startDate, endDate)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error fetching diary: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func login(client *http.Client, email, password string) (string, error) {
+func login(client *http.Client, email, password string) (string, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -153,6 +171,11 @@ func login(client *http.Client, email, password string) (string, error) {
 
 	// Try to get token from response body first
 	token := loginResp.Token
+	fmt.Fprintf(os.Stderr, "DEBUG: Token field: %q, SessionKey field: %q\n", loginResp.Token, loginResp.SessionKey)
+	if token == "" && loginResp.SessionKey != "" {
+		token = loginResp.SessionKey
+		fmt.Fprintf(os.Stderr, "DEBUG: using sessionKey as token\n")
+	}
 	if token == "" && loginResp.Data != nil {
 		if t, ok := loginResp.Data["token"]; ok {
 			token = fmt.Sprintf("%v", t)
@@ -178,15 +201,26 @@ func login(client *http.Client, email, password string) (string, error) {
 		}
 	}
 
-	if token == "" {
-		return "", fmt.Errorf("no session token found in login response (result=%s, data=%v)", loginResp.Result, loginResp.Data)
+	// Try JWT signature if other tokens failed
+	if token == "" && loginResp.JWTSignature != "" {
+		token = loginResp.JWTSignature
+		fmt.Fprintf(os.Stderr, "DEBUG: using JWTSignature as token\n")
 	}
 
-	fmt.Fprintf(os.Stderr, "DEBUG: extracted token (length=%d)\n", len(token))
-	return token, nil
+	if token == "" {
+		return "", "", fmt.Errorf("no session token found in login response (result=%s, data=%v)", loginResp.Result, loginResp.Data)
+	}
+
+	fmt.Fprintf(os.Stderr, "DEBUG: extracted token (length=%d), first 20 chars: %.20s\n", len(token), token)
+
+	// Extract userID from response
+	userID := loginResp.Data["id"]
+	fmt.Fprintf(os.Stderr, "DEBUG: userID: %v\n", userID)
+
+	return token, fmt.Sprintf("%v", userID), nil
 }
 
-func fetchAndOutputDiary(ctx context.Context, client *http.Client, sessionToken string, startDate, endDate time.Time) error {
+func fetchAndOutputDiary(ctx context.Context, client *http.Client, sessionToken, userID string, startDate, endDate time.Time) error {
 	// Output CSV header
 	fmt.Println("Day,Time,Food Name,Energy (kcal),Protein (g),Carbs (g),Fat (g),Fiber (g),Sugars (g),Sodium (mg),Iron (mg),Calcium (mg),Vitamin C (mg),Vitamin A (µg),Vitamin D (µg),Vitamin E (mg),Vitamin K (µg),Vitamin B12 (µg),Vitamin B6 (mg),Magnesium (mg),Potassium (mg),Zinc (mg),Water (ml)")
 
@@ -202,7 +236,7 @@ func fetchAndOutputDiary(ctx context.Context, client *http.Client, sessionToken 
 
 		dateStr := current.Format("2006-01-02")
 
-		diary, err := fetchDiary(ctx, client, sessionToken, dateStr)
+		diary, err := fetchDiary(ctx, client, sessionToken, userID, dateStr)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to fetch diary for %s: %v\n", dateStr, err)
 			current = current.AddDate(0, 0, 1)
@@ -256,13 +290,32 @@ func fetchAndOutputDiary(ctx context.Context, client *http.Client, sessionToken 
 	return nil
 }
 
-func fetchDiary(ctx context.Context, client *http.Client, sessionToken, dateStr string) (*DiaryResponse, error) {
+func fetchDiary(ctx context.Context, client *http.Client, sessionToken, userID, dateStr string) (*DiaryResponse, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	url := diaryEndpoint
 
-	payload := map[string]string{"date": dateStr}
+	// Build auth block
+	auth := AuthBlock{
+		UserID:  userID,
+		Token:   sessionToken,
+		API:     3,
+		OS:      "Android",
+		Build:   "2807",
+		Flavour: "free",
+	}
+
+	// Build request payload with auth in the body
+	payload := DiaryRequest{
+		Auth:     auth,
+		Day:      dateStr,
+		LastSeen: 0,
+		Config: map[string]interface{}{
+			"call_version": 1,
+		},
+	}
+
 	body, _ := json.Marshal(payload)
 
 	req, err := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
@@ -270,12 +323,9 @@ func fetchDiary(ctx context.Context, client *http.Client, sessionToken, dateStr 
 		return nil, fmt.Errorf("failed to create diary request: %w", err)
 	}
 
-	// Try both header and cookie for session token
-	req.Header.Set("x-crono-session", sessionToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "JSESSIONID", Value: sessionToken})
 
-	fmt.Fprintf(os.Stderr, "DEBUG: diary POST request with date=%s, session token in header and cookie\n", dateStr)
+	fmt.Fprintf(os.Stderr, "DEBUG: diary POST request with userID=%s, date=%s, auth in body\n", userID, dateStr)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -294,7 +344,7 @@ func fetchDiary(ctx context.Context, client *http.Client, sessionToken, dateStr 
 		return nil, fmt.Errorf("diary request failed with status %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	fmt.Fprintf(os.Stderr, "DEBUG: diary response for %s: %s\n", dateStr, string(respBody))
+	fmt.Fprintf(os.Stderr, "DEBUG: diary response (first 500 chars): %s\n", string(respBody[:min(len(respBody), 500)]))
 
 	var diaryResp DiaryResponse
 	err = json.Unmarshal(respBody, &diaryResp)
