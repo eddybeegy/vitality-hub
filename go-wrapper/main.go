@@ -62,12 +62,14 @@ type FoodDetail struct {
 }
 
 type FoodResponse struct {
-	Food FoodDetail `json:"food"`
+	Food *FoodDetail `json:"food"`
 }
+
+type DirectFoodResponse FoodDetail
 
 type FoodRequest struct {
 	Auth    AuthBlock `json:"auth"`
-	FoodID  int       `json:"foodId"`
+	FoodID  int       `json:"id"`
 	Config  map[string]interface{} `json:"config"`
 }
 
@@ -418,9 +420,9 @@ func fetchFood(ctx context.Context, client *http.Client, sessionToken string, us
 		Flavour: "free",
 	}
 
-	// Build request payload
+	// Build request payload - per cronometer-api-mcp, use "id" not "foodId"
 	payload := FoodRequest{
-		Auth:   auth,
+		Auth: auth,
 		FoodID: foodID,
 		Config: map[string]interface{}{
 			"call_version": 1,
@@ -428,6 +430,8 @@ func fetchFood(ctx context.Context, client *http.Client, sessionToken string, us
 	}
 
 	body, _ := json.Marshal(payload)
+
+	fmt.Fprintf(os.Stderr, "DEBUG: food request to %s with body: %s\n", foodEndpoint, string(body))
 
 	req, err := http.NewRequestWithContext(reqCtx, "POST", foodEndpoint, bytes.NewReader(body))
 	if err != nil {
@@ -447,17 +451,41 @@ func fetchFood(ctx context.Context, client *http.Client, sessionToken string, us
 		return nil, fmt.Errorf("failed to read food response: %w", err)
 	}
 
+	fmt.Fprintf(os.Stderr, "DEBUG: food request status=%d for foodID=%d\n", resp.StatusCode, foodID)
 	if resp.StatusCode != 200 {
+		fmt.Fprintf(os.Stderr, "DEBUG: food error response (first 200 chars): %s\n", string(respBody[:min(len(respBody), 200)]))
 		return nil, fmt.Errorf("food request failed with status %d", resp.StatusCode)
 	}
 
 	var foodResp FoodResponse
 	err = json.Unmarshal(respBody, &foodResp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse food response: %w", err)
+		fmt.Fprintf(os.Stderr, "DEBUG: food response unmarshal to FoodResponse failed: %v\n", err)
 	}
 
-	return &foodResp.Food, nil
+	var food *FoodDetail
+
+	// Try nested "food" field first
+	if foodResp.Food != nil && foodResp.Food.ID != 0 {
+		food = foodResp.Food
+		fmt.Fprintf(os.Stderr, "DEBUG: parsed food from nested 'food' field\n")
+	} else {
+		// Try parsing as direct FoodDetail
+		var directResp FoodDetail
+		err = json.Unmarshal(respBody, &directResp)
+		if err == nil && directResp.ID != 0 {
+			food = &directResp
+			fmt.Fprintf(os.Stderr, "DEBUG: parsed food as direct FoodDetail\n")
+		}
+	}
+
+	if food == nil || food.ID == 0 {
+		fmt.Fprintf(os.Stderr, "DEBUG: failed to parse food response: %s\n", string(respBody[:min(len(respBody), 300)]))
+		return nil, fmt.Errorf("no valid food data in response")
+	}
+
+	fmt.Fprintf(os.Stderr, "DEBUG: food fetched: id=%d, name=%q\n", food.ID, food.Name)
+	return food, nil
 }
 
 func getFloat(m map[string]interface{}, key string) float64 {
