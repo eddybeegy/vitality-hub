@@ -402,6 +402,12 @@ func fetchDiary(ctx context.Context, client *http.Client, sessionToken, userID, 
 		return nil, fmt.Errorf("failed to parse diary response: %w", err)
 	}
 
+	// Log first diary entry for inspection
+	if len(diaryResp.Diary) > 0 {
+		b, _ := json.Marshal(diaryResp.Diary[0])
+		fmt.Fprintf(os.Stderr, "DEBUG: first diary entry: %s\n", string(b))
+	}
+
 	fmt.Fprintf(os.Stderr, "DEBUG: parsed %d foods for %s\n", len(diaryResp.Diary), dateStr)
 	return &diaryResp, nil
 }
