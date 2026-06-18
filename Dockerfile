@@ -1,5 +1,5 @@
 # Stage 1: Build the Go wrapper for Cronometer sync
-FROM golang:1.24-alpine AS go-builder
+FROM golang:1.26 AS go-builder
 WORKDIR /app
 COPY go-wrapper/ ./go-wrapper/
 RUN cd go-wrapper && go mod tidy && go build -o gocronometer-wrapper main.go
@@ -8,9 +8,7 @@ RUN cd go-wrapper && go mod tidy && go build -o gocronometer-wrapper main.go
 FROM node:20-slim AS node-builder
 WORKDIR /app
 COPY package*.json ./
-RUN apt-get update && apt-get install -y curl tar python3 make g++ tzdata && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL https://go.dev/dl/go1.24.0.linux-amd64.tar.gz | tar -C /usr/local -xz
-ENV PATH="/usr/local/go/bin:$PATH"
+RUN apt-get update && apt-get install -y python3 make g++ tzdata && rm -rf /var/lib/apt/lists/*
 RUN npm install
 COPY . .
 # Copy the built binary from stage 1 for the build script to run correctly if it expects it
@@ -31,6 +29,7 @@ RUN npm install --omit=dev
 COPY --from=node-builder /app/dist ./dist
 COPY --from=node-builder /app/dist/server.cjs ./dist/server.cjs
 COPY --from=go-builder /app/go-wrapper/gocronometer-wrapper ./go-wrapper/gocronometer-wrapper
+RUN chmod +x ./go-wrapper/gocronometer-wrapper || true
 
 # Create necessary directories
 RUN mkdir -p logs data
