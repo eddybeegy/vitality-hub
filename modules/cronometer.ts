@@ -31,11 +31,17 @@ export const CronometerModule: DataSourceModule = {
       return { success: false, message: "Cronometer credentials not configured" };
     }
 
-    const user = db.prepare("SELECT sync_history_days, timezone FROM users WHERE id = ?").get(userId) as any;
+    const user = await db.prepare("SELECT sync_history_days, timezone FROM users WHERE id = ?").get(userId) as any;
     const binaryPath = path.join(process.cwd(), 'go-wrapper', 'gocronometer-wrapper');
+
+    logEvent('debug', `DB query result for userId ${userId}: ${JSON.stringify(user)}`, 'cronometer');
 
     const historyDays = user?.sync_history_days || 90;
     const userTimezone = user?.timezone || 'UTC';
+
+    logEvent('debug', `sync_history_days from DB: ${user?.sync_history_days} (type: ${typeof user?.sync_history_days}), using: ${historyDays}`, 'cronometer');
+    logEvent('debug', `timezone from DB: ${user?.timezone}, using: ${userTimezone}`, 'cronometer');
+
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - historyDays);
     const endDate = new Date();
@@ -44,6 +50,7 @@ export const CronometerModule: DataSourceModule = {
     const formatDate = (date: Date) => date.toISOString().split('T')[0];
 
     const args = ['-u', username, '-p', password, '-s', formatDate(startDate), '-e', formatDate(endDate)];
+    logEvent('debug', `Date range calculation: historyDays=${historyDays}, start=${formatDate(startDate)}, end=${formatDate(endDate)}`, 'cronometer');
     logEvent('info', `Executing Cronometer wrapper for user ${username.replace(/.(?=.{2})/g, '*')} (${formatDate(startDate)} to ${formatDate(endDate)})`, 'cronometer');
 
     return new Promise(async (resolve) => {
@@ -84,7 +91,7 @@ export const CronometerModule: DataSourceModule = {
       const { error, stdout, stderr } = attemptResult;
 
       if (stderr) {
-        logEvent('warn', `Cronometer wrapper stderr: ${stderr.substring(0, 500)}`, 'cronometer');
+        logEvent('warn', `Cronometer wrapper stderr: ${stderr}`, 'cronometer');
       }
 
       if (error) {

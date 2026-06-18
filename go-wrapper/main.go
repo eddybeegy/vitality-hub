@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -17,6 +18,7 @@ const (
 	mobileAPIBase = "https://mobile.cronometer.com/api/v2"
 	loginEndpoint = mobileAPIBase + "/login"
 	diaryEndpoint = mobileAPIBase + "/get_diary"
+	foodEndpoint  = mobileAPIBase + "/get_food"
 )
 
 type LoginRequest struct {
@@ -25,27 +27,48 @@ type LoginRequest struct {
 }
 
 type LoginResponse struct {
-	Result  string `json:"result"`
-	Error   string `json:"error"`
-	Token   string `json:"token"`
-	SessionKey string `json:"sessionKey"`
-	JWTSignature string `json:"JWTSignature"`
-	Data    map[string]interface{} `json:"data"`
+	Result       string                 `json:"result"`
+	Error        string                 `json:"error"`
+	Token        string                 `json:"token"`
+	SessionKey   string                 `json:"sessionKey"`
+	JWTSignature string                 `json:"JWTSignature"`
+	UUID         string                 `json:"uuid"`
+	ID           int                    `json:"id"`
+	Data         map[string]interface{} `json:"data"`
 }
 
 type DiaryEntry struct {
-	Name        string                 `json:"name"`
-	Day         string                 `json:"date"`
-	Time        string                 `json:"time"`
-	Nutrition   map[string]interface{} `json:"nutrition"`
-	FoodID      string                 `json:"food_id"`
-	EntryID     string                 `json:"entry_id"`
-	ReferenceID string                 `json:"reference_id"`
+	FoodID        int     `json:"foodId"`
+	Grams         float64 `json:"grams"`
+	Time          string  `json:"time"`
+	Day           string  `json:"day"`
+	Type          string  `json:"type"`
+	ServingID     int     `json:"servingId"`
+	MeasureID     int     `json:"measureId"`
+	UserID        int     `json:"userId"`
+	Order         int     `json:"order"`
+	TranslationID int     `json:"translationId"`
+	Offset        int     `json:"offset"`
 }
 
 type DiaryResponse struct {
-	Foods []DiaryEntry `json:"foods"`
-	Date  string       `json:"date"`
+	Diary []DiaryEntry `json:"diary"`
+}
+
+type FoodDetail struct {
+	ID        int                    `json:"id"`
+	Name      string                 `json:"name"`
+	Nutrition map[string]interface{} `json:"nutrition"`
+}
+
+type FoodResponse struct {
+	Food FoodDetail `json:"food"`
+}
+
+type FoodRequest struct {
+	Auth    AuthBlock `json:"auth"`
+	FoodID  int       `json:"foodId"`
+	Config  map[string]interface{} `json:"config"`
 }
 
 type AuthBlock struct {
@@ -213,11 +236,22 @@ func login(client *http.Client, email, password string) (string, string, error) 
 
 	fmt.Fprintf(os.Stderr, "DEBUG: extracted token (length=%d), first 20 chars: %.20s\n", len(token), token)
 
-	// Extract userID from response
-	userID := loginResp.Data["id"]
-	fmt.Fprintf(os.Stderr, "DEBUG: userID: %v\n", userID)
+	// Extract userID from response (top-level ID field)
+	userID := loginResp.ID
+	fmt.Fprintf(os.Stderr, "DEBUG: userID: %d\n", userID)
+	if userID == 0 {
+		// Fallback to Data["id"] if top-level ID is missing
+		if id, ok := loginResp.Data["id"]; ok {
+			userID = int(id.(float64))
+			fmt.Fprintf(os.Stderr, "DEBUG: userID from Data: %d\n", userID)
+		}
+	}
 
-	return token, fmt.Sprintf("%v", userID), nil
+	if userID == 0 {
+		return "", "", fmt.Errorf("no userID found in login response")
+	}
+
+	return token, fmt.Sprintf("%d", userID), nil
 }
 
 func fetchAndOutputDiary(ctx context.Context, client *http.Client, sessionToken, userID string, startDate, endDate time.Time) error {
@@ -244,8 +278,22 @@ func fetchAndOutputDiary(ctx context.Context, client *http.Client, sessionToken,
 		}
 
 		// Convert diary entries to CSV rows
-		for _, entry := range diary.Foods {
-			if entry.Name == "" {
+		for _, entry := range diary.Diary {
+			// Convert userID from string to int
+			userIDInt, err := strconv.Atoi(userID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: invalid userID %s: %v\n", userID, err)
+				continue
+			}
+
+			// Fetch food details for this entry
+			food, err := fetchFood(ctx, client, sessionToken, userIDInt, entry.FoodID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to fetch food %d for %s: %v\n", entry.FoodID, dateStr, err)
+				continue
+			}
+
+			if food == nil || food.Name == "" {
 				continue
 			}
 
@@ -255,11 +303,11 @@ func fetchAndOutputDiary(ctx context.Context, client *http.Client, sessionToken,
 			}
 
 			// Extract nutrition values, defaulting to 0
-			nut := entry.Nutrition
+			nut := food.Nutrition
 			row := fmt.Sprintf("%s,%s,%s,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v",
 				dateStr,
 				timeStr,
-				entry.Name,
+				food.Name,
 				getFloat(nut, "energy_kcal"),
 				getFloat(nut, "protein_g"),
 				getFloat(nut, "carbs_g"),
@@ -352,8 +400,64 @@ func fetchDiary(ctx context.Context, client *http.Client, sessionToken, userID, 
 		return nil, fmt.Errorf("failed to parse diary response: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "DEBUG: parsed %d foods for %s\n", len(diaryResp.Foods), dateStr)
+	fmt.Fprintf(os.Stderr, "DEBUG: parsed %d foods for %s\n", len(diaryResp.Diary), dateStr)
 	return &diaryResp, nil
+}
+
+func fetchFood(ctx context.Context, client *http.Client, sessionToken string, userID int, foodID int) (*FoodDetail, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	// Build auth block
+	auth := AuthBlock{
+		UserID:  fmt.Sprintf("%d", userID),
+		Token:   sessionToken,
+		API:     3,
+		OS:      "Android",
+		Build:   "2807",
+		Flavour: "free",
+	}
+
+	// Build request payload
+	payload := FoodRequest{
+		Auth:   auth,
+		FoodID: foodID,
+		Config: map[string]interface{}{
+			"call_version": 1,
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+
+	req, err := http.NewRequestWithContext(reqCtx, "POST", foodEndpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create food request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("food request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read food response: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("food request failed with status %d", resp.StatusCode)
+	}
+
+	var foodResp FoodResponse
+	err = json.Unmarshal(respBody, &foodResp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse food response: %w", err)
+	}
+
+	return &foodResp.Food, nil
 }
 
 func getFloat(m map[string]interface{}, key string) float64 {
