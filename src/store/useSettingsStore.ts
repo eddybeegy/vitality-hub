@@ -164,7 +164,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         }
       }
 
-      console.log(`[settings] Fetched settings from server:`, data);
       set((state) => {
         const finalWidgets = Array.isArray(dashboard_widgets) ? dashboard_widgets : state.settings.dashboard_widgets;
         const newSettings = {
@@ -179,7 +178,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           meal_suggestion_dinner: data.meal_suggestion_dinner == null ? true : !!data.meal_suggestion_dinner,
           show_debug_logs: !!data.show_debug_logs
         };
-        console.log(`[settings] Final state settings:`, newSettings);
         return { settings: newSettings };
       });
     } catch (err) {
@@ -235,8 +233,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           api_key: c.api_key?.trim() || ''
         }))
       };
-
-      console.log(`[settings] Saving settings:`, trimmedSettings);
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

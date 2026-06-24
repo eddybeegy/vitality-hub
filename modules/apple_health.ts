@@ -68,18 +68,11 @@ export const AppleHealthModule: DataSourceModule = {
     };
 
     const uniqueDays = new Set<string>();
-    console.log(`[Apple Health Sync] Starting sync for user ${userId}. Received ${metrics.length} metric types.`);
     
     for (const metric of metrics) {
       let dataPoints = metric.data || metric.metrics || metric.values || metric.samples || (metric.qty !== undefined || metric.value !== undefined ? [metric] : []);
       if (!Array.isArray(dataPoints)) dataPoints = [dataPoints];
       const metricName = getMetricName(metric);
-      if (metricName.toLowerCase().includes('vo2')) {
-        console.log(`[Apple Health Sync] Found VO2 metric: ${metricName}, datapoints: ${dataPoints.length}`);
-        if (dataPoints.length > 0) {
-          console.log(`[Apple Health Sync] First VO2 point: ${JSON.stringify(dataPoints[0])}`);
-        }
-      }
       for (const dp of dataPoints) {
         const rawTs = dp.date ?? dp.start ?? dp.startDate ?? dp.end ?? dp.endDate ?? dp.timestamp ?? dp.start_time ?? dp.end_time ?? new Date().toISOString();
         const day = extractDate(rawTs);
@@ -98,9 +91,6 @@ export const AppleHealthModule: DataSourceModule = {
         const cleanName = METRIC_MAP[normalizedName] || METRIC_MAP[rawName] || METRIC_MAP[metric.type] || METRIC_MAP[metric.identifier] || METRIC_MAP[metric.id];
         
         if (!cleanName) {
-          if (typeof rawName === 'string' && rawName.toLowerCase().includes('vo2')) {
-            console.log(`[Apple Health Sync] Failed to map metric: ${rawName}`);
-          }
           continue;
         }
 
@@ -140,10 +130,7 @@ export const AppleHealthModule: DataSourceModule = {
                   (unit.toLowerCase().includes('kj') || unit.toLowerCase().includes('kilojoule'))) {
                 numericVal = numericVal / 4.184;
               }
-              
-            if (cleanName === 'vo2max') {
-              console.log(`[Apple Health Sync] Inserting VO2: ${numericVal} ${unit} for user ${userId} at ${ts}`);
-            }
+
             try {
               insertStmt.run(userId, cleanName, numericVal, unit, ts);
             } catch (e) {

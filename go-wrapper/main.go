@@ -11,6 +11,7 @@ import (
 	"net/http/cookiejar"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -59,6 +60,22 @@ type FoodDetail struct {
 	ID        int                    `json:"id"`
 	Name      string                 `json:"name"`
 	Nutrition map[string]interface{} `json:"nutrition"`
+	Nutrients []FoodNutrient         `json:"nutrients"`
+	Measures  []FoodMeasure          `json:"measures"`
+}
+
+type FoodMeasure struct {
+	ID    int     `json:"id"`
+	Name  string  `json:"name"`
+	Type  string  `json:"type"`
+	Value float64 `json:"value"`
+}
+
+type FoodNutrient struct {
+	ID         int         `json:"id"`
+	NutrientID int         `json:"nutrientId"`
+	Amount     interface{} `json:"amount"`
+	Value      interface{} `json:"value"`
 }
 
 type FoodResponse struct {
@@ -68,9 +85,9 @@ type FoodResponse struct {
 type DirectFoodResponse FoodDetail
 
 type FoodRequest struct {
-	Auth    AuthBlock `json:"auth"`
-	FoodID  int       `json:"id"`
-	Config  map[string]interface{} `json:"config"`
+	Auth   AuthBlock              `json:"auth"`
+	FoodID int                    `json:"id"`
+	Config map[string]interface{} `json:"config"`
 }
 
 type AuthBlock struct {
@@ -83,10 +100,10 @@ type AuthBlock struct {
 }
 
 type DiaryRequest struct {
-	Auth      AuthBlock              `json:"auth"`
-	Day       string                 `json:"day"`
-	LastSeen  int                    `json:"lastSeen"`
-	Config    map[string]interface{} `json:"config"`
+	Auth     AuthBlock              `json:"auth"`
+	Day      string                 `json:"day"`
+	LastSeen int                    `json:"lastSeen"`
+	Config   map[string]interface{} `json:"config"`
 }
 
 func main() {
@@ -305,32 +322,62 @@ func fetchAndOutputDiary(ctx context.Context, client *http.Client, sessionToken,
 			}
 
 			// Extract nutrition values, defaulting to 0
-			nut := food.Nutrition
-			row := fmt.Sprintf("%s,%s,%s,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v",
+			if len(food.Nutrition) == 0 && len(food.Nutrients) == 0 {
+				fmt.Fprintf(os.Stderr, "DEBUG: food %d (%q) has no nutrition payload\n", food.ID, food.Name)
+			}
+
+			energy := nutrientValue(food, entry, []string{"energy_kcal", "calories", "energy"}, 208)
+			protein := nutrientValue(food, entry, []string{"protein_g"}, 203)
+			carbs := nutrientValue(food, entry, []string{"carbs_g", "carbohydrate_g"}, 205)
+			fat := nutrientValue(food, entry, []string{"fat_g", "total_fat_g"}, 204)
+			fiber := nutrientValue(food, entry, []string{"fiber_g", "fiber"}, 291, -291)
+			sugars := nutrientValue(food, entry, []string{"sugars_g", "sugar_g", "sugar"}, 269, -269)
+			sodium := nutrientValue(food, entry, []string{"sodium_mg", "sodium"}, 307, -307)
+			iron := nutrientValue(food, entry, []string{"iron_mg", "iron"}, 303, -303)
+			calcium := nutrientValue(food, entry, []string{"calcium_mg", "calcium"}, 301, -301)
+			vitaminC := nutrientValue(food, entry, []string{"vitamin_c_mg", "vitamin_c"}, 401, -401)
+			vitaminA := nutrientValue(food, entry, []string{"vitamin_a_mcg", "vitamin_a"}, 320, 318, -320, -318)
+			vitaminD := nutrientValue(food, entry, []string{"vitamin_d_mcg", "vitamin_d"}, 324, 328, -324, -328)
+			vitaminE := nutrientValue(food, entry, []string{"vitamin_e_mg", "vitamin_e"}, 323, -323)
+			vitaminK := nutrientValue(food, entry, []string{"vitamin_k_mcg", "vitamin_k"}, 430, -430)
+			vitaminB12 := nutrientValue(food, entry, []string{"vitamin_b12_mcg", "vitamin_b12"}, 418, -418)
+			vitaminB6 := nutrientValue(food, entry, []string{"vitamin_b6_mg", "vitamin_b6"}, 415, -415)
+			magnesium := nutrientValue(food, entry, []string{"magnesium_mg", "magnesium"}, 304, -304)
+			potassium := nutrientValue(food, entry, []string{"potassium_mg", "potassium"}, 306, -306)
+			zinc := nutrientValue(food, entry, []string{"zinc_mg", "zinc"}, 309, -309)
+			water := nutrientValue(food, entry, []string{"water_ml", "water_g", "water"}, 255, -255)
+
+			row := fmt.Sprintf("%s,%s,%s,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v,%v",
 				dateStr,
 				timeStr,
-				food.Name,
-				getFloat(nut, "energy_kcal"),
-				getFloat(nut, "protein_g"),
-				getFloat(nut, "carbs_g"),
-				getFloat(nut, "fat_g"),
-				getFloat(nut, "fiber_g"),
-				getFloat(nut, "sugars_g"),
-				getFloat(nut, "sodium_mg"),
-				getFloat(nut, "iron_mg"),
-				getFloat(nut, "calcium_mg"),
-				getFloat(nut, "vitamin_c_mg"),
-				getFloat(nut, "vitamin_a_mcg"),
-				getFloat(nut, "vitamin_d_mcg"),
-				getFloat(nut, "vitamin_e_mg"),
-				getFloat(nut, "vitamin_k_mcg"),
-				getFloat(nut, "vitamin_b12_mcg"),
-				getFloat(nut, "vitamin_b6_mg"),
-				getFloat(nut, "magnesium_mg"),
-				getFloat(nut, "potassium_mg"),
-				getFloat(nut, "zinc_mg"),
-				getFloat(nut, "water_ml"),
+				quoteCsvField(food.Name),
+				energy,
+				protein,
+				carbs,
+				fat,
+				fiber,
+				sugars,
+				sodium,
+				iron,
+				calcium,
+				vitaminC,
+				vitaminA,
+				vitaminD,
+				vitaminE,
+				vitaminK,
+				vitaminB12,
+				vitaminB6,
+				magnesium,
+				potassium,
+				zinc,
+				water,
 			)
+
+			// Count fields in row for debugging
+			fieldCount := strings.Count(row, ",") + 1
+			if fieldCount != 23 {
+				fmt.Fprintf(os.Stderr, "DEBUG: row has %d fields instead of 23: %s\n", fieldCount, row)
+			}
 			fmt.Println(row)
 		}
 
@@ -402,13 +449,26 @@ func fetchDiary(ctx context.Context, client *http.Client, sessionToken, userID, 
 		return nil, fmt.Errorf("failed to parse diary response: %w", err)
 	}
 
-	// Log first diary entry for inspection
-	if len(diaryResp.Diary) > 0 {
-		b, _ := json.Marshal(diaryResp.Diary[0])
-		fmt.Fprintf(os.Stderr, "DEBUG: first diary entry: %s\n", string(b))
+	originalCount := len(diaryResp.Diary)
+
+	// Log first few diary entries for inspection
+	for i := 0; i < min(3, len(diaryResp.Diary)); i++ {
+		b, _ := json.Marshal(diaryResp.Diary[i])
+		fmt.Fprintf(os.Stderr, "DEBUG: diary entry[%d]: %s\n", i, string(b))
 	}
 
-	fmt.Fprintf(os.Stderr, "DEBUG: parsed %d foods for %s\n", len(diaryResp.Diary), dateStr)
+	// Filter out entries with invalid foodId
+	validEntries := []DiaryEntry{}
+	for _, entry := range diaryResp.Diary {
+		if entry.FoodID != 0 {
+			validEntries = append(validEntries, entry)
+		} else {
+			fmt.Fprintf(os.Stderr, "DEBUG: skipping entry with foodId=0: type=%s, time=%s\n", entry.Type, entry.Time)
+		}
+	}
+	diaryResp.Diary = validEntries
+
+	fmt.Fprintf(os.Stderr, "DEBUG: parsed %d valid foods for %s (skipped %d with foodId=0)\n", len(validEntries), dateStr, originalCount-len(validEntries))
 	return &diaryResp, nil
 }
 
@@ -428,7 +488,7 @@ func fetchFood(ctx context.Context, client *http.Client, sessionToken string, us
 
 	// Build request payload - per cronometer-api-mcp, use "id" not "foodId"
 	payload := FoodRequest{
-		Auth: auth,
+		Auth:   auth,
 		FoodID: foodID,
 		Config: map[string]interface{}{
 			"call_version": 1,
@@ -496,18 +556,104 @@ func fetchFood(ctx context.Context, client *http.Client, sessionToken string, us
 
 func getFloat(m map[string]interface{}, key string) float64 {
 	if v, ok := m[key]; ok {
-		switch val := v.(type) {
-		case float64:
-			return val
-		case int:
-			return float64(val)
-		case string:
-			var f float64
-			fmt.Sscanf(val, "%f", &f)
-			return f
-		}
+		return asFloat(v)
 	}
 	return 0
+}
+
+func asFloat(v interface{}) float64 {
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int32:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case string:
+		var f float64
+		fmt.Sscanf(val, "%f", &f)
+		return f
+	default:
+		return 0
+	}
+}
+
+func nutrientValue(food *FoodDetail, entry DiaryEntry, mapKeys []string, nutrientIDs ...int) float64 {
+	if food == nil {
+		return 0
+	}
+
+	// In Cronometer get_food payloads, the nutrition map is often already
+	// scaled for the selected diary entry/serving. Do not apply grams scaling.
+	if len(food.Nutrition) > 0 {
+		for _, key := range mapKeys {
+			if v, ok := food.Nutrition[key]; ok {
+				return asFloat(v)
+			}
+		}
+	}
+
+	scale := 1.0
+	if entry.Grams > 0 {
+		divisor := nutrientGramDivisor(food)
+		if divisor <= 0 {
+			divisor = 100.0
+		}
+		scale = entry.Grams / divisor
+	}
+
+	if len(food.Nutrients) > 0 {
+		for _, n := range food.Nutrients {
+			id := n.ID
+			if id == 0 {
+				id = n.NutrientID
+			}
+
+			matched := false
+			for _, targetID := range nutrientIDs {
+				if id == targetID {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+
+			if n.Amount != nil {
+				return asFloat(n.Amount) * scale
+			}
+			if n.Value != nil {
+				return asFloat(n.Value) * scale
+			}
+		}
+	}
+
+	return 0
+}
+
+func nutrientGramDivisor(food *FoodDetail) float64 {
+	if food == nil {
+		return 100.0
+	}
+
+	for _, m := range food.Measures {
+		if !strings.EqualFold(m.Name, "g") {
+			continue
+		}
+		if m.Value <= 0 {
+			continue
+		}
+		if strings.EqualFold(m.Type, "Recipe") {
+			return m.Value
+		}
+	}
+
+	return 100.0
 }
 
 func min(a, b int) int {
@@ -515,4 +661,15 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func quoteCsvField(field string) string {
+	if field == "" {
+		return "\"\""
+	}
+	// Quote if contains comma, quote, or newline
+	if strings.Contains(field, ",") || strings.Contains(field, "\"") || strings.Contains(field, "\n") {
+		return "\"" + strings.ReplaceAll(field, "\"", "\"\"") + "\""
+	}
+	return field
 }

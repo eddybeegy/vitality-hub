@@ -56,7 +56,8 @@ export async function assertSafeProviderUrl(rawUrl: string, allowPrivate = false
   }
   if (allowPrivate) return;
 
-  const host = parsed.hostname;
+  // WHATWG URL wraps IPv6 literals in brackets ("[::1]") — strip them so net.isIP works.
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
   // Block bare-literal private addresses immediately.
   if (net.isIP(host) && isPrivateAddress(host)) {
     throw new Error("Provider URL resolves to a disallowed (private) address");

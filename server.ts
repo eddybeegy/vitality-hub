@@ -78,7 +78,6 @@ function rotateLogs() {
         const diffDays = (now.getTime() - stats.mtime.getTime()) / (1000 * 60 * 60 * 24);
         if (diffDays > 7) {
           fs.unlinkSync(filePath);
-          console.log(`Deleted old log file: ${file}`);
         }
       }
     });
@@ -249,17 +248,6 @@ async function logEvent(level: 'debug' | 'info' | 'warn' | 'error', message: str
 
     // Write to DB
     await db.prepare("INSERT INTO logs (user_id, level, message, source) VALUES (?, ?, ?, ?)").run(userId || null, level, message, source);
-    
-    // Conditional console logging
-    // System logs (no userId) are controlled by the primary admin (ID 1)
-    // User logs are controlled by that specific user's debug setting
-    const targetId = userId || 1;
-    const user = await db.prepare("SELECT show_debug_logs FROM users WHERE id = ?").get(targetId) as any;
-    const debugMode = user?.show_debug_logs === 1;
-
-    if (level !== 'debug' || debugMode) {
-      console.log(`[${source}]${userId ? ` [User ${userId}]` : ''} ${level.toUpperCase()}: ${message}`);
-    }
   } catch (e) {
     console.error("Failed to write log:", e);
   }
@@ -642,7 +630,6 @@ async function ensureSchema() {
             return type;
           };
           await db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${colName} ${adjustType(colType as string)}`);
-          console.log(`Added missing column ${colName} to ${tableName}`);
         } catch (e) {
           console.error(`Error adding column ${colName} to ${tableName}:`, e);
         }
@@ -691,7 +678,6 @@ async function ensureSchema() {
       }
     }
     if (metricsToFix.length > 0) {
-      console.log(`[Migration] Normalizing ${metricsToFix.length} metrics timestamps...`);
       const updateMetric = db.prepare("UPDATE metrics SET timestamp = ? WHERE id = ?");
       await db.transaction(async () => {
         for (const m of metricsToFix) {
@@ -709,7 +695,6 @@ async function ensureSchema() {
       }
     }
     if (workoutsToFix.length > 0) {
-      console.log(`[Migration] Normalizing ${workoutsToFix.length} workouts timestamps...`);
       const updateWorkout = db.prepare("UPDATE workouts SET timestamp = ? WHERE id = ?");
       await db.transaction(async () => {
         for (const w of workoutsToFix) {
@@ -758,8 +743,6 @@ async function ensureSchema() {
 
   // Aggressive cleanup for metrics and meal_items to handle millisecond-shifted duplicates
   try {
-    console.log("Performing aggressive cleanup for nutrition duplicates...");
-    
     // 1. Clean up meal_items (exact matches + minute-based for nutrition)
     const mealDuplicates = await db.prepare(`
       SELECT id, name, calories, timestamp, source FROM meal_items 
@@ -783,7 +766,6 @@ async function ensureSchema() {
         DELETE FROM meal_items 
         WHERE id IN (${mealDuplicates.map(d => d.id).join(',')})
       `).run();
-      console.log(`Cleaned up ${mealDuplicates.length} duplicate meal items.`);
     }
     
     // 2. Clean up metrics (exact matches + minute-based for nutrition)
@@ -809,7 +791,6 @@ async function ensureSchema() {
         DELETE FROM metrics 
         WHERE id IN (${metricsDuplicates.map(d => d.id).join(',')})
       `).run();
-      console.log(`Cleaned up ${metricsDuplicates.length} duplicate metrics.`);
     }
 
     // 3. Try to create unique indexes again after cleanup if they failed before
@@ -847,7 +828,6 @@ async function ensureSchema() {
         DELETE FROM metrics 
         WHERE id IN (${crossSourceDuplicates.map(d => d.id).join(',')})
       `).run();
-      console.log(`Cleaned up ${crossSourceDuplicates.length} cross-source nutrition duplicates.`);
     }
   } catch (e) {
     console.error("Error during aggressive cleanup:", e);
@@ -891,7 +871,6 @@ async function ensureSchema() {
   if (db.type === 'sqlite') { try {
     const tableSchema = await db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_insights'").get() as any;
     if (tableSchema && tableSchema.sql.includes('UNIQUE(user_id, type, date)')) {
-       console.log("Updating ai_insights table to remove UNIQUE(user_id, type, date) constraint");
        await db.exec(`
         ALTER TABLE ai_insights RENAME TO ai_insights_old;
         CREATE TABLE ai_insights (
@@ -930,7 +909,6 @@ try {
     if (admin && !admin.password_hash) {
       await db.prepare("UPDATE users SET password_hash = ? WHERE id = 1")
         .run(await hashPassword(process.env.ADMIN_PASSWORD));
-      console.log("[auth] Seeded password for primary administrator (user 1) from ADMIN_PASSWORD");
     }
   }
 } catch (e) {
@@ -965,7 +943,6 @@ try {
   ];
   const placeholders = nutritionTypes.map(() => '?').join(',');
   await db.prepare(`DELETE FROM metrics WHERE source = 'apple_health' AND type IN (${placeholders})`).run(...nutritionTypes);
-  console.log("Cleaned up Apple Health nutrition data");
 } catch (e) {
   console.error("Failed to cleanup Apple Health nutrition data", e);
 }
@@ -977,7 +954,6 @@ try {
   const oversizedCount = (await db.prepare("SELECT count(*) as count FROM metrics WHERE type = 'sleep' AND value > 50400").get() as any).count;
   
   if (oversizedCount > 0) {
-    console.log(`[db] Detected ${oversizedCount} oversized sleep records. performing cleanup...`);
     // Rule 1: Any Apple Health sleep record > 12 hours is likely "Sleep Analysis" or an aggregate.
     await db.prepare("UPDATE metrics SET type = 'sleep_total' WHERE type = 'sleep' AND source = 'apple_health' AND value > 43200").run();
   }
@@ -1022,9 +998,6 @@ try {
     
     const token = req.cookies.auth_token;
     if (!token) {
-      if (req.path.startsWith('/api/')) {
-        console.log(`[auth] Unauthorized API request to ${req.path}`);
-      }
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
@@ -1035,7 +1008,6 @@ try {
       // Check if user is approved
       const user = await db.prepare("SELECT approved, role FROM users WHERE id = ?").get(decoded.id) as any;
       if (!user) {
-        console.log(`[auth] User not found for ID ${decoded.id}`);
         return res.status(401).json({ error: 'User not found' });
       }
       
@@ -1048,13 +1020,11 @@ try {
       }
 
       if (!user.approved) {
-        console.log(`[auth] User ${decoded.id} pending approval`);
         return res.status(403).json({ error: 'Account pending approval' });
       }
 
       next();
     } catch (e) {
-      console.log(`[auth] Invalid token for request to ${req.path}`);
       res.status(401).json({ error: 'Invalid token' });
     }
   };
@@ -1097,7 +1067,6 @@ try {
     // Use a generic message and always run a verify to limit user-enumeration / timing leaks.
     const ok = await verifyPassword(password, user?.password_hash);
     if (!user || !ok) {
-      console.log(`[auth] Failed login for ${email}`);
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
@@ -1181,20 +1150,17 @@ try {
   });
 
   app.post('/api/admin/users/:id/purge', requireAdmin, async (req: any, res) => {
-    console.log(`[admin purge] Request from user ${req.user.id} to purge user ${req.params.id}`);
     if (req.user.id !== 1) {
       console.warn(`[admin purge] Forbidden: user ${req.user.id} is not user 1`);
       return res.status(403).json({ error: 'Only the primary administrator can purge data' });
     }
     const targetUserId = parseInt(req.params.id, 10);
     const { metrics, workouts, routines, insights, logs, chat } = req.body;
-    console.log(`[admin purge] Purging for user ${targetUserId}:`, req.body);
 
     try {
       await db.transaction(async () => {
         if (metrics) {
-          const info = await db.prepare("DELETE FROM metrics WHERE user_id = ?").run(targetUserId);
-          console.log(`[admin purge] Deleted ${info.changes} metrics for user ${targetUserId}`);
+          await db.prepare("DELETE FROM metrics WHERE user_id = ?").run(targetUserId);
         }
         if (workouts) {
           // Delete workout sets and exercises first
@@ -1208,25 +1174,20 @@ try {
             )
           `).run(targetUserId);
           await db.prepare("DELETE FROM workout_exercises WHERE workout_id IN (SELECT id FROM workouts WHERE user_id = ?)").run(targetUserId);
-          const info = await db.prepare("DELETE FROM workouts WHERE user_id = ?").run(targetUserId);
-          console.log(`[admin purge] Deleted ${info.changes} workouts for user ${targetUserId}`);
+          await db.prepare("DELETE FROM workouts WHERE user_id = ?").run(targetUserId);
         }
         if (routines) {
           await db.prepare("DELETE FROM routine_exercises WHERE routine_id IN (SELECT id FROM routines WHERE user_id = ?)").run(targetUserId);
-          const info = await db.prepare("DELETE FROM routines WHERE user_id = ?").run(targetUserId);
-          console.log(`[admin purge] Deleted ${info.changes} routines for user ${targetUserId}`);
+          await db.prepare("DELETE FROM routines WHERE user_id = ?").run(targetUserId);
         }
         if (insights) {
-          const info = await db.prepare("DELETE FROM ai_insights WHERE user_id = ?").run(targetUserId);
-          console.log(`[admin purge] Deleted ${info.changes} ai_insights for user ${targetUserId}`);
+          await db.prepare("DELETE FROM ai_insights WHERE user_id = ?").run(targetUserId);
         }
         if (logs) {
-          const info = await db.prepare("DELETE FROM logs WHERE user_id = ?").run(targetUserId);
-          console.log(`[admin purge] Deleted ${info.changes} logs for user ${targetUserId}`);
+          await db.prepare("DELETE FROM logs WHERE user_id = ?").run(targetUserId);
         }
         if (chat) {
-          const info = await db.prepare("DELETE FROM chat_history WHERE user_id = ?").run(targetUserId);
-          console.log(`[admin purge] Deleted ${info.changes} chat_history for user ${targetUserId}`);
+          await db.prepare("DELETE FROM chat_history WHERE user_id = ?").run(targetUserId);
         }
       })();
 
@@ -1654,7 +1615,6 @@ async function checkScheduledRegeneration(userId: number) {
           ).run(nowStr, userId, targetDateTime.toISOString());
 
           if (result.changes > 0) {
-            console.log(`[ai-scheduler] Triggering scheduled regeneration for user ${userId} at ${targetTime}`);
             triggered = true;
             break;
           }
@@ -2587,14 +2547,6 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       latestSleepNight = sleepMetrics[0].timestamp;
     }
     
-    // Get current today string for debug info
-    const todayStr = getTodayInTimezone(userTimezone, new Date());
-    console.log(`[summary] Calculated latestSleepNight: ${latestSleepNight} (Current today in ${userTimezone}: ${todayStr})`);
-
-    // Log the found values for debugging
-    const debugLatestSleep = highFreqMetrics.filter(m => m.type.startsWith('sleep') && m.timestamp === latestSleepNight);
-    console.log(`[summary] Metrics for latestSleepNight (${latestSleepNight}):`, debugLatestSleep.map(m => `${m.type}=${(m.value/3600).toFixed(2)}h`).join(', '));
-
     // 3. Get latest for other high frequency metrics
     const hfMetricTypes = new Set<string>();
     highFreqMetrics.forEach(m => {
@@ -2627,7 +2579,6 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         // we prioritize the sum of stages as it's more granular and usually more accurate.
         // Also ensure awake is not in total if requested by common conventions
         if (Math.abs(sum - sleep_total.value) > 60) { // More than 1 minute difference
-          console.log(`[summary] Reconciling sleep total from stages for ${latestSleepNight}: total=${sleep_total.value}, core+rem+deep=${sum}. Using sum.`);
           sleep_total.value = sum;
         }
       } else {
@@ -2640,16 +2591,6 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         latestMetricsResults.push(sleep_total);
       }
     }
-    
-    // Log the actual latestMetrics for sleep to verify values
-    const debugSleep = latestMetricsResults.filter(m => m.type.startsWith('sleep'));
-    console.log(`[summary] Final latest sleep metrics for ${latestSleepNight}:`, JSON.stringify(debugSleep));
-
-    const counts: Record<string, number> = {};
-    metrics.forEach(m => {
-      counts[m.type] = (counts[m.type] || 0) + 1;
-    });
-    console.log(`[summary] Metric counts: ${JSON.stringify(counts)}`);
 
     const workouts = await db.prepare(`
       SELECT w.*, r.folder_name as routine_folder 
@@ -2659,7 +2600,6 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       ORDER BY w.timestamp DESC 
       LIMIT 1000
     `).all(userId);
-    console.log(`[summary] Workouts fetched: ${workouts.length}`);
     const routines = await db.prepare("SELECT * FROM routines WHERE user_id = ? ORDER BY id DESC").all(userId);
     const routineExercises = await db.prepare("SELECT * FROM routine_exercises WHERE routine_id IN (SELECT id FROM routines WHERE user_id = ?)").all(userId);
 
@@ -2696,7 +2636,6 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
 
     const result = { metrics, latestMetrics, workouts, routines, routineExercises, exercises, sets, mealItems, syncLogs };
     summaryCache.set(userId, { data: result, timestamp: Date.now() });
-    console.log(`[summary] Cache set for user ${userId}`);
     res.json(result);
   });
 
@@ -3296,7 +3235,6 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         if (!baseUrl) continue;
         try {
           await probeProvider(baseUrl, id);
-          console.log(`[ai-probe] Provider ${id} at ${baseUrl} is reachable`);
         } catch (e) {
           console.warn(`[ai-probe] Provider ${id} at ${baseUrl} probe failed: ${e?.message || e}`);
         }
@@ -3514,7 +3452,6 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     const existingUser = await db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id) as any;
     
     if (existingUser) {
-      console.log(`[settings] Updating settings for user ${req.user.id}, widgets count: ${dashboard_widgets?.length}`);
       const params = [
         email || 'user@example.com', 
         name || null,
@@ -3659,7 +3596,6 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
   });
 
   app.listen(PORT, "0.0.0.0", async () => {
-    console.log(`Server running on http://localhost:${PORT}`);
     logEvent('warn', 'Vitality Hub server started', 'system');
     
     // Database Migration: Normalize timestamps to ISO-8601 with 'T' and '.000Z'

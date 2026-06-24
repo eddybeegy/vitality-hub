@@ -2,6 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig, loadEnv} from 'vite';
+import type { UserConfig } from 'vitest/config';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
@@ -14,6 +15,10 @@ export default defineConfig(({mode}) => {
       alias: {
         '@': path.resolve(process.cwd(), '.'),
       },
+    },
+    test: {
+      environment: 'node',
+      include: ['**/*.test.ts'],
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

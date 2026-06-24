@@ -201,8 +201,7 @@ export class DatabaseWrapper {
   async exec(sql: string) {
     if (sql.includes('PRAGMA')) return; // Ignore pragmas on network DBs
     const { text } = this.translateSql(sql);
-    
-    // console.log("EXEC:", text); // Uncomment for debugging
+
     if (this.type === 'sqlite') {
       this.sqlite!.exec(text);
     } else if (this.type === 'postgres') {

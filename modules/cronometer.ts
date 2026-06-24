@@ -105,6 +105,15 @@ export const CronometerModule: DataSourceModule = {
           return isNaN(n) ? 0 : n;
         };
 
+        // Debug: Log first few lines of CSV
+        const lines = stdout.split('\n');
+        logEvent('debug', `CSV has ${lines.length} lines total`, 'cronometer');
+        logEvent('debug', `CSV header: ${lines[0]?.substring(0, 200)}`, 'cronometer');
+        if (lines.length > 1) {
+          logEvent('debug', `CSV line 2: ${lines[1]?.substring(0, 300)}`, 'cronometer');
+          logEvent('debug', `CSV line 2 comma count: ${(lines[1]?.match(/,/g) || []).length}`, 'cronometer');
+        }
+
         const records = parse(stdout, { columns: true, skip_empty_lines: true });
         logEvent('info', `Cronometer sync returned ${records.length} records`, 'cronometer');
         if (!records || records.length === 0) {

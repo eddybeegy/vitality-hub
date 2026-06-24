@@ -148,10 +148,8 @@ export const useAIStore = create<AIState>((set, get) => ({
     }
   },
   checkAndRegenerateAI: async (force = false, currentTargets, settings, specificType) => {
-    console.log("checkAndRegenerateAI called", { force, currentTargets, settings, specificType });
     const { isReviewLoading, fetchAIInsights, fetchConversationMemory } = get();
     if (isReviewLoading) {
-      console.log("checkAndRegenerateAI: already loading, returning");
       return;
     }
 

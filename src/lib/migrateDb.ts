@@ -12,14 +12,10 @@ async function migrate() {
     process.env.DATABASE_TYPE = process.env.DEST_DATABASE_TYPE || 'postgres';
     const destDb = setupDb();
 
-    console.log(`Migrating data from ${sourceDb.type} to ${destDb.type}...`);
-
     for (const table of tables) {
-        console.log(`Migrating table ${table}...`);
         try {
             const rows = await sourceDb.prepare(`SELECT * FROM ${table}`).all() as any[];
             if (rows.length === 0) {
-                console.log(`Table ${table} is empty. Skipping.`);
                 continue;
             }
 
@@ -125,7 +121,6 @@ async function migrate() {
                     }
                 }
             }
-            console.log(`Migrated ${successCount}/${rows.length} rows for table ${table}`);
             
             // Reset serial sequences in Postgres if required
             if (destDb.type === 'postgres' && columns.includes('id')) {
@@ -143,8 +138,6 @@ async function migrate() {
             console.error(`Error migrating table ${table}:`, e.message);
         }
     }
-
-    console.log("Migration completed.");
     process.exit(0);
 }
 
