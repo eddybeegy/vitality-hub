@@ -51,8 +51,11 @@ describe('freshnessStatus', () => {
     expect(freshnessStatus('withings', reading, NOW)).toBe('error');
   });
 
-  it('reads a naive server timestamp as UTC', () => {
-    // 2026-10-20 12:30 UTC, naive, as the summary payload can carry it: 23.5h old.
-    expect(freshnessStatus('withings', '2026-10-20 12:30:00', NOW)).toBe('good');
+  it('honours the offset on the reading, as the live payload sends it', () => {
+    // dataFreshness lastReading arrives offset-bearing (timestamptz since item 13).
+    // Naive strings are deliberately not tested: parseUTCDate resolves those in the
+    // runner's local zone, which is item 44's concern, not this one's.
+    expect(freshnessStatus('withings', '2026-10-20T12:30:00.000Z', NOW)).toBe('good');      // 23.5h
+    expect(freshnessStatus('withings', '2026-10-20T12:30:00+01:00', NOW)).toBe('error');    // 24.5h
   });
 });
