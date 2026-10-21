@@ -3,6 +3,7 @@ import { Clock, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react';
 import { useHealthStore } from '../store/useHealthStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { parseUTCDate } from '../lib/utils';
+import { isIssueResolved } from '../lib/syncIssues';
 
 // Duplicated from App.tsx's handleConnectWithings rather than threading a prop
 // through Dashboard for one widget — same self-contained popup OAuth flow.
@@ -97,7 +98,12 @@ export const SyncHealthWidget = () => {
           //    returns `syncIssuesByModule`, resolved through the same MODULE_SOURCES
           //    map freshness uses. The flat lookup stays as a fallback so an older
           //    cached summary payload still renders something.
-          const issue = summaryData.syncIssuesByModule?.[module.id] ?? summaryData.syncIssues?.[module.id];
+          //
+          // 3. (sweep item 41) The server keeps an issue for a flat 24h, so an error that a
+          //    later clean sync had already fixed stayed up next to Reconnect all day.
+          //    Drop it once the same source has logged a success after it.
+          const rawIssue = summaryData.syncIssuesByModule?.[module.id] ?? summaryData.syncIssues?.[module.id];
+          const issue = rawIssue && !isIssueResolved(rawIssue, summaryData.syncLogs, module.id) ? rawIssue : undefined;
           const status = (issue?.level === 'error' && dataStatus === 'good') ? 'warning' : dataStatus;
           const iconColor = status === 'good' ? 'text-emerald-500' : status === 'warning' ? 'text-amber-500' : 'text-red-500';
           const lastSync = getLastSync(module.id);
