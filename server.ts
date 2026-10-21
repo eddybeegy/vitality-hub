@@ -1463,17 +1463,21 @@ try {
   });
 
   // --- User-scoped data, in one place (sweep item 14, 2026-10-21) ------------
-  // There is NOT ONE foreign key to `users` anywhere in this schema -- verified against
-  // pg_constraint: the only FKs are workout_exercises->workouts, workout_sets->
-  // workout_exercises and routine_exercises->routines (all ON DELETE CASCADE), plus the
-  // unrelated `webui.*` ones belonging to Open WebUI, which shares this database.
-  //
-  // So nothing at the database level stops a user's rows outliving the user, and
+  // Until 2026-10-21 there was NOT ONE foreign key to `users` anywhere in this schema,
+  // so nothing at the database level stopped a user's rows outliving the user, and
   // `DELETE FROM users WHERE id = ?` did exactly that. Live evidence: user 3 no longer
-  // exists, and left behind 11,945 `metrics` rows (cronometer, 2026-02-20 to
-  // 2026-05-21), 1,012 `meal_items`, 4 `targets` and 2 `logs`. Invisible to every query
-  // in the app, since they are all scoped by user_id -- which is exactly why nobody
-  // noticed for five months.
+  // existed, and had left behind 11,945 `metrics` rows (cronometer, 2026-02-20 to
+  // 2026-05-21), 1,012 `meal_items` and 2 `logs`. Invisible to every query in the app,
+  // since they are all scoped by user_id -- which is exactly why nobody noticed for
+  // five months.
+  //
+  // `migrations/item-14-user-fks/` now adds ON DELETE CASCADE foreign keys on all nine
+  // data tables and ON DELETE SET NULL on `logs` (an audit trail should outlive the
+  // account it describes), after dumping and clearing those orphans on Kieron's
+  // instruction. So the database enforces this now and the loop below is belt rather
+  // than braces -- keep both: the explicit purge is what makes the delete observable
+  // in one place, and it is the only half that works on the sqlite backend, where the
+  // wrapper creates no such constraints.
   //
   // Keep this list in sync with the schema. The authoritative check is:
   //   SELECT table_name FROM information_schema.columns
@@ -1481,10 +1485,9 @@ try {
   // The `*_bak_*` tables that query also returns are deliberate manual backups and are
   // NOT purged -- that is the point of them.
   //
-  // The real belt-and-braces fix is ON DELETE CASCADE FKs on user_id, which would make
-  // this unforgettable rather than merely centralised. That needs the existing orphans
-  // cleared first (adding the constraint fails while they exist) and deleting 13k rows
-  // of someone's health data is Kieron's call, not mine -- raised 2026-10-21, pending.
+  // A table added here but missed in `migrations/item-14-user-fks/up.sql` loses the
+  // database-level guarantee silently, so if you extend this list, extend that file in
+  // the same change.
   const USER_SCOPED_TABLES = [
     'metrics', 'workouts', 'routines', 'meal_items', 'targets',
     'ai_insights', 'ai_configs', 'chat_history', 'user_cache', 'logs',
@@ -1663,7 +1666,13 @@ try {
       !providedToken && !!userRow && isLocalNetworkAddress(clientIp);
 
     if (!tokensMatch && !allowLocalFallback) {
-      logEvent('error', 'Rejected /health-export with missing or invalid token', 'apple_health', userId);
+      // Deliberately NOT passing userId. This route is not cookie-authenticated, so
+      // `userId` here is only what the caller CLAIMED -- and since item 14 put an
+      // ON DELETE SET NULL foreign key on logs.user_id, a claimed-but-unknown id now
+      // fails the constraint. logEvent swallows its own errors, so the row you most
+      // want to keep (a rejected export attempt) would vanish leaving only a console
+      // line. The claimed id goes in the message, where it is just as searchable.
+      logEvent('error', `Rejected /health-export with missing or invalid token (claimed userId ${userId})`, 'apple_health');
       return res.status(401).send("Invalid or missing export token");
     }
 
