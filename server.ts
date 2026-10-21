@@ -22,6 +22,7 @@ import { AI_MODELS, METRIC_MAP } from "./src/constants";
 import { AI_PROVIDERS } from "./ai_providers/index";
 import { probeProvider } from "./ai_providers/openai_compatible";
 import { setupDb } from "./src/lib/db";
+import { parseEnumParam, parseDateParam, parseDayParam, parseIntParam, checkDateOrder } from "./src/lib/queryParams";
 
 // Increase MaxListeners limit to prevent TLSSocket warnings during concurrent API sync chunks
 EventEmitter.defaultMaxListeners = 50;
@@ -2925,39 +2926,49 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
 
   await app.get("/api/metrics/aggregated", requireAuth, async (req: any, res) => {
     const userId = req.user.id;
-    const { type, startDate, endDate, granularity, aggregation } = req.query;
+    const { type } = req.query;
 
-    if (!type || !granularity) {
-      return res.status(400).json({ error: 'Missing type or granularity' });
+    if (!type || typeof type !== 'string') {
+      return res.status(400).json({ error: 'Missing type' });
     }
 
-    const typeStr = String(type);
+    // Item 42: validate values, not just presence. An unknown granularity used to fall
+    // into the month branch, an unknown aggregation became avg, and an unparseable date
+    // became the 365-day default / now -- all as a 200 the caller could not tell apart
+    // from an answer to the question it asked.
+    const granularityP = parseEnumParam('granularity', req.query.granularity, ['day', 'week', 'month'] as const);
+    if (granularityP.error) return res.status(400).json({ error: granularityP.error });
+    const aggregationP = parseEnumParam('aggregation', req.query.aggregation, ['avg', 'sum', 'max', 'min'] as const, 'avg');
+    if (aggregationP.error) return res.status(400).json({ error: aggregationP.error });
+    const startP = parseDateParam('startDate', req.query.startDate);
+    if (startP.error) return res.status(400).json({ error: startP.error });
+    const endP = parseDateParam('endDate', req.query.endDate);
+    if (endP.error) return res.status(400).json({ error: endP.error });
+    const orderError = checkDateOrder(startP.value, endP.value);
+    if (orderError) return res.status(400).json({ error: orderError });
+    const granularity = granularityP.value;
+    const aggregation = aggregationP.value;
+
+    const typeStr = type;
     const requestedTypes = typeStr.split(',');
 
-    const cacheKey = `${userId}-${typeStr}-${startDate}-${endDate}-${granularity}-${aggregation}`;
-    const cachedData = await metricsCache.get(cacheKey);
-    if (cachedData) {
-      return res.json(cachedData);
-    }
-
     let cutoffStr: string;
-    try {
-      if (startDate) {
-        const d = new Date(startDate as string);
-        d.setUTCHours(0, 0, 0, 0); // Include full start day
-        cutoffStr = d.toISOString();
-      } else {
-        cutoffStr = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
-      }
-    } catch (e) {
+    if (startP.value) {
+      const d = new Date(startP.value);
+      d.setUTCHours(0, 0, 0, 0); // Include full start day
+      cutoffStr = d.toISOString();
+    } else {
       cutoffStr = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
     }
 
-    let endStr: string;
-    try {
-      endStr = endDate ? new Date(endDate as string).toISOString() : new Date().toISOString();
-    } catch (e) {
-      endStr = new Date().toISOString();
+    const endStr: string = endP.value ? endP.value.toISOString() : new Date().toISOString();
+
+    // Keyed on the raw date params (as before) but the validated granularity/aggregation,
+    // so an absent aggregation and an explicit `avg` share one entry.
+    const cacheKey = `${userId}-${typeStr}-${req.query.startDate}-${req.query.endDate}-${granularity}-${aggregation}`;
+    const cachedData = await metricsCache.get(cacheKey);
+    if (cachedData) {
+      return res.json(cachedData);
     }
 
     const mappings: Record<string, string> = {
@@ -3153,8 +3164,12 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       console.error("[summary] Error starting scheduled regeneration:", err);
     });
 
-    const startDate = req.query.startDate as string;
-    const endDate = req.query.endDate as string;
+    const startP = parseDateParam('startDate', req.query.startDate);
+    if (startP.error) return res.status(400).json({ error: startP.error });
+    const endP = parseDateParam('endDate', req.query.endDate);
+    if (endP.error) return res.status(400).json({ error: endP.error });
+    const orderError = checkDateOrder(startP.value, endP.value);
+    if (orderError) return res.status(400).json({ error: orderError });
     
     // Fetch metrics - we want to ensure we get a good spread of data.
     // High frequency metrics (steps, heart_rate) can easily hit the 100k limit.
@@ -3176,22 +3191,13 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     // instantly. Day granularity is also the honest resolution for a 365-day summary.
     defaultCutoffDate.setUTCHours(0, 0, 0, 0);
     
-    let cutoffStr: string;
-    try {
-      cutoffStr = startDate ? new Date(startDate).toISOString() : defaultCutoffDate.toISOString();
-    } catch (e) {
-      cutoffStr = defaultCutoffDate.toISOString();
-    }
-
     // `endDate` was read off the query string and then never used -- the route accepted it
     // and silently returned unbounded data, so a caller asking for a closed window got
     // everything from `cutoffStr` to now and had no way to tell. Now applied as a real
-    // upper bound. (`new Date('nonsense')` does not throw; `.toISOString()` on the
-    // resulting Invalid Date does, which is what the try/catch is relying on.)
-    let endStr: string | null = null;
-    if (endDate) {
-      try { endStr = new Date(endDate).toISOString(); } catch (e) { endStr = null; }
-    }
+    // upper bound. Item 42: a present-but-unparseable startDate/endDate is a 400 rather
+    // than a silent fall back to the default window / unbounded.
+    const cutoffStr: string = startP.value ? startP.value.toISOString() : defaultCutoffDate.toISOString();
+    const endStr: string | null = endP.value ? endP.value.toISOString() : null;
 
     // Cache lookup happens HERE, after the window is resolved, because the window is part
     // of the key. Costs one small `users` lookup on a cache hit; correctness is worth it.
@@ -4379,7 +4385,11 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     }
 
     try {
-      const days = req.query.days ? parseInt(req.query.days as string) : 30;
+      // Item 42: `parseInt('abc')` is NaN, which `getTodayInTimezone` turns into today --
+      // so a bad `days` silently returned only today's insights. 400 instead.
+      const daysP = parseIntParam('days', req.query.days, { min: 1, max: 3650, fallback: 30 });
+      if (daysP.error) return res.status(400).json({ error: daysP.error });
+      const days = daysP.value;
       const user = await db.prepare("SELECT timezone FROM users WHERE id = ?").get(userId) as any;
       const timezone = user?.timezone || undefined;
       const cutoffDate = new Date();
@@ -4399,9 +4409,14 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
   const postAIInsights = async (req: any, res: any) => {
     try {
       const { type, content, date, provider, model, batch_id, updated_at } = req.body;
+      // Item 42: `date` is half of the (user_id, type, date) upsert key and is compared
+      // as YYYY-MM-DD text on read, so anything else (99999-99-99, a full timestamp) made
+      // a row no read window would ever return. Absent still means today.
+      const dateP = parseDayParam('date', date === null || date === '' ? undefined : date);
+      if (dateP.error) return res.status(400).json({ error: dateP.error });
       const user = await db.prepare("SELECT timezone FROM users WHERE id = ?").get(req.user.id) as any;
       const timezone = user?.timezone || undefined;
-      const insightDate = date || getTodayInTimezone(timezone);
+      const insightDate = dateP.value || getTodayInTimezone(timezone);
       const batchTime = updated_at || new Date().toISOString();
       
       logEvent('debug', `Saving AI insight type=${type} for date=${insightDate} batch=${batch_id}`, 'api');
