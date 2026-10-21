@@ -118,17 +118,17 @@ export const NutritionTab = React.memo(({
         onClose={() => setIsFrequentMealsOpen(false)} 
       />
 
-      <div className="flex justify-between items-end">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-orange-100 dark:bg-orange-900/30 rounded-xl flex items-center justify-center text-orange-600 dark:text-orange-400">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 shrink-0 bg-orange-100 dark:bg-orange-900/30 rounded-xl flex items-center justify-center text-orange-600 dark:text-orange-400">
             <Utensils size={20} />
           </div>
-          <div>
+          <div className="min-w-0">
             <h2 className="text-2xl font-bold tracking-tight">Nutrition Insights</h2>
             <p className="text-zinc-500 dark:text-zinc-400">Track your calories and macronutrients</p>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-4">
             <button
               onClick={() => setIsFrequentMealsOpen(true)}
               className="px-4 py-2 bg-white dark:bg-zinc-800 text-sm font-bold text-zinc-700 dark:text-zinc-300 rounded-xl border border-black/5 dark:border-white/5 hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors shadow-sm"
@@ -147,37 +147,37 @@ export const NutritionTab = React.memo(({
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 rounded-3xl p-6 shadow-sm flex flex-col items-center justify-center text-center">
+        <div className="bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 rounded-3xl p-4 sm:p-6 shadow-sm flex flex-col items-center justify-center text-center min-w-0">
           <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">Calories</span>
-          <div className="flex items-baseline gap-1">
-            <span className="text-3xl font-bold text-orange-500">{Math.round(getTodayTotal('calories_in'))}</span>
+          <div className="flex flex-wrap items-baseline justify-center gap-x-1">
+            <span className="text-2xl sm:text-3xl font-bold text-orange-500">{Math.round(getTodayTotal('calories_in'))}</span>
             <span className="text-sm font-medium text-zinc-500">/ {getTargetValue('calories') || '-'} kcal</span>
           </div>
           {remainingLabel(remaining.calories_in, ' kcal')}
           {weeklyAvgLabel(weeklyAverages.calories_in, getTargetValue('calories'), ' kcal')}
         </div>
-        <div className="bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 rounded-3xl p-6 shadow-sm flex flex-col items-center justify-center text-center">
+        <div className="bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 rounded-3xl p-4 sm:p-6 shadow-sm flex flex-col items-center justify-center text-center min-w-0">
           <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">Protein</span>
-          <div className="flex items-baseline gap-1">
-            <span className="text-3xl font-bold text-emerald-500">{Math.round(getTodayTotal('protein'))}</span>
+          <div className="flex flex-wrap items-baseline justify-center gap-x-1">
+            <span className="text-2xl sm:text-3xl font-bold text-emerald-500">{Math.round(getTodayTotal('protein'))}</span>
             <span className="text-sm font-medium text-zinc-500">/ {getTargetValue('protein') || '-'} g</span>
           </div>
           {remainingLabel(remaining.protein, 'g')}
           {weeklyAvgLabel(weeklyAverages.protein, getTargetValue('protein'), ' g')}
         </div>
-        <div className="bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 rounded-3xl p-6 shadow-sm flex flex-col items-center justify-center text-center">
+        <div className="bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 rounded-3xl p-4 sm:p-6 shadow-sm flex flex-col items-center justify-center text-center min-w-0">
           <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">Carbs</span>
-          <div className="flex items-baseline gap-1">
-            <span className="text-3xl font-bold text-blue-500">{Math.round(getTodayTotal('carbs'))}</span>
+          <div className="flex flex-wrap items-baseline justify-center gap-x-1">
+            <span className="text-2xl sm:text-3xl font-bold text-blue-500">{Math.round(getTodayTotal('carbs'))}</span>
             <span className="text-sm font-medium text-zinc-500">/ {getTargetValue('carbs') || '-'} g</span>
           </div>
           {remainingLabel(remaining.carbs, 'g')}
           {weeklyAvgLabel(weeklyAverages.carbs, getTargetValue('carbs'), ' g')}
         </div>
-        <div className="bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 rounded-3xl p-6 shadow-sm flex flex-col items-center justify-center text-center">
+        <div className="bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 rounded-3xl p-4 sm:p-6 shadow-sm flex flex-col items-center justify-center text-center min-w-0">
           <span className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1">Fat</span>
-          <div className="flex items-baseline gap-1">
-            <span className="text-3xl font-bold text-yellow-500">{Math.round(getTodayTotal('fat'))}</span>
+          <div className="flex flex-wrap items-baseline justify-center gap-x-1">
+            <span className="text-2xl sm:text-3xl font-bold text-yellow-500">{Math.round(getTodayTotal('fat'))}</span>
             <span className="text-sm font-medium text-zinc-500">/ {getTargetValue('fat') || '-'} g</span>
           </div>
           {remainingLabel(remaining.fat, 'g')}
@@ -206,12 +206,12 @@ export const NutritionTab = React.memo(({
             </div>
             <div className="space-y-2 flex-1 w-full">
               {macroSplit.map((m) => (
-                <div key={m.name} className="flex items-center justify-between text-sm">
+                <div key={m.name} className="flex items-center justify-between gap-2 text-sm">
                   <span className="flex items-center gap-2 text-zinc-600 dark:text-zinc-300">
                     <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: m.color }} />
                     {m.name}
                   </span>
-                  <span className="font-mono text-zinc-500 dark:text-zinc-400">
+                  <span className="font-mono text-zinc-500 dark:text-zinc-400 text-right">
                     {Math.round(m.pct)}%
                     {targetMacroSplit && (
                       <span className="text-zinc-400 dark:text-zinc-600"> (target {Math.round((targetMacroSplit as any)[m.name.toLowerCase()])}%)</span>
