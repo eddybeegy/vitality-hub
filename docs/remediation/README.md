@@ -469,3 +469,20 @@ state must survive losing it. So:
   mean of two real readings that was never itself measured — that is **row 69**, logged by a
   sibling builder session, and it needs Kieron's call (daily average, latest reading, or every
   reading). Item 67 does not depend on that answer.
+
+- **2026-10-21 18:44 (builder).** **Row 69 is answered: latest reading, blood pressure only.**
+  Kieron typed "On bp - latest reading" into the claude.ai thread at **18:06** from his own
+  session and the thread started work on it. Recorded on row 69 (`aff15c0d`) with the scope
+  noted — he said "on bp", so weight and body fat keep today's daily average until he says
+  otherwise. **How to read this if you are a later session:** builder treats the claude.ai page
+  as Tier 3, so this is an *observed thread message*, not an instruction that arrived on a Tier 1
+  channel. builder asked him to confirm on Telegram at 18:42; the confirmation lands on row 69
+  when it arrives. It is a reversible display choice and the answer is unsurprising, so it is
+  not a reason to stall — but do not cite a claude.ai thread as the authority for anything
+  irreversible.
+  Row 69 is still **unclaimed** and needs the usual draft PR from the cloud session.
+  **PR state unchanged since 17:07 UTC and all three are drafts**, so `vitality-pr-watch-6c6d`
+  has correctly done nothing: **#38** item 65 (`server.ts +6/-167`), **#40** item 66 (**no
+  `server.ts` change** — the thread is honouring the one-branch-in-`server.ts` hold and will
+  push that half after #38 merges), **#41** item 67 (base is still #40's branch). Row 69 is
+  independent of items 66 and 67; nothing is blocked on it.
