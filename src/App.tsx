@@ -73,6 +73,7 @@ import { useSettingsStore } from './store/useSettingsStore';
 import { useHealthStore } from './store/useHealthStore';
 import { useAIStore } from './store/useAIStore';
 import { useUIStore } from './store/useUIStore';
+import { fetchJson } from './lib/apiFetch';
 import { getLocalDateString, formatDateWithTimezone, parseUTCDate, cn } from './lib/utils';
 import { isTargetSet } from './lib/targets';
 import { useRefreshOnFocus } from './lib/useRefreshOnFocus';
@@ -251,9 +252,13 @@ export default function App() {
   }, [groupedMetrics, settings?.timezone]);
 
   const handleConnectWithings = async () => {
-    const res = await fetch('/api/auth/withings/url');
-    const { url } = await res.json();
-    window.open(url, 'withings_oauth', 'width=600,height=700');
+    try {
+      const { url } = await fetchJson<{ url: string }>('/api/auth/withings/url');
+      window.open(url, 'withings_oauth', 'width=600,height=700');
+    } catch (e) {
+      console.error('Withings connect failed', e);
+      showToast("Couldn't start Withings sign-in. Try again shortly.", 'error');
+    }
   };
 
   const getTargetValue = (type: string) => {
