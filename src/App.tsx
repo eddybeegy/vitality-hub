@@ -33,7 +33,7 @@ import {
   Sparkles,
   MoreHorizontal
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
 import { 
   DndContext, 
   closestCenter,
@@ -586,17 +586,16 @@ export default function App() {
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500"></div>
             </div>
           }>
-            <AnimatePresence mode="wait">
+            {/* Item 56: this was <AnimatePresence mode="wait"> with Admin as its only keyed
+                motion child. mode="wait" holds the outgoing keyed child until its exit
+                finishes before admitting the next one, and with no keyed child coming in the
+                swap never completed: leaving Admin left the page blank until a reload. None
+                of the other 13 tabs animate, so Admin now renders like them. */}
+            <>
               {activeTab === 'admin' && (
-                <motion.div 
-                  key="admin"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="max-w-4xl mx-auto"
-                >
+                <div className="max-w-4xl mx-auto">
                   <AdminPanel />
-                </motion.div>
+                </div>
               )}
 
               {activeTab === 'dashboard' && (
@@ -732,10 +731,9 @@ export default function App() {
               {activeTab === 'debug' && (
                 <DebugTab settings={settings} />
               )}
-            </AnimatePresence>
+            </>
           </Suspense>
           </ErrorBoundary>
-          {/* END of tab AnimatePresence */}
         </div>
       </main>
 
