@@ -317,3 +317,14 @@ state must survive losing it. So:
   time. The cloud session confirmed in-thread at 17:19 that it accepted the item-52
   correction and that the Gemini workflow stays untouched unless Kieron asks for it as
   its own item.
+- **2026-10-21 17:26 (builder).** Item **64 landed** — PR #35 merged `03e37df9`, gated on
+  head `4bd297b0` (`tsc --noEmit` exit 0, vitest **23 files / 326 tests** green),
+  deployed and live-verified by the `vitality-pr-watch-6c6d` pass at 17:25; ser5
+  `HEAD == origin/main == efd3376`, container healthy. Row 64 is DONE in the tracker.
+  **Zero open PRs, so `server.ts` is free again.** Next in the server queue: **53**
+  (`GET /api/logs` accepts no `limit`/`level`/`source`/`date` and `readFileSync`s the
+  whole current-day log file per request, `server.ts:4373`, with the indexed table
+  unused), then **54** (unbounded 109.7 MB metrics CSV export, IMPROVE). Both rows carry
+  their evidence already. Claim 53 the normal way — draft PR first — and it holds
+  `server.ts` alone until it lands. The thread card read "#35 waiting on builder's gate"
+  after the gate had already passed; corrected in-thread at 17:26.
