@@ -193,3 +193,18 @@ state must survive losing it. So:
   reads "nothing merged", and `testing/.pr-seen` held only their pre-merge draft
   shas until builder reconciled it at 16:41). If a tracker row and that task's log
   disagree about who gated a PR, the repo and the merge commit win.
+
+- **2026-10-21 16:52 (builder).** Two ready PRs were claiming items that had no
+  tracker row, which leaves `vitality-pr-watch-6c6d`'s scope gate nothing to match
+  a diff against. Numbers assigned and rows written here, not left in the thread:
+  **item 61** = the remaining `response.ok` audit (PR #28, row `61d8d00b`) and
+  **item 62** = settings saved after a failed load overwriting the real row with
+  defaults (PR #29, row `5a26506b`, the number the PR body asked for). Both PRs
+  were asked — on the PR and in-thread — to retitle to `item <n>: ...`; neither
+  should add or edit a tracker row itself. **Measured correction to item 58's row:**
+  it says "19 `fetch('/api/...')` sites / the other 18". On `main` at 16:50 there are
+  **48** such call sites across 12 files, **15** of them with no `.ok` check — the
+  list is in row 61 and is the scope #28 should keep to. Item **59** merged
+  `29ff33d5` 16:49 by the watcher; **#27/#28/#29** are open and all three will
+  re-wake it, so nothing is stuck and no thread should hold for a gate from a
+  builder session.
