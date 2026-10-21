@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { useUIStore } from './useUIStore';
+import { normaliseTargetValue, toApiTargetValue, type TargetValue } from '../lib/targets';
 
 interface Medication {
   name: string;
@@ -47,7 +48,7 @@ interface Target {
   type: string;
   label: string;
   unit: string;
-  value: number;
+  value: TargetValue;
 }
 
 interface SettingsState {
@@ -102,25 +103,25 @@ const defaultSettings: Settings = {
 };
 
 const defaultTargets: Target[] = [
-  { type: 'weight', label: 'Weight', unit: 'kg', value: 0 },
-  { type: 'body_fat', label: 'Body Fat', unit: '%' , value: 0 },
-  { type: 'muscle_mass', label: 'Muscle Mass', unit: 'kg', value: 0 },
-  { type: 'steps', label: 'Steps', unit: '', value: 0 },
-  { type: 'vo2_max', label: 'VO2 Max', unit: 'ml/kg/min', value: 0 },
-  { type: 'calories', label: 'Daily Calories', unit: 'kcal', value: 0 },
-  { type: 'protein', label: 'Daily Protein', unit: 'g', value: 0 },
-  { type: 'carbs', label: 'Daily Carbs', unit: 'g', value: 0 },
-  { type: 'fat', label: 'Daily Fat', unit: 'g', value: 0 },
-  { type: 'water', label: 'Daily Water', unit: 'ml', value: 0 },
-  { type: 'sleep', label: 'Daily Sleep', unit: 'h', value: 0 },
-  { type: 'resting_heart_rate', label: 'Resting Heart Rate', unit: 'bpm', value: 0 },
-  { type: 'exercise_time', label: 'Daily Active Minutes', unit: 'min', value: 0 },
-  { type: 'stand_time', label: 'Daily Stand Hours', unit: 'h', value: 0 },
-  { type: 'fiber', label: 'Daily Fiber', unit: 'g', value: 0 },
-  { type: 'sugar', label: 'Daily Sugar', unit: 'g', value: 0 },
-  { type: 'unsaturated_fat', label: 'Daily Unsaturated Fat', unit: 'g', value: 0 },
-  { type: 'active_energy', label: 'Daily Active Energy', unit: 'kcal', value: 0 },
-  { type: 'blood_oxygen_saturation', label: 'Blood Oxygen', unit: '%', value: 0 },
+  { type: 'weight', label: 'Weight', unit: 'kg', value: null },
+  { type: 'body_fat', label: 'Body Fat', unit: '%' , value: null },
+  { type: 'muscle_mass', label: 'Muscle Mass', unit: 'kg', value: null },
+  { type: 'steps', label: 'Steps', unit: '', value: null },
+  { type: 'vo2_max', label: 'VO2 Max', unit: 'ml/kg/min', value: null },
+  { type: 'calories', label: 'Daily Calories', unit: 'kcal', value: null },
+  { type: 'protein', label: 'Daily Protein', unit: 'g', value: null },
+  { type: 'carbs', label: 'Daily Carbs', unit: 'g', value: null },
+  { type: 'fat', label: 'Daily Fat', unit: 'g', value: null },
+  { type: 'water', label: 'Daily Water', unit: 'ml', value: null },
+  { type: 'sleep', label: 'Daily Sleep', unit: 'h', value: null },
+  { type: 'resting_heart_rate', label: 'Resting Heart Rate', unit: 'bpm', value: null },
+  { type: 'exercise_time', label: 'Daily Active Minutes', unit: 'min', value: null },
+  { type: 'stand_time', label: 'Daily Stand Hours', unit: 'h', value: null },
+  { type: 'fiber', label: 'Daily Fiber', unit: 'g', value: null },
+  { type: 'sugar', label: 'Daily Sugar', unit: 'g', value: null },
+  { type: 'unsaturated_fat', label: 'Daily Unsaturated Fat', unit: 'g', value: null },
+  { type: 'active_energy', label: 'Daily Active Energy', unit: 'kcal', value: null },
+  { type: 'blood_oxygen_saturation', label: 'Blood Oxygen', unit: '%', value: null },
 ];
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -212,7 +213,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         const existing = data.find((d: any) => d.type === tt.type);
         return {
           ...tt,
-          value: existing ? existing.value : 0
+          value: existing ? normaliseTargetValue(existing.value) : null
         };
       });
       
@@ -267,7 +268,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const res = await fetch('/api/targets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targets })
+        body: JSON.stringify({
+          targets: targets.map(t => ({ ...t, value: toApiTargetValue(t.value) }))
+        })
       });
       if (res.ok) {
         useUIStore.getState().showToast("Targets saved successfully!", "success");

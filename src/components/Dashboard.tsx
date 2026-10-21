@@ -27,6 +27,7 @@ import { useHealthStore } from '../store/useHealthStore';
 import { getSleepStagesData, getBloodPressureData, getSleepDurationData } from '../services/healthDataService';
 import { BodyDiagram } from './BodyDiagram';
 import { computeReadiness } from '../lib/bodyDiagram';
+import { isTargetSet } from '../lib/targets';
 
 const BodyDiagramWidget: React.FC<{ workouts: any[]; recoveryDays: number }> = ({ workouts, recoveryDays }) => {
   const regionScores = computeReadiness(workouts, recoveryDays);
@@ -156,7 +157,7 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
   const getTargetValue = (type: string) => {
     if (!targets) return undefined;
     const target = targets.find((t: any) => t.type === type);
-    return target && target.value > 0 ? target.value : undefined;
+    return target && isTargetSet(target.value) ? Number(target.value) : undefined;
   };
 
   const getTodayTotal = (type: string) => {
@@ -332,7 +333,7 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                     {widgetId === 'weight_goal_progress' && (
                         <div className="bg-white dark:bg-zinc-900 p-6 rounded-3xl border border-black/5 dark:border-white/5 shadow-sm flex flex-col items-center justify-center h-full">
                             {(() => {
-                                const weightTarget = (targets || []).find((t: any) => t.type === 'weight' && Number(t.value) > 0);
+                                const weightTarget = (targets || []).find((t: any) => t.type === 'weight' && isTargetSet(t.value));
                                 const weightEntries = (summaryData.metrics || [])
                                     .filter((m: any) => m.type === 'weight' && m.value != null)
                                     .slice()
@@ -520,7 +521,7 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                                 const todayMl = todayEntry ? Number(todayEntry.value) : 0;
                                 const last7 = waterEntries.slice(0, 7);
                                 const avg7 = last7.reduce((s: number, m: any) => s + Number(m.value), 0) / last7.length;
-                                const target = (targets || []).find((t: any) => t.type === 'water' && Number(t.value) > 0);
+                                const target = (targets || []).find((t: any) => t.type === 'water' && isTargetSet(t.value));
                                 const pct = target ? Math.min((todayMl / Number(target.value)) * 100, 100) : null;
 
                                 return (
@@ -570,8 +571,8 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                                 const ORDER = ['weight', 'steps', 'calories', 'protein', 'carbs', 'fat', 'water', 'active_energy', 'sleep', 'fiber', 'exercise_time', 'stand_time', 'resting_heart_rate', 'body_fat', 'muscle_mass', 'vo2_max', 'blood_oxygen_saturation'];
 
                                 const rows = ORDER.map(type => {
-                                    // 0 is this app's not-set sentinel for targets (verified night 5/8) — never treat it as a real goal.
-                                    const target = (targets || []).find((t: any) => t.type === type && Number(t.value) > 0);
+                                    // Unset targets are null in the store (the API still stores 0); never treat either as a real goal.
+                                    const target = (targets || []).find((t: any) => t.type === type && isTargetSet(t.value));
                                     const meta = TARGET_META[type];
                                     if (!target || !meta) return null;
                                     const latest = (summaryData.latestMetrics || []).find((m: any) => m.type === meta.metricType);

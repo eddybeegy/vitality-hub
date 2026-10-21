@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Target } from 'lucide-react';
 import { getWeightUnit, convertWeight } from '../lib/utils';
 import { useHealthStore } from '../store/useHealthStore';
+import { isTargetSet, formatTargetLabel } from '../lib/targets';
 
 interface TargetsTabProps {
   targets: any[];
@@ -90,31 +91,36 @@ export const TargetsTab = React.memo(({
             const isWeight = target.type === 'weight' || target.type === 'muscle_mass';
             const expectsLbs = settings?.preferred_units === 'imperial' || settings?.preferred_units === 'stone';
 
+            // null is "no target set"; the input shows it as empty rather than 0.
+            const hasTarget = isTargetSet(target.value);
             let displayUnit = target.unit;
-            let displayValue = target.value;
+            let displayValue: number | null = target.value;
 
             if (isWeight) {
               displayUnit = expectsLbs ? 'lbs' : 'kg';
-              displayValue = convertWeight(target.value, settings?.preferred_units);
+              displayValue = target.value == null ? null : convertWeight(target.value, settings?.preferred_units);
             }
 
-            const hasTarget = Number(target.value) > 0;
             const currentRaw = hasTarget ? getCurrentValue(target.type) : null;
             const currentDisplay = currentRaw != null ? (isWeight ? convertWeight(currentRaw, settings?.preferred_units) : currentRaw) : null;
-            const pctOfTarget = currentDisplay != null ? (currentDisplay / displayValue) * 100 : null;
+            const pctOfTarget = currentDisplay != null && displayValue ? (currentDisplay / displayValue) * 100 : null;
             const lowerIsBetter = LOWER_IS_BETTER.has(target.type);
 
             return (
               <div key={idx} className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">{target.label} ({displayUnit})</label>
+                <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">{formatTargetLabel(target.label, displayUnit)}</label>
                 <input
                   type="number"
                   step="0.1"
-                  value={displayValue}
+                  min="0"
+                  value={displayValue ?? ''}
+                  placeholder="Not set"
                   onChange={(e) => {
                     const newTargets = [...targets];
-                    let val = parseFloat(e.target.value) || 0;
-                    if (isWeight && expectsLbs) {
+                    // Clearing the field unsets the target instead of writing a 0 goal.
+                    const parsed = parseFloat(e.target.value);
+                    let val: number | null = Number.isFinite(parsed) ? parsed : null;
+                    if (val != null && isWeight && expectsLbs) {
                       val = val / 2.20462;
                     }
                     newTargets[idx].value = val;
@@ -122,15 +128,15 @@ export const TargetsTab = React.memo(({
                   }}
                   className="w-full px-4 py-3 rounded-xl border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all text-zinc-900 dark:text-zinc-100"
                 />
-                {currentDisplay != null && (
+                {currentDisplay != null && pctOfTarget != null && (
                   <>
                     <p className="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono">
-                      Current: {currentDisplay.toFixed(1)} {displayUnit} &middot; {pctOfTarget!.toFixed(0)}% of target
+                      Current: {currentDisplay.toFixed(1)} {displayUnit} &middot; {pctOfTarget.toFixed(0)}% of target
                     </p>
                     <div className="w-full h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
                       <div
-                        className={`h-full rounded-full transition-all ${progressBarColor(pctOfTarget!, lowerIsBetter)}`}
-                        style={{ width: `${Math.min(100, Math.max(0, pctOfTarget!))}%` }}
+                        className={`h-full rounded-full transition-all ${progressBarColor(pctOfTarget, lowerIsBetter)}`}
+                        style={{ width: `${Math.min(100, Math.max(0, pctOfTarget))}%` }}
                       />
                     </div>
                   </>
