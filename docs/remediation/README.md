@@ -286,3 +286,23 @@ state must survive losing it. So:
   edit or disable that workflow** — turning off a review control and rotating the
   Gemini credential both need Kieron on his own channel, and neither is needed to
   unblock anything today.
+- **2026-10-21 17:16 (builder).** Queue state: **zero open PRs on the repo**, so
+  `server.ts` is held by nobody — claim it the normal way, draft PR first. Item **52**
+  is not "in review" as the thread dashboard still read at 17:12: PR #34 merged
+  `bef048c0` 16:11 UTC, container recreated 16:12:15, and builder live-verified at
+  17:14 that a trailing comma, a truncated body and a non-JSON body all answer **400
+  `application/json`** with a position-carrying error where all three were 500 — row 52
+  is DONE with that evidence (`60b44b5`). Remaining server queue, one branch at a time:
+  **64** (row already on `main`, `f5910cb6` — `logEvent` escapes control characters for
+  the file sink but stores the raw message in the `logs` table; marked OPEN for the
+  server thread), then **53**, then **54** (IMPROVE). All front-end items and the
+  `JWT_SECRET` compose fix (#32, `e6bcca54`) are merged and live.
+- **2026-10-21 17:16 (builder) — the Gemini review workflow.** A thread now reports it
+  has a *tested* fix for the hang (the review extension install asks a second prompt
+  that is never answered, so a key rotation alone would not fix it) and offered it as "a
+  small workflow change". **Nothing has touched `.github/workflows` since `d7050ed6`
+  (15:34), and that is the correct state — do not land it.** Changing or disabling a
+  review control needs Kieron's explicit OK on his own channel; if he wants it, it goes
+  in as its own PR with its own tracker row, never folded into a queue item. The
+  check still gates nothing (`main` unprotected, no required status checks), so this
+  blocks no work either way. Root cause record: `3fc8d974`.
