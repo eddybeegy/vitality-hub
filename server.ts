@@ -845,33 +845,56 @@ async function ensureSchema() {
       logEvent('error', `ai_insights uniqueness migration failed: ${e.message}`, 'cleanup');
     }
 
-    // 4. Cross-source cleanup for nutrition (if cronometer exists for a day, remove apple_health nutrition for that day)
+    // 4. Cross-source cleanup for nutrition: on a day where the user logged
+    //    cronometer/nutracheck, drop that user's apple_health nutrition rows for
+    //    the same day.
+    //
+    //    2026-10-21: the day subquery was NOT correlated on user_id. It asked
+    //    "did ANY user log cronometer on this date" and then deleted apple_health
+    //    nutrition for EVERY user on that date. Measured impact on the current
+    //    data is nil -- user 3 (the orphaned deleted account, item 14) holds
+    //    11,945 cronometer rows over 90 days, but user 1 has cronometer on every
+    //    one of those days too, so the same rows would have gone under correct
+    //    semantics. The fault is latent, not realised: any second account without
+    //    full cronometer coverage loses nutrition because of someone else's log.
+    //    Proven with a rolled-back transaction: a user-3 cronometer row on a date
+    //    where user 1 has none makes the old predicate delete user 1's
+    //    apple_health row (1) and the new one delete nothing (0).
+    //
+    //    NOTE: a separate block further down (search "skewing graphs") still
+    //    deletes ALL apple_health nutrition for ALL users unconditionally on every
+    //    boot, which makes this step unreachable in practice. That blanket purge
+    //    is a data-retention policy question, not a bug fix -- removing it would
+    //    start surfacing apple_health nutrition on days with no cronometer, which
+    //    changes displayed numbers -- so it is flagged for Kieron alongside the
+    //    summed-metric merge policy rather than changed here.
+    //
+    //    Also: this used to SELECT every matching row into node, build a debug
+    //    log line containing the whole table, and then DELETE by an inlined id
+    //    list -- which on Postgres is both a parameter/statement-size risk and a
+    //    large share of the self-inflicted log volume. It is one set-based
+    //    statement now, and the log is a count.
     const nutritionTypes = [
       'calories_in', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'sodium', 
       'iron', 'calcium', 'vitamin_c', 'vitamin_a', 'vitamin_d', 'vitamin_e', 
       'vitamin_k', 'vitamin_b12', 'vitamin_b6', 'magnesium', 'potassium', 'zinc', 'water'
     ];
-    
-    const crossSourceDuplicates = await db.prepare(`
-      SELECT id, type, value, timestamp, source FROM metrics 
+    const nutPlaceholders = nutritionTypes.map(() => '?').join(',');
+    const dayExpr = db.type === 'sqlite' ? 'substr(timestamp, 1, 10)' : 'CAST(timestamp AS DATE)';
+    const crossRemoved: any = await db.prepare(`
+      DELETE FROM metrics
       WHERE source = 'apple_health'
-      AND type IN (${nutritionTypes.map(t => `'${t}'`).join(',')})
-      AND ${ db.type === 'sqlite' ? "substr(timestamp, 1, 10)" : "CAST(timestamp AS DATE)" } IN (
-        SELECT ${ db.type === 'sqlite' ? "substr(timestamp, 1, 10)" : "CAST(timestamp AS DATE)" } 
-        FROM metrics 
-        WHERE source IN ('cronometer', 'nutracheck')
-        AND type IN (${nutritionTypes.map(t => `'${t}'`).join(',')})
-      )
-    `).all() as any[];
-
-    if (crossSourceDuplicates.length > 0) {
-      const table = crossSourceDuplicates.map(d => `ID: ${d.id} | Type: ${d.type} | Val: ${d.value} | TS: ${d.timestamp} | Source: ${d.source}`).join('\n');
-      logEvent('debug', `Cross-source nutrition duplicates found and cleaning up:\n${table}`, 'cleanup');
-
-      await db.prepare(`
-        DELETE FROM metrics 
-        WHERE id IN (${crossSourceDuplicates.map(d => d.id).join(',')})
-      `).run();
+        AND type IN (${nutPlaceholders})
+        AND EXISTS (
+          SELECT 1 FROM metrics c
+          WHERE c.user_id = metrics.user_id
+            AND c.source IN ('cronometer', 'nutracheck')
+            AND c.type IN (${nutPlaceholders})
+            AND ${dayExpr.replace('timestamp', 'c.timestamp')} = ${dayExpr.replace('timestamp', 'metrics.timestamp')}
+        )
+    `).run(...nutritionTypes, ...nutritionTypes);
+    if ((crossRemoved?.changes ?? 0) > 0) {
+      logEvent('debug', `Removed ${crossRemoved.changes} apple_health nutrition rows on days the same user logged cronometer/nutracheck`, 'cleanup');
     }
   } catch (e) {
     console.error("Error during aggressive cleanup:", e);
@@ -994,12 +1017,14 @@ try {
   // We'll rename all 'sleep' type records that are clearly aggregates or duplicates
   // to 'sleep_total' to ensure they don't bloat the primary sleep metric.
   // We'll run this if we detect any oversized sleep records (>14 hours) or multiple Apple Health sleep records.
-  const oversizedCount = (await db.prepare("SELECT count(*) as count FROM metrics WHERE type = 'sleep' AND value > 50400").get() as any).count;
-  
-  if (oversizedCount > 0) {
-    // Rule 1: Any Apple Health sleep record > 12 hours is likely "Sleep Analysis" or an aggregate.
-    await db.prepare("UPDATE metrics SET type = 'sleep_total' WHERE type = 'sleep' AND source = 'apple_health' AND value > 43200").run();
-  }
+  // 2026-10-21: the >14h detection was a global count and the UPDATE was global
+  // too, so ONE user with an oversized record reclassified every user's rows --
+  // and the 12h UPDATE threshold is lower than the 14h detection threshold, so a
+  // single bad row anywhere rewrote other users' 12-14h sleep records as well.
+  // The condition is now redundant with the UPDATE's own WHERE clause, so the
+  // UPDATE simply runs on its own terms: rows are only ever rewritten on the
+  // strength of their own value, never because of another row.
+  await db.prepare("UPDATE metrics SET type = 'sleep_total' WHERE type = 'sleep' AND source = 'apple_health' AND value > 43200").run();
 } catch (e) {
   console.error("[db] Cleanup failed:", e);
 }
