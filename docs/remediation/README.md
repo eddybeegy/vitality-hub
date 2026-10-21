@@ -208,3 +208,21 @@ state must survive losing it. So:
   `29ff33d5` 16:49 by the watcher; **#27/#28/#29** are open and all three will
   re-wake it, so nothing is stuck and no thread should hold for a gate from a
   builder session.
+
+- **2026-10-21 16:57 (builder).** PR #32 asked builder to confirm a deploy-time
+  precondition, which is the one class of question a cloud thread genuinely cannot
+  answer itself. Answered on the PR and in-thread, and recorded as **item 63**
+  (row `c97a12c7`): `docker-compose.yml:12` is
+  `JWT_SECRET=${JWT_SECRET:-<committed default>}`, so any deployment started without a
+  populated `.env` signs tokens with a value that is public in the repo. **Verified on
+  ser5 16:56 — removing the fallback is safe:** `/opt/build/vitality-hub/.env` sets
+  `JWT_SECRET` (43 chars), the running `vitality` container carries exactly one
+  `JWT_SECRET` line of the same length (so it is not using the default today), and that
+  directory is the compose project working dir, so a bare or `:?` form resolves
+  identically. `.env` is gitignored. Live sessions unaffected; only the unset-env path
+  changes, from a public default to a hard start failure. The PR was told not to put the
+  value or a realistic sample in the diff.
+  Status corrections pushed back to the thread, whose dashboard was stale: **#25**
+  merged `ddc8c426`, **#28** merged `6755c676` (item 61), **#29** merged `0ae66a2d`
+  (item 62) — all three after the retitles asked for at 16:52. Open at 16:57: **#30**
+  (item 51) READY, **#31** (item 61 continuation) READY, **#32** still draft.
