@@ -34,6 +34,7 @@ import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/l
 import { calculateReadinessScore, type ReadinessResult } from "./src/lib/readiness";
 import { chooseSource, type SourceCounts } from "./src/lib/sourcePriority";
 import { latestBpReadings, BP_TYPES } from "./src/lib/bpLatest";
+import { validateDayTagInput, normaliseTag, tagsForAIContext, todayIn, addDays, daysBetween, MAX_RANGE_DAYS, type DayTag } from "./src/lib/dayTags";
 
 // Increase MaxListeners limit to prevent TLSSocket warnings during concurrent API sync chunks
 EventEmitter.defaultMaxListeners = 50;
@@ -612,6 +613,17 @@ async function ensureSchema() {
     system_config: {
       key: "TEXT PRIMARY KEY",
       value: "TEXT"
+    },
+    // Item 74: day tags. `tag_date` is the user's calendar day as a bare YYYY-MM-DD
+    // string, never a timestamp, so no zone convention applies. VARCHAR rather than
+    // TEXT because MySQL cannot put an unprefixed TEXT column in a UNIQUE key.
+    day_tags: {
+      id: "INTEGER PRIMARY KEY AUTOINCREMENT",
+      user_id: "INTEGER",
+      tag_date: "VARCHAR(10)",
+      tag: "VARCHAR(32)",
+      note: "TEXT",
+      created_at: "DATETIME DEFAULT CURRENT_TIMESTAMP"
     }
   };
 
@@ -627,6 +639,7 @@ async function ensureSchema() {
     if (tableName === 'workout_sets') createSql += `, FOREIGN KEY(exercise_id) REFERENCES workout_exercises(id) ON DELETE CASCADE`;
     if (tableName === 'routine_exercises') createSql += `, FOREIGN KEY(routine_id) REFERENCES routines(id) ON DELETE CASCADE`;
     if (tableName === 'ai_configs') createSql += `, UNIQUE(user_id, provider)`;
+    if (tableName === 'day_tags') createSql += `, UNIQUE(user_id, tag_date, tag)`;
     createSql += `)`;
     
     try {
@@ -2344,6 +2357,24 @@ async function checkScheduledRegeneration(userId: number) {
    * from a different view of the data than the daily review is exactly the
    * kind of inconsistency nobody notices until it contradicts itself.
    */
+  /**
+   * Item 74: the user's day tags from `days` days ago through today, in their own
+   * zone. tag_date is a bare calendar day, so this compares strings -- no timestamp
+   * column and no zone conversion is involved.
+   */
+  async function loadRecentDayTags(userId: number, timezone: unknown, days = 30): Promise<DayTag[]> {
+    const today = todayIn(resolveTimeZone(timezone));
+    try {
+      return await db.prepare(
+        "SELECT tag_date AS date, tag, note FROM day_tags WHERE user_id = ? AND tag_date >= ? AND tag_date <= ? ORDER BY tag_date DESC"
+      ).all(userId, addDays(today, -days), today) as DayTag[];
+    } catch (e: any) {
+      // A missing table (boot-time CREATE failed) must not take the AI context down with it.
+      logEvent('warn', `Could not read day tags: ${e?.message || e}`, 'ai', userId);
+      return [];
+    }
+  }
+
   async function buildAIContext(userId: number, user: any): Promise<{ combinedContext: string; targets: any[]; previousInsights: any[] }> {
       // Fetch data for context
       // Limit to 30 days for metrics, 14 days for workouts
@@ -2445,6 +2476,8 @@ async function checkScheduledRegeneration(userId: number) {
 
       const previousInsights = await db.prepare("SELECT content, date FROM ai_insights WHERE user_id = ? AND type = 'combined' ORDER BY date DESC, updated_at DESC LIMIT 2").all(userId) as any[];
 
+      const dayTags = tagsForAIContext(await loadRecentDayTags(userId, user.timezone));
+
       // Compact recent-session summary: top working set per exercise as a progression proxy.
       const workoutSummaries = workouts.slice(0, 12).map((w: any) => {
         const wExs = exercises.filter((ex: any) => ex.workout_id === w.id);
@@ -2475,6 +2508,9 @@ async function checkScheduledRegeneration(userId: number) {
       });
 
       const combinedContext = JSON.stringify({
+        // Item 74: what the user said happened on a day (ill, travel, alcohol...).
+        // Read a dip or spike on a tagged day in that light before calling it a trend.
+        day_tags_last_30_days: dayTags,
         body_weight_history_90_days: bodyWeightTrends,
         daily_metrics: aggregated.map(a => {
           const compact: any = { date: a.date };
@@ -3988,6 +4024,8 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     // Smart Adjustments prompt from this one allowlisted endpoint. null when the
     // user has no metrics at all, same as the client-side version.
     const readiness = await buildReadiness(userId);
+    const tzRow = await db.prepare("SELECT timezone FROM users WHERE id = ?").get(userId) as any;
+    const dayTags = tagsForAIContext(await loadRecentDayTags(userId, tzRow?.timezone));
 
     logEvent('debug', `Fetched AI data: ${workouts.length} workouts, ${routines.length} routines, ${mealItems.length} meal items`, 'App');
     res.json({
@@ -3998,7 +4036,8 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       exercises,
       sets,
       routines,
-      routineExercises
+      routineExercises,
+      dayTags
     });
   });
 
@@ -4263,6 +4302,67 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     // Attribute the log to the authenticated user instead of writing a spoofable system (NULL) log.
     await logEvent(level, message, source, req.user.id);
     res.json({ status: "ok" });
+  });
+
+  // Item 74: day tags. A tag is (user, calendar day, tag) with an optional note; the
+  // day is the user's own YYYY-MM-DD and is stored as given, never converted.
+  await app.get("/api/day-tags", requireAuth, async (req: any, res) => {
+    const startP = parseDayParam('start', req.query.start);
+    if (startP.error !== undefined) return res.status(400).json({ error: startP.error });
+    const endP = parseDayParam('end', req.query.end);
+    if (endP.error !== undefined) return res.status(400).json({ error: endP.error });
+    const start = startP.value;
+    const end = endP.value;
+    if (start && end) {
+      if (start > end) return res.status(400).json({ error: `Invalid range: start ${start} is after end ${end}` });
+      if (daysBetween(start, end) > MAX_RANGE_DAYS) return res.status(400).json({ error: `Range is limited to ${MAX_RANGE_DAYS} days` });
+    }
+    let sql = "SELECT tag_date AS date, tag, note FROM day_tags WHERE user_id = ?";
+    const params: any[] = [req.user.id];
+    if (start) { sql += " AND tag_date >= ?"; params.push(start); }
+    if (end) { sql += " AND tag_date <= ?"; params.push(end); }
+    sql += " ORDER BY tag_date ASC, tag ASC";
+    try {
+      res.json(await db.prepare(sql).all(...params));
+    } catch (e: any) {
+      logEvent('error', `Failed to read day tags: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to read day tags' });
+    }
+  });
+
+  app.post("/api/day-tags", requireAuth, async (req: any, res) => {
+    const parsed = validateDayTagInput(req.body);
+    if (parsed.error !== undefined) return res.status(400).json({ error: parsed.error });
+    const { date, tag, note } = parsed.value;
+    try {
+      // Update-then-insert rather than INSERT OR REPLACE: translateSql maps that to
+      // ON CONFLICT DO NOTHING on Postgres and REPLACE INTO on MySQL, which would
+      // silently drop a changed note on one engine and churn the id on the other.
+      const upd = await db.prepare("UPDATE day_tags SET note = ? WHERE user_id = ? AND tag_date = ? AND tag = ?").run(note, req.user.id, date, tag);
+      if (!upd.changes) {
+        await db.prepare("INSERT OR IGNORE INTO day_tags (user_id, tag_date, tag, note) VALUES (?, ?, ?, ?)").run(req.user.id, date, tag, note);
+      }
+      res.json({ date, tag, note });
+    } catch (e: any) {
+      logEvent('error', `Failed to save day tag: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to save day tag' });
+    }
+  });
+
+  // Removes one tag from one day of the caller's own tags; touches no other table.
+  app.delete("/api/day-tags", requireAuth, async (req: any, res) => {
+    const dateP = parseDayParam('date', req.query.date);
+    if (dateP.error !== undefined) return res.status(400).json({ error: dateP.error });
+    if (!dateP.value) return res.status(400).json({ error: 'Missing date' });
+    const tag = typeof req.query.tag === 'string' ? normaliseTag(req.query.tag) : null;
+    if (!tag) return res.status(400).json({ error: 'Missing or invalid tag' });
+    try {
+      const r = await db.prepare("DELETE FROM day_tags WHERE user_id = ? AND tag_date = ? AND tag = ?").run(req.user.id, dateP.value, tag);
+      res.json({ deleted: r.changes || 0 });
+    } catch (e: any) {
+      logEvent('error', `Failed to delete day tag: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to delete day tag' });
+    }
   });
 
   await app.get("/api/chat-history", requireAuth, async (req: any, res) => {

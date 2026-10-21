@@ -17,6 +17,7 @@ import { SortableWidget } from './SortableWidget';
 import { SyncButton } from './SyncButton';
 import { SyncStatus } from './SyncStatus';
 import { SyncHealthWidget } from './SyncHealthWidget';
+import { DayTagsCard } from './DayTagsCard';
 import { ProgressRing } from './ui/ProgressRing';
 import { CardSkeleton, ChartSkeleton } from './ui/Skeleton';
 import { ReadinessCard } from './ReadinessCard';
@@ -196,6 +197,9 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-2 gap-6">
             <div className="col-span-1">
               <SyncHealthWidget />
+            </div>
+            <div className="col-span-1">
+              <DayTagsCard />
             </div>
             {isInitialLoading ? (
               <>

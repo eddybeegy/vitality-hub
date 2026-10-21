@@ -8,6 +8,8 @@ import { SyncStatus } from './SyncStatus';
 import { cn, parseUTCDate } from '../lib/utils';
 import { useHealthStore } from '../store/useHealthStore';
 import { readChartRows, asRows } from '../lib/chartRows';
+import { useDayTagsStore } from '../store/useDayTagsStore';
+import { markersForBuckets, tagsOnBucket, tagLabel } from '../lib/dayTags';
 
 interface ReferenceLineProps {
   value: number;
@@ -331,6 +333,47 @@ export const HealthChart = ({
       .filter(r => Object.keys(r).length > 1);
   }, [data, fetchedData, url, granularity, period, dataKey, stackKeys, rangeKeys, type, aggregation, preferredUnits]);
 
+  // Item 74: a dashed vertical marker on every bucket that holds a tagged day. The
+  // store fetches once for the whole app, however many charts are mounted.
+  const dayTags = useDayTagsStore(state => state.tags);
+  const ensureDayTags = useDayTagsStore(state => state.ensureLoaded);
+  useEffect(() => { ensureDayTags(); }, [ensureDayTags]);
+  const tagMarkers = useMemo(
+    () => markersForBuckets(dayTags, processedData.map(d => d.date), granularity),
+    [dayTags, processedData, granularity],
+  );
+  // Labels alternate between two rows so markers on neighbouring days don't print
+  // over each other, and read leftwards in the right third so they aren't clipped.
+  const renderTagMarkers = () => tagMarkers.map((m, i) => {
+    const idx = processedData.findIndex(d => d.date === m.x);
+    const anchorEnd = processedData.length > 1 && idx / (processedData.length - 1) > 0.66;
+    return (
+      <ReferenceLine
+        key={`tag-${m.x}`}
+        x={m.x}
+        stroke="#8b5cf6"
+        strokeOpacity={0.6}
+        strokeDasharray="2 3"
+        label={isMini ? undefined : ({ viewBox }: any) => (
+          <text
+            x={(viewBox?.x ?? 0) + (anchorEnd ? -3 : 3)}
+            y={(viewBox?.y ?? 0) + 9 + (i % 2) * 10}
+            textAnchor={anchorEnd ? 'end' : 'start'}
+            fontSize={8}
+            fill="#8b5cf6"
+          >
+            {m.label}
+          </text>
+        )}
+      />
+    );
+  });
+  const tooltipLabel = (str: string) => {
+    const base = safeDateFormatter(str);
+    const onDay = tagsOnBucket(dayTags, str, granularity);
+    return onDay.length ? `${base} · ${onDay.map(tagLabel).join(', ')}` : base;
+  };
+
   const computedReferenceLines = useMemo(() => {
     if (!referenceLines) return undefined;
     if (preferredUnits === 'imperial' || preferredUnits === 'stone') {
@@ -582,7 +625,7 @@ export const HealthChart = ({
                 padding={{ top: 20, bottom: 20 }}
               />
               <Tooltip 
-                labelFormatter={safeDateFormatter}
+                labelFormatter={tooltipLabel}
                 formatter={(val: number, name: string) => {
                   const num = val || 0;
                   if (preferredUnits === 'stone' && isWeightBased) {
@@ -600,6 +643,7 @@ export const HealthChart = ({
               {computedReferenceLines?.map((rl, i) => (
                 <ReferenceLine key={i} y={rl.value} label={{ value: rl.label, position: 'right', fontSize: 8, fill: rl.color || '#999' }} stroke={rl.color || '#999'} strokeDasharray="3 3" />
               ))}
+              {renderTagMarkers()}
               <Line name={name || title} type="monotone" dataKey={dataKey} stroke={color} strokeWidth={isMini ? 1.5 : 2} dot={true} />
               {stackKeys?.map(s => (
                 <Line key={s.key} name={s.name} type="monotone" dataKey={s.key} stroke={s.color} strokeWidth={isMini ? 1.5 : 2} dot={true} />
@@ -624,7 +668,7 @@ export const HealthChart = ({
                 padding={{ top: 20, bottom: 0 }}
               />
               <Tooltip 
-                labelFormatter={safeDateFormatter}
+                labelFormatter={tooltipLabel}
                 formatter={(val: any, name: string) => {
                   if (Array.isArray(val)) {
                     if (preferredUnits === 'stone' && isWeightBased) {
@@ -652,6 +696,7 @@ export const HealthChart = ({
               {computedReferenceLines?.map((rl, i) => (
                 <ReferenceLine key={i} y={rl.value} label={{ value: rl.label, position: 'right', fontSize: 8, fill: rl.color || '#999' }} stroke={rl.color || '#999'} strokeDasharray="3 3" />
               ))}
+              {renderTagMarkers()}
               <Bar name={name || title} dataKey={dataKey} fill={color} radius={[4, 4, 4, 4]} barSize={barSize} />
             </BarChart>
           ) : type === 'bar' ? (
@@ -670,7 +715,7 @@ export const HealthChart = ({
                 return (val || 0).toFixed(1);
               }} padding={{ top: 20, bottom: 0 }} />
               <Tooltip 
-                labelFormatter={safeDateFormatter}
+                labelFormatter={tooltipLabel}
                 formatter={(val: number, name: string) => {
                   const num = val || 0;
                   if (preferredUnits === 'stone' && isWeightBased) {
@@ -688,6 +733,7 @@ export const HealthChart = ({
               {computedReferenceLines?.map((rl, i) => (
                 <ReferenceLine key={i} y={rl.value} label={{ value: rl.label, position: 'right', fontSize: 8, fill: rl.color || '#999' }} stroke={rl.color || '#999'} strokeDasharray="3 3" />
               ))}
+              {renderTagMarkers()}
               {stackKeys ? (
                 stackKeys.map(s => (
                   <Bar key={s.key} name={s.name} dataKey={s.key} stackId="a" fill={s.color} radius={[0, 0, 0, 0]} barSize={barSize} />
@@ -712,7 +758,7 @@ export const HealthChart = ({
                 return (val || 0).toFixed(1);
               }} padding={{ top: 20, bottom: 20 }} />
               <Tooltip 
-                labelFormatter={safeDateFormatter}
+                labelFormatter={tooltipLabel}
                 formatter={(val: number, name: string) => {
                   const num = val || 0;
                   if (preferredUnits === 'stone' && isWeightBased) {
@@ -730,6 +776,7 @@ export const HealthChart = ({
               {computedReferenceLines?.map((rl, i) => (
                 <ReferenceLine key={i} y={rl.value} label={{ value: rl.label, position: 'right', fontSize: 8, fill: rl.color || '#999' }} stroke={rl.color || '#999'} strokeDasharray="3 3" />
               ))}
+              {renderTagMarkers()}
               <Area name={name || title} type="monotone" dataKey={dataKey} stroke={color} fill={color} fillOpacity={0.1} />
               {stackKeys?.map(s => (
                 <Area key={s.key} name={s.name} type="monotone" dataKey={s.key} stroke={s.color} fill={s.color} fillOpacity={0.1} />
