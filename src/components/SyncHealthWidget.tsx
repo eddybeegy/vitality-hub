@@ -4,6 +4,7 @@ import { useHealthStore } from '../store/useHealthStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { parseUTCDate } from '../lib/utils';
 import { isIssueResolved } from '../lib/syncIssues';
+import { freshnessStatus, stalenessThresholdHours } from '../lib/freshness';
 
 // Duplicated from App.tsx's handleConnectWithings rather than threading a prop
 // through Dashboard for one widget — same self-contained popup OAuth flow.
@@ -53,17 +54,12 @@ export const SyncHealthWidget = () => {
   // and imported nothing still showed as fresh, and every module read the same
   // minutes-ago timestamp regardless of whether any data had arrived.
   //
-  // Thresholds are deliberately looser than the old 4h/12h: those were sensible for "did
-  // the sync run" but wrong for readings, since daily-granularity sources (weight,
-  // nutrition) legitimately produce nothing for most of the day. Tunable.
+  // Item 34: the threshold is per module (24h for continuous feeds, 72h for manually
+  // logged ones) and lives in lib/freshness.ts. A reading is either inside its own
+  // threshold ('good') or past it ('error'); the old flat 24h/72h warning band is gone.
   const getDataStatus = (moduleId: string) => {
     const reading = summaryData.dataFreshness?.byModule?.[moduleId]?.lastReading;
-    if (!reading) return { status: 'unknown', time: 'Never' };
-
-    const diffHours = (Date.now() - parseUTCDate(reading).getTime()) / (1000 * 60 * 60);
-    if (diffHours < 24) return { status: 'good', time: reading };
-    if (diffHours < 72) return { status: 'warning', time: reading };
-    return { status: 'error', time: reading };
+    return { status: freshnessStatus(moduleId, reading), time: reading || 'Never' };
   };
 
   // Kept as a secondary line: "we tried, but nothing came back" is a different and still
@@ -105,7 +101,13 @@ export const SyncHealthWidget = () => {
           const rawIssue = summaryData.syncIssuesByModule?.[module.id] ?? summaryData.syncIssues?.[module.id];
           const issue = rawIssue && !isIssueResolved(rawIssue, summaryData.syncLogs, module.id) ? rawIssue : undefined;
           const status = (issue?.level === 'error' && dataStatus === 'good') ? 'warning' : dataStatus;
-          const iconColor = status === 'good' ? 'text-emerald-500' : status === 'warning' ? 'text-amber-500' : 'text-red-500';
+          // Unknown (no reading ever) is grey rather than red: nothing has gone stale.
+          const iconColor =
+            status === 'good' ? 'text-emerald-500 dark:text-emerald-400'
+            : status === 'warning' ? 'text-amber-500 dark:text-amber-400'
+            : status === 'unknown' ? 'text-zinc-400 dark:text-zinc-500'
+            : 'text-red-500 dark:text-red-400';
+          const staleAfter = `stale after ${stalenessThresholdHours(module.id)}h`;
           const lastSync = getLastSync(module.id);
           const dataTime = time === 'Never' ? 'No data' : formatSyncTime(time);
 
@@ -116,7 +118,7 @@ export const SyncHealthWidget = () => {
                 <div className="flex items-center gap-1.5">
                   {status === 'good' ? <CheckCircle size={12} className={iconColor} /> : <AlertCircle size={12} className={iconColor} />}
                   <span
-                    title={lastSync ? `Newest reading ${dataTime} \u2014 last sync attempt ${lastSync}` : `Newest reading ${dataTime}`}
+                    title={`Newest reading ${dataTime} (${staleAfter})${lastSync ? ` \u2014 last sync attempt ${lastSync}` : ''}`}
                     className="text-[9px] text-zinc-500 dark:text-zinc-400 font-mono"
                   >
                     {dataTime}
