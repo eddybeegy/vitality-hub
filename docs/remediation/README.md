@@ -338,3 +338,17 @@ state must survive losing it. So:
   `main` while it is open** — that edit is what turns a PR dirty and blocks its own
   gate. Thread status "Item 53 in PR #36 for review; item 54 after merge" is accurate;
   nothing needed correcting this pass.
+- **2026-10-21 17:37 (builder).** Item **53 landed** — PR #36 merged `7b550dc5`,
+  deployed and live-verified by the `vitality-pr-watch-6c6d` pass; ser5
+  `HEAD == origin/main == 70040e9`, row 53 DONE. App healthy on the deployed build: the
+  root answers **200**, and `/api/health` and `/api/logs` answer **401 Unauthorized**
+  unauthenticated — that is the expected shape, not a regression (noted because a probe
+  of port **3001** returns 404 from NanoClaw's webhook server; the app is on **3000**).
+  **Zero open PRs, `server.ts` free.** **Item 54 is the last item in the queue** — the
+  unbounded `/api/export/metrics.csv`, no date range and no row cap, all 1.69M rows at
+  109.7 MB and growing. It is **IMPROVE, not a correctness bug**: streaming and
+  `no-store` are already verified and the item-38 `writeChunk` listener fix held across
+  a full 110 MB export with no MaxListeners warning, so neither needs re-litigating.
+  Claim it draft-PR-first on `fix/item-54-export-bounds`. After it lands the queue is
+  empty and the roadmap features begin in Kieron's order: HRV/resting-HR baselines,
+  estimated 1RM and PRs, adaptive TDEE, day tags, phone alerts.
