@@ -46,3 +46,30 @@ describe('fetchOk', () => {
     await expect(fetchOk('/api/ai/insights', { method: 'POST' })).rejects.toMatchObject({ name: 'ApiError', status: 403 });
   });
 });
+
+describe('signOut', () => {
+  it('reports a failed logout instead of reloading', async () => {
+    respond('{"error":"boom"}', 500);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const reload = vi.fn();
+    vi.stubGlobal('window', { location: { reload } });
+    const onError = vi.fn();
+    const { signOut } = await import('./apiFetch');
+    await signOut(onError);
+    expect(reload).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("Couldn't sign out"));
+    vi.unstubAllGlobals();
+  });
+
+  it('reloads after a successful logout', async () => {
+    respond('{"success":true}', 200);
+    const reload = vi.fn();
+    vi.stubGlobal('window', { location: { reload } });
+    const onError = vi.fn();
+    const { signOut } = await import('./apiFetch');
+    await signOut(onError);
+    expect(reload).toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});

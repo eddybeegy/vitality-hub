@@ -22,6 +22,8 @@ import {
   Download
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { signOut } from '../lib/apiFetch';
+import { useUIStore } from '../store/useUIStore';
 
 interface SettingsTabProps {
   settings: any;
@@ -886,10 +888,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
                 Save Configuration
               </button>
               <button 
-                onClick={async () => {
-                  await fetch('/api/auth/logout', { method: 'POST' });
-                  window.location.reload();
-                }}
+                onClick={() => signOut(message => useUIStore.getState().showToast(message, 'error'))}
                 className="w-full bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 py-4 rounded-xl font-bold hover:bg-red-100 dark:hover:bg-red-900/40 transition-all flex items-center justify-center gap-2"
               >
                 Sign Out

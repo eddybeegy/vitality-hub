@@ -42,3 +42,18 @@ export async function fetchJson<T = any>(url: string, init?: RequestInit): Promi
     throw new ApiError(`${url} returned a non-JSON body (HTTP ${res.status})`, res.status);
   }
 }
+
+/**
+ * POST /api/auth/logout, then reload. A failed logout used to reload anyway (still
+ * signed in, no explanation) or, on a network error, do nothing at all; now the
+ * caller is told so it can say so.
+ */
+export async function signOut(onError: (message: string) => void): Promise<void> {
+  try {
+    await fetchOk('/api/auth/logout', { method: 'POST' });
+    window.location.reload();
+  } catch (e) {
+    console.error('Sign out failed', e);
+    onError("Couldn't sign out. Check your connection and try again.");
+  }
+}
