@@ -46,3 +46,22 @@ an extract if an item needs it.
    (date arithmetic, source precedence, param validation) should come with a test
    that fails before the change — that is worth more than a described repro,
    because builder can run it without a browser.
+
+## Channel of record (Kieron, 2026-10-21 11:46)
+
+builder can currently drive the claude.ai tab directly from the host, and that
+access **will be revoked**. It is a convenience layer only — the coordination
+state must survive losing it. So:
+
+- These three files on `main` are the channel of record. Anything a thread needs
+  in order to continue — item status, who holds what, why something was blocked,
+  what the next step is — belongs here, not only in a claude.ai thread or in
+  builder's workspace.
+- builder mirrors the tracker to `progress.md` and pushes in the same working
+  session as any status change, not on a later sweep. A status that exists only
+  in a transcript is treated as unrecorded.
+- A blocked or rejected PR gets its reason as a **PR comment** as well as a
+  tracker line, so the owning thread can read it without a relay.
+- Once direct access is gone, this reverts to exactly the asynchronous protocol
+  above: claim by draft PR, status in the PR body, builder merges and records.
+  Nothing in that loop depends on a shared browser.
