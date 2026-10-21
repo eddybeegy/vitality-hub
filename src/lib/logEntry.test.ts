@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatLogLine, validateClientLog, MAX_CLIENT_LOG_MESSAGE } from './logEntry';
+import { escapeLogFields, formatLogLine, validateClientLog, MAX_CLIENT_LOG_MESSAGE } from './logEntry';
 
 // The regex GET /api/logs uses to parse each file line.
 const LINE_RE = /^\[(.*?)\] \[(.*?)\] (?:\[User (\d+)\] )?(.*?): (.*)/;
@@ -77,5 +77,24 @@ describe('validateClientLog — item 60', () => {
 
   it.each(['totally-made-up-level', 'information', 'warning', ''])('rejects the invented level %j', (raw) => {
     expect(validateClientLog({ level: raw, message: 'm', source: 's' }).error).toMatch(/level/);
+  });
+});
+
+describe('escapeLogFields — item 64', () => {
+  it('gives the table the same single-line text the file line carries', () => {
+    const forged = 'ok\r\n[2026-10-21T15:20:00.000Z] [security] WARN: x';
+    const row = escapeLogFields(forged, 'ui');
+    expect(row.message).toBe('ok\\r\\n[2026-10-21T15:20:00.000Z] [security] WARN: x');
+    // eslint-disable-next-line no-control-regex
+    expect(row.message).not.toMatch(/[\r\n\u0000-\u001f\u2028\u2029]/);
+    expect(formatLogLine('t', 'info', forged, 'ui', 1)).toBe(`[t] [ui] [User 1] INFO: ${row.message}\n`);
+  });
+
+  it('leaves an ordinary message untouched', () => {
+    expect(escapeLogFields('Synced 12 workouts', 'hevy')).toEqual({ message: 'Synced 12 workouts', source: 'hevy' });
+  });
+
+  it('escapes the source and stringifies a non-string message', () => {
+    expect(escapeLogFields({ a: 1 }, 'a\nb')).toEqual({ message: '{"a":1}', source: 'a\\nb' });
   });
 });
