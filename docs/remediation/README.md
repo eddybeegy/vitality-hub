@@ -31,15 +31,17 @@ an extract if an item needs it.
    only **one open branch at a time** across all threads — it is a single
    ~3600-line file and two concurrent branches in it cost a hand-resolved merge
    twice already (#6 vs #3, #9 vs builder's item-44 work).
-   **builder released `server.ts` at 2026-10-21 11:49** (item 44 committed and
-   merged as `64daba6`, host tree clean) and is not holding it; the three items
-   left in that file are being worked by the cloud session in this order, one PR
-   each: **42 (param validation, merged `c143e19`) -> 29 (log level gate, merged
-   `b55eee5`) -> "Refresh Data" actually triggering a sync (**PR #14**, open since
-   11:38 — review, merge, deploy and live verification belong to the
-   `vitality-pr-watch-6c6d` task, which polls open PRs every 5 minutes; no
-   thread should hand-merge it).**
-   Ask builder before starting a fourth `server.ts` item — it may have taken the file back by then.
+   **`server.ts` is free as of 2026-10-21 12:49.** builder released it at 11:49
+   (item 44, merged `64daba6`) and all three cloud items in that file have since
+   landed, in order and one PR at a time: **42** param validation (merged
+   `c143e19`), **29** log level gate (merged `b55eee5`), **Refresh Data** really
+   triggering a sync (PR #14, merged `69c8865`). Nothing holds the file now, so
+   claim it the normal way — open the draft PR first, and tell builder, which may
+   have taken it back for a host-side item by then.
+   **Review, merge, deploy and live verification of every cloud PR belong to the
+   `vitality-pr-watch-6c6d` task on ser5** (polls open PRs every 5 minutes, skips
+   drafts). No thread hand-merges, and a PR sitting open for a few minutes is the
+   queue working, not a stall.
 3. **Only builder edits `progress.md`**, so PRs never conflict in the tracker.
    Put your status in the PR body instead; builder records the result and the
    merge sha when it lands.
