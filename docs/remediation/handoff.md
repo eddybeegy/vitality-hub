@@ -20,8 +20,16 @@ before anything can be sent into it. Treat that as the end of that thread's run,
 as a channel sitting idle. Everything it was carrying is on `main`: items 65, 66, 67
 and 69 are DONE and deployed (`vitality` container restarted ~21:47 on `d08b4ec1`).
 
-If more cloud-session work is wanted, assume a **new** thread with no memory of the
-above, and brief it from this file plus `progress.md` — in particular the rule below
+**A second thread is already running** (builder, 22:45): items 73–76 and PRs #46
+(`fix/item-74-day-tags`, merged 21:30) and #47 (`fix/item-76-readiness-history`, draft)
+came from somewhere other than the resolved thread, while `progress.md` rows 73/74/75
+were being updated by the PR-watch loop. So the cloud work did not stop at 21:46 — only
+that one thread did. Note the page-watch task (`claude-page-watch-7a37`) is still pinned
+to the **resolved** thread's URL and therefore cannot see or answer the live one; the tab
+is Kieron's own browser view, so repointing it is his call, asked 22:46.
+
+For any further new thread, assume **no memory** of the above and brief it from this file
+plus `progress.md` — in particular the rule below
 about keeping `progress.md` out of code PRs, which the previous thread only learned
 after two rounds of merge conflicts.
 
