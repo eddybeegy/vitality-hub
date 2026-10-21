@@ -23,6 +23,7 @@ import { AI_PROVIDERS } from "./ai_providers/index";
 import { probeProvider } from "./ai_providers/openai_compatible";
 import { setupDb } from "./src/lib/db";
 import { parseEnumParam, parseDateParam, parseDayParam, parseIntParam, checkDateOrder } from "./src/lib/queryParams";
+import { parseLogLevel, parseSourceList, createLogFilter } from "./src/lib/logLevel";
 
 // Increase MaxListeners limit to prevent TLSSocket warnings during concurrent API sync chunks
 EventEmitter.defaultMaxListeners = 50;
@@ -278,7 +279,20 @@ setInterval(async () => {
   }
 }, 1000 * 60 * 60); // Every hour
 
+// Item 29: level gate. `debug` (the per-row ingest trail and per-request API chatter)
+// is the bulk of log volume; it is kept in the code but only recorded when LOG_LEVEL=debug,
+// or for the sources named in LOG_DEBUG_SOURCES. info/warn/error are unaffected -- sync
+// freshness and syncIssues read `info` lines as a module's success signal.
+const logLevelSetting = parseLogLevel(process.env.LOG_LEVEL);
+const logDebugSources = parseSourceList(process.env.LOG_DEBUG_SOURCES);
+const shouldRecordLog = createLogFilter({ level: logLevelSetting.level, debugSources: logDebugSources });
+if (logLevelSetting.invalid) {
+  console.warn(`[startup] LOG_LEVEL=${JSON.stringify(process.env.LOG_LEVEL)} is not one of debug, info, warn, error; using ${logLevelSetting.level}`);
+}
+console.log(`[startup] log level = ${logLevelSetting.level}${logDebugSources.size ? `, debug also recorded for: ${[...logDebugSources].join(', ')}` : ''}`);
+
 async function logEvent(level: 'debug' | 'info' | 'warn' | 'error', message: string, source: string, userId?: number) {
+  if (!shouldRecordLog(level, source)) return;
   try {
     const timestamp = new Date().toISOString();
     const logLine = `[${timestamp}] [${source}] ${userId ? `[User ${userId}] ` : ''}${level.toUpperCase()}: ${message}\n`;
