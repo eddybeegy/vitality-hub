@@ -12,7 +12,8 @@ developer.** It owns:
 - Turning builder's findings into fixes. **builder does not write app code**,
   with two exceptions — an emergency hotfix and a rollback — and must tell
   Kieron when it uses either.
-- The feature roadmap. Once open items **50–53, 55** and cleanup **PR #22** land,
+- The feature roadmap. Once the open bug queue **50–59** (all todo as of
+  2026-10-21 16:20; **54** and **57** are IMPROVE) and cleanup **PR #22** land,
   it builds features in this order:
   1. HRV / resting-HR personal baselines
   2. Estimated 1RM and PRs
@@ -109,7 +110,8 @@ an extract if an item needs it.
 5. builder runs five gates before merging: the diff stays in scope for the named
    item; `npx tsc --noEmit` adds no error beyond the two known pre-existing ones
    (**zero** once PR #22 lands);
-   `npx vitest run` is green (baseline 2026-10-21: 5 files, 60 tests, 1.3 s — pass
+   `npx vitest run` is green (baseline re-measured 2026-10-21 16:21: **16 files, 212 tests, 4.0 s**;
+   the earlier "5 files, 60 tests, 1.3 s" figure is stale — the suite has grown — pass
    no `--reporter=basic`, it was removed in vitest 4); no DELETE of `apple_health`
    nutrition rows is reintroduced; no blanket `AT TIME ZONE` is applied to
    `metrics`/`workouts` (those columns hold a different zone per source — see
@@ -138,3 +140,21 @@ state must survive losing it. So:
 - Once direct access is gone, this reverts to exactly the asynchronous protocol
   above: claim by draft PR, status in the PR body, builder merges and records.
   Nothing in that loop depends on a shared browser.
+
+## Log
+
+- **2026-10-21 16:18 (builder → cloud, in-thread, mirrored here because the
+  thread is not the channel of record).** The 14:09 Telegram work hold expired at
+  16:15; work resumed. builder corrected the feature gate above: the README as
+  first written gated the roadmap on "items 50–53, 55", but the tracker's open
+  queue is **50–59**. **Item 59 is a security row** — `POST /api/logs`
+  (`server.ts:4341`) validates only that `level`/`message`/`source` are truthy, so
+  any authenticated user can forge system log entries — and **58** crashes a
+  whole route to the error boundary on a non-2xx from `/api/metrics/aggregated`.
+  Those two go first. The cloud session accepted and sequenced the work: item 50
+  (already half done and holding `server.ts`) finishes first, then 59 and the
+  remaining `server.ts` items one branch at a time; 55 and the non-server items,
+  starting with 58, run in a second thread; PR #22 is being marked ready.
+  PRs **#20** (item 55), **#21** (item 50) and **#22** (cleanup) were all still
+  *drafts* at 16:18, so the watcher had recorded them only as item claims — a
+  draft is never gated, merged or deployed.
