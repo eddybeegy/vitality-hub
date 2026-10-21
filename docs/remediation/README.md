@@ -413,3 +413,14 @@ state must survive losing it. So:
   metric-priority key is dead config), evidence unchanged, with the renumber noted in row 66
   itself. **65 stays with the feature.** The cloud session's "Blood pressure source pairing"
   thread was told in-thread (verified landed) that its items are 66/67, not 65/66.
+
+- **2026-10-21 17:58 (builder).** The BP thread picked the renumber up within a minute and
+  re-claimed correctly: **PR #40** `fix/item-66-bp-one-source` is the live claim on item 66,
+  rebased on `6dc00b7` and editing **only row 66's status cell**. **PR #39** is the same work
+  under the old number and is superseded — builder asked on the PR for it to be closed, and
+  it must be: its `progress.md` patch is `+1/-0` adding a *new* row 65, which on `main` is now
+  roadmap feature 1, so if #39 ever went ready it would duplicate 65 and fail the scope gate.
+  Both #39 and #40 are drafts, so `vitality-pr-watch-6c6d` skips them and builder has gated
+  nothing. #40 deliberately holds its `server.ts` half until **#38** merges, keeping one open
+  branch in that file — that sequencing is correct and builder is not overriding it. Item
+  **67** (the dead `blood_pressure` priority key) is still unclaimed.
