@@ -33,6 +33,7 @@ import { planRefresh, refreshStartMessage, refreshFinishMessage, RefreshModuleRe
 import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/lib/aggregatedMetrics";
 import { calculateReadinessScore, type ReadinessResult } from "./src/lib/readiness";
 import { chooseSource, type SourceCounts } from "./src/lib/sourcePriority";
+import { latestBpReadings, BP_TYPES } from "./src/lib/bpLatest";
 
 // Increase MaxListeners limit to prevent TLSSocket warnings during concurrent API sync chunks
 EventEmitter.defaultMaxListeners = 50;
@@ -2109,7 +2110,7 @@ async function checkScheduledRegeneration(userId: number) {
     userTimezone: string,
     summedMetrics: string[],
     nutritionMetrics: string[],
-    prebuilt?: Record<string, Record<string, Record<string, { total: number, count: number, unit: string }>>>,
+    prebuilt?: Record<string, Record<string, Record<string, { total: number, count: number, unit: string, value?: number }>>>,
     priorities?: Record<string, string[]> | null
   ): any[] {
     const formatter = new Intl.DateTimeFormat('en-CA', {
@@ -2119,7 +2120,7 @@ async function checkScheduledRegeneration(userId: number) {
       day: '2-digit'
     });
 
-    const dailySourceMetrics: Record<string, Record<string, Record<string, { total: number, count: number, unit: string }>>> = prebuilt ?? {};
+    const dailySourceMetrics: Record<string, Record<string, Record<string, { total: number, count: number, unit: string, value?: number }>>> = prebuilt ?? {};
 
     // Source precedence when one (type, day) has rows from more than one ingest source.
     // LOWER WINS. Every known source is registered explicitly: the old code had an inline
@@ -2270,7 +2271,9 @@ async function checkScheduledRegeneration(userId: number) {
             const row: any = {
               type,
               timestamp: day,
-              value: isSummed ? s.total : s.total / s.count,
+              // `value` is set when the day is represented by one reading rather than
+              // the mean of its rows -- blood pressure, item 69.
+              value: s.value ?? (isSummed ? s.total : s.total / s.count),
               unit: s.unit,
               source: bestSource,
               aggregated: true,
@@ -3177,7 +3180,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     const unitByType: Record<string, string> = {};
     for (const r of unitRows) unitByType[r.type] = r.unit;
 
-    const prebuiltBuckets: Record<string, Record<string, Record<string, { total: number, count: number, unit: string }>>> = {};
+    const prebuiltBuckets: Record<string, Record<string, Record<string, { total: number, count: number, unit: string, value?: number }>>> = {};
     for (const r of bucketRows) {
       if (!r.day) continue;
       if (!prebuiltBuckets[r.type]) prebuiltBuckets[r.type] = {};
@@ -3187,6 +3190,29 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         count: Number(r.cnt),
         unit: unitByType[r.type],
       };
+    }
+
+    // Item 69: a blood-pressure day shows its LATEST reading (Kieron, 2026-10-21), not
+    // the mean of its rows -- the mean of 133/75 and 117/73 is a 125/74 nobody measured.
+    // A few hundred rows a year, so they are read individually; the day is the same
+    // instant-in-the-user's-zone rule as the bucket query above, and a bucket the
+    // helper does not match simply keeps its mean.
+    const bpRows = await db.prepare(`
+      SELECT type, source, value,
+             ${ db.type === 'sqlite' ? 'timestamp' : readingInstant('metrics') } AS timestamp
+      FROM metrics
+      WHERE user_id = ? AND type IN (${BP_TYPES.map(() => '?').join(', ')})
+      AND timestamp >= ?
+      ${ endStr ? 'AND timestamp <= ?' : '' }
+    `).all(userId, ...BP_TYPES, cutoffStr, ...(endStr ? [endStr] : [])) as any[];
+    const latestBp = latestBpReadings(bpRows, d => formatter.format(d));
+    for (const type in latestBp) {
+      for (const day in latestBp[type]) {
+        for (const source in latestBp[type][day]) {
+          const bucket = prebuiltBuckets[type]?.[day]?.[source];
+          if (bucket) bucket.value = latestBp[type][day][source];
+        }
+      }
     }
 
     const highFreqMetrics = aggregateDailyMetrics([], userTimezone, summedMetrics, nutritionMetrics, prebuiltBuckets, priorities);
