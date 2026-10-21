@@ -3539,65 +3539,175 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
   const exportFilename = (label: string, ext: string) =>
     `vitality-hub-${label}-${new Date().toISOString().slice(0, 10)}.${ext}`;
 
+  // ── Streaming export plumbing (items 3 & 4) ───────────────────────────────
+  // Both exports used to materialise the whole result set in memory: for this
+  // install metrics.csv was ~1.70M rows -> a row array, a line array and one
+  // ~97 MB string all live at once, and all.json ~170 MB. Two concurrent
+  // requests were enough to OOM the container.
+  //
+  // Streaming here is keyset pagination, not a pg cursor, because the db
+  // wrapper fronts sqlite/postgres/mariadb and a cursor is postgres-only.
+  // Ordering is (timestamp, id): timestamp alone is NOT unique in metrics
+  // (idx_metrics_unique is user_id+type+timestamp+source), so a timestamp-only
+  // cursor would skip or repeat rows wherever a user has two readings at the
+  // same instant -- which is the normal case for a multi-source import.
+  // Row-value comparison `(timestamp, id) > (?, ?)` is supported by all three
+  // backends (sqlite since 3.15).
+  const EXPORT_BATCH_ROWS = Number(process.env.EXPORT_BATCH_ROWS || 20000);
+
+  // Respect backpressure: res.write() returning false means the socket buffer
+  // is full, and ignoring it is how you reintroduce the memory problem you
+  // just removed -- the rows stop being buffered but the chunks start.
+  const writeChunk = (res: any, chunk: string): Promise<void> =>
+    new Promise((resolve, reject) => {
+      if (res.write(chunk)) return resolve();
+      res.once('drain', resolve);
+      res.once('error', reject);
+    });
+
+  // `table` is interpolated, so only ever pass a literal from this file.
+  async function forEachExportBatch(
+    table: string,
+    columns: string[],
+    userId: number,
+    onBatch: (rows: any[]) => Promise<void>,
+    batchSize: number = EXPORT_BATCH_ROWS,
+  ): Promise<void> {
+    const select = ['id', 'timestamp', ...columns.filter(c => c !== 'id' && c !== 'timestamp')].join(', ');
+    let lastTs: any = null;
+    let lastId = 0;
+    for (;;) {
+      const rows = (lastTs === null
+        ? await db.prepare(
+            `SELECT ${select} FROM ${table} WHERE user_id = ? ORDER BY timestamp ASC, id ASC LIMIT ${batchSize}`
+          ).all(userId)
+        : await db.prepare(
+            `SELECT ${select} FROM ${table} WHERE user_id = ? AND (timestamp, id) > (?, ?) ORDER BY timestamp ASC, id ASC LIMIT ${batchSize}`
+          ).all(userId, lastTs, lastId)) as any[];
+      if (!rows.length) return;
+      await onBatch(rows);
+      const last = rows[rows.length - 1];
+      lastTs = last.timestamp;
+      lastId = last.id;
+      if (rows.length < batchSize) return;
+    }
+  }
+
+  // Once bytes are on the wire the status code is already 200, so a mid-stream
+  // failure cannot be reported as an error response. Destroying the socket is
+  // deliberate: it makes the client's download fail loudly instead of saving a
+  // truncated file that looks like a complete backup.
+  const failMidStream = (res: any, userId: number | undefined, what: string, e: any) => {
+    logEvent('error', `Export ${what} failed mid-stream: ${e?.message || e}`, 'api', userId);
+    if (!res.headersSent) { res.status(500).json({ error: 'export failed' }); return; }
+    res.destroy(e instanceof Error ? e : new Error(String(e)));
+  };
+
+  const csvRow = (row: any, columns: string[]) => columns.map(c => csvCell(row[c])).join(',');
+
   await app.get("/api/export/metrics.csv", requireAuth, async (req: any, res) => {
-    const rows = await db.prepare(
-      "SELECT type, value, unit, timestamp, source FROM metrics WHERE user_id = ? ORDER BY timestamp ASC"
-    ).all(req.user.id) as any[];
+    const columns = ['type', 'value', 'unit', 'timestamp', 'source'];
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${exportFilename('metrics', 'csv')}"`);
-    res.send(toCsv(rows, ['type', 'value', 'unit', 'timestamp', 'source']));
+    try {
+      await writeChunk(res, columns.join(',') + '\n');
+      await forEachExportBatch('metrics', columns, req.user.id, async rows => {
+        await writeChunk(res, rows.map(r => csvRow(r, columns)).join('\n') + '\n');
+      });
+      res.end();
+    } catch (e) { failMidStream(res, req.user?.id, 'metrics.csv', e); }
   });
 
   await app.get("/api/export/workouts.csv", requireAuth, async (req: any, res) => {
-    const rows = await db.prepare(
-      "SELECT name, duration, volume, timestamp, source FROM workouts WHERE user_id = ? ORDER BY timestamp ASC"
-    ).all(req.user.id) as any[];
+    const columns = ['name', 'duration', 'volume', 'timestamp', 'source'];
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${exportFilename('workouts', 'csv')}"`);
-    res.send(toCsv(rows, ['name', 'duration', 'volume', 'timestamp', 'source']));
+    try {
+      await writeChunk(res, columns.join(',') + '\n');
+      await forEachExportBatch('workouts', columns, req.user.id, async rows => {
+        await writeChunk(res, rows.map(r => csvRow(r, columns)).join('\n') + '\n');
+      });
+      res.end();
+    } catch (e) { failMidStream(res, req.user?.id, 'workouts.csv', e); }
   });
 
   await app.get("/api/export/all.json", requireAuth, async (req: any, res) => {
     const userId = req.user.id;
-    const [metrics, workouts, targets, mealItems, routines] = await Promise.all([
-      db.prepare("SELECT type, value, unit, timestamp, source FROM metrics WHERE user_id = ? ORDER BY timestamp ASC").all(userId),
-      db.prepare("SELECT id, name, duration, volume, timestamp, source, external_id FROM workouts WHERE user_id = ? ORDER BY timestamp ASC").all(userId),
-      db.prepare("SELECT type, value, unit FROM targets WHERE user_id = ?").all(userId),
-      db.prepare("SELECT name, calories, protein, carbs, fat, fiber, timestamp, source FROM meal_items WHERE user_id = ? ORDER BY timestamp ASC").all(userId),
-      db.prepare("SELECT name, description, folder_name FROM routines WHERE user_id = ?").all(userId),
-    ]) as [any[], any[], any[], any[], any[]];
-
-    const workoutIds = workouts.map(w => w.id);
-    const exercisesByWorkout: Record<number, any[]> = {};
-    if (workoutIds.length) {
-      const placeholders = workoutIds.map(() => '?').join(',');
-      const exercises = await db.prepare(
-        `SELECT * FROM workout_exercises WHERE workout_id IN (${placeholders})`
-      ).all(...workoutIds) as any[];
-
-      const exerciseIds = exercises.map(e => e.id);
-      const setsByExercise: Record<number, any[]> = {};
-      if (exerciseIds.length) {
-        const exPlaceholders = exerciseIds.map(() => '?').join(',');
-        const sets = await db.prepare(
-          `SELECT * FROM workout_sets WHERE exercise_id IN (${exPlaceholders})`
-        ).all(...exerciseIds) as any[];
-        for (const s of sets) (setsByExercise[s.exercise_id] ||= []).push(s);
-      }
-      for (const e of exercises) (exercisesByWorkout[e.workout_id] ||= []).push({ ...e, sets: setsByExercise[e.id] || [] });
-    }
-    const workoutsWithDetail = workouts.map(w => ({ ...w, exercises: exercisesByWorkout[w.id] || [] }));
-
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${exportFilename('backup', 'json')}"`);
-    res.json({
-      exportedAt: new Date().toISOString(),
-      metrics,
-      workouts: workoutsWithDetail,
-      targets,
-      mealItems,
-      routines,
-    });
+    try {
+      // Hand-rolled JSON streaming. res.json() serialises the entire object to
+      // one string first, which for this install was ~170 MB resident on top of
+      // the row arrays themselves. The shape emitted here is byte-compatible
+      // with what res.json() produced, so existing restore tooling is unaffected.
+      await writeChunk(res, `{"exportedAt":${JSON.stringify(new Date().toISOString())}`);
+
+      const streamArray = async (key: string, table: string, columns: string[]) => {
+        await writeChunk(res, `,${JSON.stringify(key)}:[`);
+        let first = true;
+        await forEachExportBatch(table, columns, userId, async rows => {
+          const body = rows.map(r => {
+            const out: Record<string, any> = {};
+            for (const c of columns) out[c] = r[c];
+            return JSON.stringify(out);
+          }).join(',');
+          await writeChunk(res, (first ? '' : ',') + body);
+          first = false;
+        });
+        await writeChunk(res, ']');
+      };
+
+      await streamArray('metrics', 'metrics', ['type', 'value', 'unit', 'timestamp', 'source']);
+
+      // Workouts carry nested exercises and sets, so they stream per batch with
+      // their children fetched per batch. The previous version built one
+      // `workout_id IN (?, ?, ...)` with a placeholder per workout and then one
+      // `exercise_id IN (...)` per exercise: over 65535 of either, postgres
+      // rejects the statement outright, so a big enough history broke the
+      // backup entirely. Here the workout batch is deliberately small (500) and
+      // the sets query reaches its ids through a subquery rather than a second
+      // placeholder list, so the parameter count is bounded by the batch size
+      // and never by how much history the user has.
+      await writeChunk(res, ',"workouts":[');
+      let firstWorkout = true;
+      await forEachExportBatch('workouts', ['name', 'duration', 'volume', 'timestamp', 'source', 'external_id'], userId, async rows => {
+        const ids = rows.map(w => w.id);
+        const ph = ids.map(() => '?').join(',');
+        const exercises = await db.prepare(
+          `SELECT * FROM workout_exercises WHERE workout_id IN (${ph})`
+        ).all(...ids) as any[];
+        const setsByExercise: Record<number, any[]> = {};
+        if (exercises.length) {
+          const sets = await db.prepare(
+            `SELECT * FROM workout_sets WHERE exercise_id IN (SELECT id FROM workout_exercises WHERE workout_id IN (${ph}))`
+          ).all(...ids) as any[];
+          for (const st of sets) (setsByExercise[st.exercise_id] ||= []).push(st);
+        }
+        const byWorkout: Record<number, any[]> = {};
+        for (const ex of exercises) (byWorkout[ex.workout_id] ||= []).push({ ...ex, sets: setsByExercise[ex.id] || [] });
+        const body = rows.map(w => JSON.stringify({
+          id: w.id, name: w.name, duration: w.duration, volume: w.volume,
+          timestamp: w.timestamp, source: w.source, external_id: w.external_id,
+          exercises: byWorkout[w.id] || [],
+        })).join(',');
+        await writeChunk(res, (firstWorkout ? '' : ',') + body);
+        firstWorkout = false;
+      }, 500);
+      await writeChunk(res, ']');
+
+      // Small tables: a single read is fine and keeps the diff honest about
+      // where the size actually was.
+      const targets = await db.prepare("SELECT type, value, unit FROM targets WHERE user_id = ?").all(userId);
+      await writeChunk(res, `,"targets":${JSON.stringify(targets)}`);
+
+      await streamArray('mealItems', 'meal_items', ['name', 'calories', 'protein', 'carbs', 'fat', 'fiber', 'timestamp', 'source']);
+
+      const routines = await db.prepare("SELECT name, description, folder_name FROM routines WHERE user_id = ?").all(userId);
+      await writeChunk(res, `,"routines":${JSON.stringify(routines)}`);
+
+      await writeChunk(res, '}');
+      res.end();
+    } catch (e) { failMidStream(res, req.user?.id, 'all.json', e); }
   });
 
   app.post("/api/debug/deduplicate", requireAuth, async (req: any, res) => {
