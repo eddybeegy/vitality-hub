@@ -2234,17 +2234,35 @@ async function checkScheduledRegeneration(userId: number) {
   ): ReadinessResult | null {
     if (!metrics || metrics.length === 0) return null;
 
-    // Calculate yesterday in the correct timezone
-    const nowInTz = new Date(new Date().toLocaleString("en-US", { timeZone: timezone }));
-    const yesterdayInTz = new Date(nowInTz.getTime() - (24 * 60 * 60 * 1000));
-
     const formatter = new Intl.DateTimeFormat('en-CA', {
       timeZone: timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
       year: 'numeric',
       month: '2-digit',
       day: '2-digit'
     });
-    const yesterday = formatter.format(yesterdayInTz);
+    // Yesterday, as a calendar day in the user's timezone.
+    //
+    // This used to be `new Date(new Date().toLocaleString("en-US", {timeZone: tz}))`
+    // minus 24h. That formats "now" as *tz* wall-clock and then reparses the
+    // result as the **process's** local time, so the instant lands off by
+    // (tz offset - process offset). The vitality container runs UTC while this
+    // user's timezone is Europe/London, so under BST every local time from
+    // 23:00 onwards pushed "yesterday" forward into today: coach scored TODAY's
+    // partial activity burn as yesterday's strain (626 kcal vs the correct 331)
+    // and so reported readiness 76 against the dashboard's 82. The dashboard
+    // only escaped it because the browser's own timezone happened to match the
+    // configured one -- any user whose browser TZ differs from their app
+    // timezone setting hit the identical bug client-side.
+    //
+    // Formatting first and doing the arithmetic on the calendar date is immune
+    // to both the process timezone and to DST: Date.UTC on a pure Y-M-D is
+    // exact, and subtracting one UTC day of a date-only value cannot cross a
+    // DST boundary incorrectly because there is no clock time involved.
+    // Setting TZ=Europe/London on the container would have masked this for one
+    // user and left the bug in place.
+    const todayInTz = formatter.format(new Date());
+    const [tzY, tzM, tzD] = todayInTz.split('-').map(Number);
+    const yesterday = new Date(Date.UTC(tzY, tzM - 1, tzD) - 86400000).toISOString().slice(0, 10);
 
     // 1. HRV Score (Relative to 7-day baseline)
     const hrvMetrics = metrics
