@@ -25,8 +25,8 @@ is:
 | `workouts` | `workouts_user_ts_idx` |
 
 `server.ts` runs `CREATE [UNIQUE] INDEX IF NOT EXISTS <name>` for each of these in
-`initDb` (lines ~634-668), and the two unique ones again in the startup cleanup
-(~895-896). `IF NOT EXISTS` matches by **name only**. Drop one of these names and the
+`initDb`, and the two unique ones again in the startup cleanup (grep the names;
+line numbers shift). `IF NOT EXISTS` matches by **name only**. Drop one of these names and the
 next restart rebuilds it as a plain, non-concurrent build that blocks writes for
 the whole build (a 106 MB build on `metrics`), and the duplicate is back. Keeping
 these names is the only choice that survives a restart without an app change.
@@ -58,7 +58,7 @@ says how each drop will be done.
 
 **Nothing writes against a constraint name.** builder checked kb-health
 (`/app/index.mjs:148` and `:261`) and the repo (`modules/apple_health.ts:45`,
-`server.ts:5627`, `modules/apple_workouts.ts:23`, the `src/lib/db.ts` translation).
+the `metrics` upsert in `server.ts`, `modules/apple_workouts.ts:23`, the `src/lib/db.ts` translation).
 They all use column-inference `ON CONFLICT (cols)`, or none at all, so any one
 non-partial unique index on exactly those columns satisfies them. The keepers are
 exactly those column lists.
