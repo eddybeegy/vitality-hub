@@ -25,6 +25,7 @@ import { setupDb } from "./src/lib/db";
 import { parseEnumParam, parseDateParam, parseDayParam, parseIntParam, checkDateOrder } from "./src/lib/queryParams";
 import { buildSettingsUpdate, hasSettingsField } from "./src/lib/settingsUpdate";
 import { validateClientLog, formatLogLine } from "./src/lib/logEntry";
+import { jsonParseErrorResponse } from "./src/lib/bodyParseError";
 import { parseLogLevel, parseSourceList, createLogFilter } from "./src/lib/logLevel";
 import { planRefresh, refreshStartMessage, refreshFinishMessage, RefreshModuleResult } from "./src/lib/refreshPlan";
 import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/lib/aggregatedMetrics";
@@ -1226,6 +1227,12 @@ try {
     }
     if (err && err.type === 'request.aborted') {
       return res.status(400).end(); // Client disconnected early
+    }
+    // Item 52: a body that is not valid JSON is the client's error. Matched on the
+    // body-parser error type only; anything else still reaches the terminal 500 handler.
+    const parseError = jsonParseErrorResponse(err);
+    if (parseError) {
+      return res.status(400).json(parseError);
     }
     next(err);
   });
