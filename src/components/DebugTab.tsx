@@ -65,7 +65,24 @@ export const DebugTab = ({ settings }: DebugTabProps) => {
     refresh();
   }, [refresh]);
 
-  const newestReading = summaryData.dataFreshness?.bySource?.apple_health;
+  // Same value as the Dashboard's Data Freshness row for apple_health: the MODULE's
+  // newest reading, which counts healthsync (HealthSync's HASS-routed copy of the same
+  // Apple Health data) as well as the direct Health Auto Export push. This used to read
+  // bySource.apple_health -- the direct push alone -- so at 12:05 on 2026-10-21 the two
+  // panels showed 09:48 (apple_health) and 10:40 (healthsync) for one module, both
+  // correct, under one label. The per-source line underneath keeps the push's own time
+  // visible, which is the one worth having next to "Last Import".
+  const appleModule = summaryData.dataFreshness?.byModule?.apple_health;
+  const newestReading = appleModule?.lastReading ?? null;
+  const moduleTables = appleModule?.tables ?? ['metrics'];
+  const newestBySource = (appleModule?.sources ?? []).map(source => {
+    let t: string | null = null;
+    for (const table of moduleTables) {
+      const c = summaryData.dataFreshness?.byTable?.[table]?.[source];
+      if (c && (!t || new Date(c).getTime() > new Date(t).getTime())) t = c;
+    }
+    return { source, timestamp: t };
+  });
 
   return (
     <motion.div 
@@ -124,6 +141,16 @@ export const DebugTab = ({ settings }: DebugTabProps) => {
                   {newestReading ? formatDateWithTimezone(newestReading, settings?.timezone) : 'None'}
                 </span>
               </div>
+              {newestBySource.length > 1 && (
+                <div className="mt-2 space-y-1">
+                  {newestBySource.map(({ source, timestamp }) => (
+                    <div key={source} className="flex justify-between items-center gap-4 text-xs text-zinc-500 dark:text-zinc-400">
+                      <span className="font-mono">{source}</span>
+                      <span className="text-right">{timestamp ? formatDateWithTimezone(timestamp, settings?.timezone) : 'None'}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -159,7 +186,7 @@ export const DebugTab = ({ settings }: DebugTabProps) => {
                   <th className="pb-2">Value</th>
                   <th className="pb-2">Unit</th>
                   <th className="pb-2">Source</th>
-                  <th className="pb-2">Timestamp (raw)</th>
+                  <th className="pb-2">Timestamp (UTC)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-black/5 dark:divide-white/5">

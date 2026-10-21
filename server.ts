@@ -5189,7 +5189,16 @@ Answer in Markdown. Be specific and cite actual values from the data. Keep it co
   });
 
   await app.get("/api/debug/last-metrics", requireAuth, async (req: any, res) => {
-    const metrics = await db.prepare("SELECT * FROM metrics WHERE user_id = ? ORDER BY timestamp DESC LIMIT 50").all(req.user.id);
+    // Item 27 follow-up: through `readingInstant` like every other metrics read, so the
+    // Debug panel's "Last 50 Raw Metrics" shows true instants and orders by them. A bare
+    // SELECT * was only right once item 13's timestamptz migration had run; on the naive
+    // columns healthsync's London wall-clock rows came back an hour late and sorted
+    // among the UTC rows by wall-clock.
+    const instant = db.type === 'sqlite' ? 'timestamp' : readingInstant('metrics');
+    const metrics = await db.prepare(`
+      SELECT id, user_id, type, value, unit, source, ${instant} AS timestamp
+      FROM metrics WHERE user_id = ? ORDER BY ${instant} DESC LIMIT 50
+    `).all(req.user.id);
     res.json(metrics);
   });
 
