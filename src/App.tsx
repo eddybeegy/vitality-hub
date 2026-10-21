@@ -66,6 +66,7 @@ const AdminPanel = lazy(() => import('./components/AdminPanel').then(m => ({ def
 import { RoutineModal } from './components/RoutineModal';
 import { NavIcon } from './components/NavIcon';
 import { Toast } from './components/ui/Toast';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { useAuthStore } from './store/useAuthStore';
 import { useSettingsStore } from './store/useSettingsStore';
 import { useHealthStore } from './store/useHealthStore';
@@ -495,6 +496,7 @@ export default function App() {
         </header>
 
         <div className="p-4 md:p-8 max-w-7xl mx-auto">
+          <ErrorBoundary resetKey={activeTab}>
           <Suspense fallback={
             <div className="flex items-center justify-center h-64">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500"></div>
@@ -653,6 +655,7 @@ export default function App() {
               )}
             </AnimatePresence>
           </Suspense>
+          </ErrorBoundary>
           {/* END of tab AnimatePresence */}
         </div>
       </main>

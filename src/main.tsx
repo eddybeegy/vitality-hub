@@ -1,6 +1,8 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { installChunkReloadHandler } from './lib/chunkReload';
 import './index.css';
 
 // Register the kill-switch service worker to override any broken existing ones
@@ -15,9 +17,12 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+installChunkReloadHandler();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );
