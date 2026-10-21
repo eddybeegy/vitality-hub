@@ -4187,15 +4187,12 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
   const COACH_REGEN_TIMEOUT_MS = Number(process.env.COACH_REGEN_TIMEOUT_MS || 10_000);
   const REGEN_TYPES = ['combined', 'smart_adjustments'];
 
-  app.post("/api/ai/regenerate", requireAuth, express.json(), async (req: any, res) => {
-    const type = typeof req.body?.type === 'string' ? req.body.type.trim() : '';
-    if (!REGEN_TYPES.includes(type)) {
-      return res.status(400).json({ status: 'error', reason: 'unsupported_type', supported: REGEN_TYPES });
-    }
-    if (!COACH_REGEN_ENABLED) {
-      logEvent('warn', `AI regenerate: coach trigger disabled, ignoring request for ${type}`, 'ai', req.user.id);
-      return res.status(503).json({ status: 'error', reason: 'not_configured' });
-    }
+  // Shared by the UI's regenerate button and the staleness watchdog below, so both
+  // speak to coach the same way. Returns a plain result rather than throwing: a
+  // cooldown (429) is a normal answer, not a failure.
+  async function triggerCoachRegen(type: string, userId: number | null):
+      Promise<{ ok: boolean, status: number, reason?: string, retry_after_seconds?: number | null }> {
+    if (!COACH_REGEN_ENABLED) return { ok: false, status: 503, reason: 'not_configured' };
 
     const body = JSON.stringify({ type });
     const timestamp = new Date().toISOString();
@@ -4220,29 +4217,186 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       let parsed: any = null;
       try { parsed = JSON.parse(raw); } catch { parsed = null; }
 
-      if (upstream.status === 202) {
-        logEvent('info', `AI regenerate: coach run queued for ${type}`, 'ai', req.user.id);
-        return res.json({ status: 'queued', type });
-      }
-      // A cooldown is a normal answer, not a failure — pass it through intact so
-      // the UI can say when the button will work again.
+      if (upstream.status === 202) return { ok: true, status: 202 };
       if (upstream.status === 429) {
-        return res.status(429).json({
-          status: 'error',
-          reason: 'cooldown',
-          retry_after_seconds: parsed?.retry_after_seconds ?? null,
-        });
+        return { ok: false, status: 429, reason: 'cooldown', retry_after_seconds: parsed?.retry_after_seconds ?? null };
       }
-      logEvent('warn', `AI regenerate: coach trigger returned ${upstream.status} (${raw.substring(0, 200)})`, 'ai', req.user.id);
-      return res.status(502).json({ status: 'error', reason: parsed?.reason || 'upstream_error' });
+      logEvent('warn', `AI regenerate: coach trigger returned ${upstream.status} (${raw.substring(0, 200)})`, 'ai', userId ?? undefined);
+      return { ok: false, status: 502, reason: parsed?.reason || 'upstream_error' };
     } catch (err: any) {
       const why = err?.name === 'AbortError' ? `timed out after ${COACH_REGEN_TIMEOUT_MS}ms` : (err?.message || String(err));
-      logEvent('error', `AI regenerate: coach trigger unreachable (${why})`, 'ai', req.user.id);
-      return res.status(502).json({ status: 'error', reason: 'unreachable' });
+      logEvent('error', `AI regenerate: coach trigger unreachable (${why})`, 'ai', userId ?? undefined);
+      return { ok: false, status: 502, reason: 'unreachable' };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  app.post("/api/ai/regenerate", requireAuth, express.json(), async (req: any, res) => {
+    const type = typeof req.body?.type === 'string' ? req.body.type.trim() : '';
+    if (!REGEN_TYPES.includes(type)) {
+      return res.status(400).json({ status: 'error', reason: 'unsupported_type', supported: REGEN_TYPES });
+    }
+    if (!COACH_REGEN_ENABLED) {
+      logEvent('warn', `AI regenerate: coach trigger disabled, ignoring request for ${type}`, 'ai', req.user.id);
+      return res.status(503).json({ status: 'error', reason: 'not_configured' });
+    }
+
+    const result = await triggerCoachRegen(type, req.user.id);
+    if (result.ok) {
+      logEvent('info', `AI regenerate: coach run queued for ${type}`, 'ai', req.user.id);
+      return res.json({ status: 'queued', type });
+    }
+    // A cooldown is a normal answer, not a failure — pass it through intact so
+    // the UI can say when the button will work again.
+    if (result.status === 429) {
+      return res.status(429).json({
+        status: 'error',
+        reason: 'cooldown',
+        retry_after_seconds: result.retry_after_seconds ?? null,
+      });
+    }
+    return res.status(result.status === 503 ? 503 : 502).json({ status: 'error', reason: result.reason });
   });
+
+  // ---------------------------------------------------------------------------
+  // Insight staleness watchdog (sweep item 36; Kieron Tier 1, 2026-10-21 09:31).
+  //
+  // Since Option E, coach is the sole author of the daily review. Nothing in the
+  // app noticed if coach stopped writing: the dashboard renders the newest
+  // `combined` row with no staleness signal, so a dead coach task would show a
+  // days-old review as if it were today's — the same silent-failure class as the
+  // sync-status badge (item 11). coach's run times are irregular (18:34 / 14:36 /
+  // 21:03 UTC on successive days), so "no row yet today" is not by itself a signal;
+  // an age threshold is.
+  //
+  // Kieron's decisions, verbatim: alert-only (the app must NOT substitute a Gemini
+  // review when coach is silent — "a silent engine swap is how you end up unable to
+  // trust any of it"), threshold 36h, label the engine, and the trigger is a
+  // schedule inside this app that calls coach when required.
+  //
+  // So: no generation here, ever. We surface the age, and we ask coach to run.
+  //
+  // Timestamp convention: `ai_insights.updated_at` is `timestamp without time zone`
+  // but BOTH writers store a UTC instant (`new Date().toISOString()` at :2586 and
+  // :4134 — toISOString is UTC regardless of container TZ), while the Postgres
+  // session is Europe/London. So the age is `now() AT TIME ZONE 'UTC' - updated_at`,
+  // NOT `now() - updated_at`, which would read an hour young under BST. Negative
+  // ages are clamped to 0: a client may POST its own `updated_at`, and a slightly
+  // future one is a clock skew, not a fresh review from the future.
+  // ---------------------------------------------------------------------------
+  const INSIGHT_STALE_HOURS = Number(process.env.INSIGHT_STALE_HOURS || 36);
+  const INSIGHT_WATCHDOG_INTERVAL_MIN = Number(process.env.INSIGHT_WATCHDOG_INTERVAL_MIN || 60);
+  // Our own floor on how often we will poke coach per user, independent of the
+  // host-side cooldown. Without it a dead coach means a trigger every hour forever.
+  const INSIGHT_TRIGGER_COOLDOWN_HOURS = Number(process.env.INSIGHT_TRIGGER_COOLDOWN_HOURS || 6);
+  const lastInsightTrigger = new Map<number, number>();
+
+  type InsightFreshness = {
+    stale: boolean,
+    never: boolean,
+    age_hours: number | null,
+    threshold_hours: number,
+    updated_at: string | null,
+    date: string | null,
+    provider: string | null,
+    model: string | null,
+    // When we last actually sent coach a regen trigger for this user, or null.
+    // The banner copy depends on this: with a 6h trigger cooldown, "the app has
+    // asked coach" is false for most of a stale window, and UI text that asserts
+    // an action we did not take is worse than no text.
+    coach_asked_at: string | null,
+  };
+
+  function coachAskedAt(userId: number): string | null {
+    const t = lastInsightTrigger.get(userId);
+    return t ? new Date(t).toISOString() : null;
+  }
+
+  async function getInsightFreshness(userId: number): Promise<InsightFreshness> {
+    const row = await db.prepare(`
+      SELECT date, provider, model,
+             to_char(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at_utc,
+             GREATEST(EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'UTC') - updated_at)) / 3600.0, 0) AS age_hours
+      FROM ai_insights
+      WHERE user_id = ? AND type = 'combined'
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(userId) as any;
+
+    if (!row) {
+      return { stale: false, never: true, age_hours: null, threshold_hours: INSIGHT_STALE_HOURS,
+               updated_at: null, date: null, provider: null, model: null,
+               coach_asked_at: coachAskedAt(userId) };
+    }
+    const age = Number(row.age_hours);
+    return {
+      stale: age > INSIGHT_STALE_HOURS,
+      never: false,
+      age_hours: Math.round(age * 100) / 100,
+      threshold_hours: INSIGHT_STALE_HOURS,
+      updated_at: row.updated_at_utc,
+      date: row.date,
+      provider: row.provider ?? null,
+      model: row.model ?? null,
+      coach_asked_at: coachAskedAt(userId),
+    };
+  }
+
+  // Read-only; the UI renders a banner from this. Deliberately separate from
+  // GET /api/ai/insights, which returns a bare array the client already depends on.
+  await app.get("/api/ai/insights/freshness", requireAuth, async (req: any, res) => {
+    try {
+      res.json(await getInsightFreshness(req.user.id));
+    } catch (e: any) {
+      logEvent('error', `Failed to compute insight freshness: ${e.message}`, 'api', req.user?.id);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  async function checkInsightStaleness() {
+    try {
+      // Only users who have EVER had a combined review. A user who has never had one
+      // has nothing to be stale, and waking coach for a dormant or test account is
+      // noise, not a signal.
+      const users = await db.prepare(`
+        SELECT DISTINCT user_id FROM ai_insights WHERE type = 'combined'
+      `).all() as any[];
+
+      for (const u of users) {
+        const userId = Number(u.user_id);
+        const f = await getInsightFreshness(userId);
+        if (!f.stale) continue;
+
+        logEvent('warn',
+          `Daily review is stale for user ${userId}: newest combined insight is ${f.age_hours}h old ` +
+          `(threshold ${f.threshold_hours}h, date ${f.date}, by ${f.provider || 'unknown'}). ` +
+          `Not generating in-app — coach owns this.`,
+          'ai', userId);
+
+        const last = lastInsightTrigger.get(userId) || 0;
+        const sinceH = (Date.now() - last) / 3_600_000;
+        if (sinceH < INSIGHT_TRIGGER_COOLDOWN_HOURS) continue;
+
+        const result = await triggerCoachRegen('combined', userId);
+        lastInsightTrigger.set(userId, Date.now());
+        if (result.ok) {
+          logEvent('info', `Staleness watchdog: asked coach to regenerate combined review for user ${userId}`, 'ai', userId);
+        } else if (result.status === 429) {
+          // coach is already queued host-side. Not a failure.
+          logEvent('info', `Staleness watchdog: coach trigger on cooldown for user ${userId} (retry in ${result.retry_after_seconds ?? '?'}s)`, 'ai', userId);
+        } else {
+          logEvent('error', `Staleness watchdog: could not reach coach for user ${userId} (${result.reason}) — review stays ${f.age_hours}h old`, 'ai', userId);
+        }
+      }
+    } catch (e: any) {
+      logEvent('error', `Insight staleness watchdog failed: ${e.message}`, 'ai');
+    }
+  }
+
+  setInterval(checkInsightStaleness, INSIGHT_WATCHDOG_INTERVAL_MIN * 60 * 1000);
+  // One pass shortly after boot, late enough not to compete with startup work.
+  setTimeout(checkInsightStaleness, 2 * 60 * 1000);
 
   // AI Models Cache
   let availableGeminiModels: string[] = ["gemini-flash-latest", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite"];

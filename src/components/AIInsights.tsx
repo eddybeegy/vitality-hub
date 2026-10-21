@@ -129,6 +129,31 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
   const [selectedDate, setSelectedDate] = useState<string>(today);
   const { requestRegeneration, regenPending, regenNotice } = useAIStore();
 
+  // Sweep item 36: coach is the sole author of this review, and nothing used to
+  // notice if it stopped writing — a days-old review rendered exactly like today's.
+  // Alert-only by Kieron's decision (2026-10-21, Tier 1): we say the review is old,
+  // we never substitute a different engine's review for it.
+  const [freshness, setFreshness] = useState<{
+    stale: boolean, never: boolean, age_hours: number | null, threshold_hours: number,
+    updated_at: string | null, date: string | null, provider: string | null, model: string | null,
+    coach_asked_at: string | null
+  } | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/ai/insights/freshness');
+        if (!res.ok) return;
+        const j = await res.json();
+        if (!cancelled) setFreshness(j);
+      } catch { /* a missing freshness badge must never break the review itself */ }
+    };
+    load();
+    const t = setInterval(load, 10 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
+
   const onSubmit = async () => {
     if (!chatInput.trim()) return;
     const message = chatInput;
@@ -565,6 +590,25 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
           </div>
         )}
       </div>
+
+      {freshness?.stale && selectedDate === today && (
+        <div className="mb-4 p-3 rounded-2xl border border-amber-500/40 bg-amber-50 dark:bg-amber-950/40 flex items-start gap-2">
+          <AlertCircle size={16} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="text-xs text-amber-900 dark:text-amber-200">
+            <div className="font-semibold">This review is out of date.</div>
+            <div className="mt-0.5">
+              The newest review is {freshness.age_hours !== null ? `${Math.round(freshness.age_hours)}h` : 'more than a day'} old
+              {freshness.date ? ` (for ${freshness.date})` : ''}, past the {freshness.threshold_hours}h threshold.
+              {freshness.provider ? ` It was written by ${freshness.provider}.` : ''}
+              {' '}
+              {freshness.coach_asked_at
+                ? `coach was asked to write a new one at ${new Date(freshness.coach_asked_at).toLocaleString()}.`
+                : 'The app will ask coach to write a new one at its next check.'}
+              {' '}It will not generate a substitute.
+            </div>
+          </div>
+        </div>
+      )}
 
       {renderMarkdown(
         review.content,
