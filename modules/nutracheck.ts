@@ -1,4 +1,5 @@
 import { DataSourceModule } from "./types";
+import { utcDayRange } from "./timeRange";
 import { parse } from "csv-parse/sync";
 
 export const NutrachekModule: DataSourceModule = {
@@ -66,11 +67,12 @@ export const NutrachekModule: DataSourceModule = {
       
       await db.transaction(async () => {
         // Delete existing data for the days being imported to ensure Nutrachek is the source of truth
-        const deleteMetricsStmt = db.prepare("DELETE FROM metrics WHERE user_id = ? AND source = 'nutrachek' AND CAST(timestamp AS TEXT) LIKE ?");
+        const deleteMetricsStmt = db.prepare("DELETE FROM metrics WHERE user_id = ? AND source = 'nutrachek' AND timestamp >= ? AND timestamp < ?");
         const deleteMealsStmt = db.prepare("DELETE FROM meal_items WHERE user_id = ? AND source = 'nutrachek' AND CAST(timestamp AS TEXT) LIKE ?");
         
         for (const day of uniqueDays) {
-          await deleteMetricsStmt.run(userId, `${day}%`);
+          const range = utcDayRange(day);
+          if (range) await deleteMetricsStmt.run(userId, ...range);
           await deleteMealsStmt.run(userId, `${day}%`);
         }
 

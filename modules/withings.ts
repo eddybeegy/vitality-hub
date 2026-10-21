@@ -1,6 +1,7 @@
 import axios from "axios";
 import qs from "qs";
 import { DataSourceModule } from "./types";
+import { utcDayRange } from "./timeRange";
 
 export function buildWithingsTokenRequestParams(clientId: string, clientSecret: string, refreshToken: string) {
   return {
@@ -317,9 +318,10 @@ export const WithingsModule: DataSourceModule = {
 
       await db.transaction(async () => {
         // Delete existing data for the days being imported to ensure Withings is the source of truth
-        const deleteStmt = db.prepare("DELETE FROM metrics WHERE user_id = ? AND source = 'withings' AND CAST(timestamp AS TEXT) LIKE ?");
+        const deleteStmt = db.prepare("DELETE FROM metrics WHERE user_id = ? AND source = 'withings' AND timestamp >= ? AND timestamp < ?");
         for (const day of uniqueDays) {
-          await deleteStmt.run(userId, `${day}%`);
+          const range = utcDayRange(day);
+          if (range) await deleteStmt.run(userId, ...range);
         }
 
         for (const grp of allGroups) {

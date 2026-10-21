@@ -336,6 +336,44 @@ const NUTRITION_METRICS = [
   'phosphorus', 'manganese', 'thiamin', 'selenium', 'pantothenic_acid'
 ];
 
+// ── Timestamp column convention (sweep item 13) ──────────────────────────────
+// Until migrations/item-13-timestamptz has run, metrics/workouts/logs.timestamp are
+// `timestamp without time zone` and hold a different zone per source: UTC for the
+// in-app modules (they write `toISOString()` and Postgres drops the `Z`), Europe/London
+// wall-clock for `healthsync` (external writer, item 19) and for `logs` (DEFAULT
+// CURRENT_TIMESTAMP in the London session). Every SQL read path that needs an instant
+// has to say which. After the migration each column stores the instant and the column
+// is the answer on its own; node-pg then hands back the right Date for every source,
+// which is what fixes the JS read paths in item 44.
+//
+// Read once at boot so a build deployed ahead of the migration still reads the naive
+// columns correctly. Once the migration is live everywhere the naive branches can go.
+const tzColumns: Record<'metrics' | 'workouts' | 'logs', boolean> = { metrics: false, workouts: false, logs: false };
+
+async function detectTimestampColumns() {
+  if (db.type !== 'postgres') return;
+  try {
+    const rows = await db.prepare(`
+      SELECT table_name, data_type FROM information_schema.columns
+      WHERE table_schema = 'public' AND column_name = 'timestamp' AND table_name IN ('metrics', 'workouts', 'logs')
+    `).all() as any[];
+    for (const r of rows) tzColumns[r.table_name as keyof typeof tzColumns] = r.data_type === 'timestamp with time zone';
+  } catch (e) {
+    console.warn('Could not read timestamp column types, assuming naive:', e.message);
+  }
+  console.log(`[schema] timestamptz columns: metrics=${tzColumns.metrics} workouts=${tzColumns.workouts} logs=${tzColumns.logs}`);
+}
+
+// SQL for the instant a metrics/workouts row was recorded. Never a single AT TIME
+// ZONE for the whole table while the column is naive -- the zone belongs to the source.
+const readingInstant = (table: 'metrics' | 'workouts', col = 'timestamp') =>
+  tzColumns[table]
+    ? col
+    : `(CASE WHEN source = 'healthsync' THEN ${col} AT TIME ZONE 'Europe/London' ELSE ${col} AT TIME ZONE 'UTC' END)`;
+
+// SQL for the instant a log row was written.
+const logInstant = (col = 'timestamp') => tzColumns.logs ? col : `(${col} AT TIME ZONE 'Europe/London')`;
+
 async function startServer() {
 // Initialize database schema
 async function ensureSchema() {
@@ -403,7 +441,7 @@ async function ensureSchema() {
       type: "TEXT",
       value: "REAL",
       unit: "TEXT",
-      timestamp: "DATETIME DEFAULT CURRENT_TIMESTAMP",
+      timestamp: "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
       source: "TEXT"
     },
     workouts: {
@@ -412,7 +450,7 @@ async function ensureSchema() {
       name: "TEXT",
       duration: "INTEGER",
       volume: "REAL",
-      timestamp: "DATETIME",
+      timestamp: "TIMESTAMPTZ",
       source: "TEXT",
       external_id: "TEXT UNIQUE",
       routine_external_id: "TEXT"
@@ -483,7 +521,7 @@ async function ensureSchema() {
       level: "TEXT",
       message: "TEXT",
       source: "TEXT",
-      timestamp: "DATETIME DEFAULT CURRENT_TIMESTAMP"
+      timestamp: "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP"
     },
     meal_items: {
       id: "INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -672,6 +710,8 @@ async function ensureSchema() {
       }
     }
   }
+
+  await detectTimestampColumns();
 
   // Migration: Ensure dashboard_widgets and feature toggles are not NULL for existing users
   try {
@@ -3224,7 +3264,8 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     //     (UTC day) where the charts, which parse the instant correctly, had 48.22 over
     //     83 rows (London day) -- the 13 readings between 23:00 and midnight London.
     //     That one-hour skew was the residual HRV divergence in sweep item 20.
-    //     The proper fix for the underlying column type is sweep item 13.
+    //     Sweep item 13 migrates the column to timestamptz; `readingInstant` is then the
+    //     bare column and only the render into the user's zone remains.
     const safeTz = /^[A-Za-z0-9_+\-\/]+$/.test(String(userTimezone || '')) ? String(userTimezone) : 'Europe/London';
     const bucketRows = await db.prepare(`
       WITH deduped AS (
@@ -3237,9 +3278,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         ${ endStr ? 'AND timestamp <= ?' : '' }
       )
       SELECT
-        to_char(((CASE WHEN source = 'healthsync' THEN adj_ts AT TIME ZONE 'Europe/London'
-                     ELSE adj_ts AT TIME ZONE 'UTC' END)
-                AT TIME ZONE '${safeTz}')::date, 'YYYY-MM-DD') AS day,
+        to_char((${readingInstant('metrics', 'adj_ts')} AT TIME ZONE '${safeTz}')::date, 'YYYY-MM-DD') AS day,
         type, source,
         SUM(value::float8) AS total,
         COUNT(*)::int AS cnt
@@ -3385,39 +3424,29 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       ORDER BY timestamp DESC
     `).all(userId, mealCutoffStr);
 
-    // `AT TIME ZONE 'Europe/London'` is REQUIRED here, and on the two reading-freshness
-    // queries below. Do not "simplify" it away again -- that was the 2026-10-21 07:58
-    // regression, reverted at 08:27.
+    // `logInstant()` is REQUIRED on these two queries while `logs.timestamp` is naive.
+    // Do not drop it on a naive column -- that was the 2026-10-21 07:58 regression,
+    // reverted at 08:27.
     //
-    // `logs.timestamp` (and `metrics`/`workouts`) is `timestamp without time zone`
-    // holding Europe/London WALL-CLOCK, not UTC. node-pg parses a naive timestamp in the
-    // client process's zone, and this container runs UTC -- so a raw MAX(timestamp) of
-    // London 04:33 comes back as the Date 04:33Z, an hour LATER than the real instant
-    // (03:33Z under BST). Serialised to JSON and formatted back into London by the
-    // client, it renders 05:33: freshness badges an hour in the future. `AT TIME ZONE
-    // 'Europe/London'` reinterprets the naive value in the zone it was actually written
-    // in, yielding the correct instant. This is not a double conversion: the client
-    // receives a proper UTC instant either way, only one of them is the right one.
+    // The naive column holds Europe/London WALL-CLOCK (DEFAULT CURRENT_TIMESTAMP in the
+    // London session). node-pg parses a naive timestamp in the process zone, and this
+    // container runs UTC, so a raw MAX(timestamp) of London 04:33 comes back as 04:33Z,
+    // an hour later than the real instant under BST: freshness badges an hour in the
+    // future. `AT TIME ZONE 'Europe/London'` reinterprets it in the zone it was written
+    // in -- a fixed zone, because the zone belongs to the stored data, not the reader.
+    // After sweep item 13 the column is timestamptz, already an instant, and
+    // `logInstant()` is the bare column.
     //
-    // It is a fixed 'Europe/London', not the user's configured zone, because the WRITERS
-    // stamp London wall-clock -- the zone belongs to the stored data, not to the reader.
+    // `syncIssues` compares that instant against an untyped ISO-`Z` parameter, which
+    // Postgres infers as timestamptz, so both sides are true instants on either schema
+    // (proven 2026-10-21 09:05 against live data: 181 rows converted vs 186 raw, the 5
+    // extra being exactly the offset-hour window the raw form wrongly admits).
     //
-    // Self-heals 2026-10-25 when BST ends (offset 0) and returns 2027-03-29. So test any
-    // change here against a rendered-vs-now comparison, never against equality with the
-    // raw DB string, and never during GMT.
-    //
-    // NOTE (2026-10-21 09:05): an earlier revision of this comment claimed `syncIssues`
-    // below compares a London-shifted column against a UTC cutoff string and was "still
-    // open". That was wrong, and the claim was the real hazard -- it invited someone to
-    // "fix" correct code. `timestamp AT TIME ZONE 'Europe/London'` yields a
-    // `timestamp with time zone` (verified with pg_typeof), and node-pg sends the
-    // `issueCutoffStr` parameter untyped, so Postgres infers `timestamptz` from the
-    // comparison and honours the trailing `Z`. Both sides are therefore true instants.
-    // Proven against live data with bound parameters: the converted form matched 181
-    // rows, the raw-column form 186 -- the 5 extra being exactly the offset-hour window
-    // the raw form wrongly admits. The code here is the correct one. Leave it.
+    // Test any change here against a rendered-vs-now comparison with an explicit BST
+    // offset, never against the current clock: BST ends 2026-10-25 and the naive form
+    // silently self-heals until 2027-03-28.
     const syncLogs = await db.prepare(`
-      SELECT source as module, MAX(timestamp AT TIME ZONE 'Europe/London') as timestamp, 'success' as status
+      SELECT source as module, MAX(${logInstant()}) as timestamp, 'success' as status
       FROM logs
       WHERE user_id = ? AND level = 'info'
       GROUP BY source
@@ -3428,9 +3457,9 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     const issueCutoffStr = issueCutoffDate.toISOString();
 
     const recentIssueRows = await db.prepare(`
-      SELECT source as module, message, level, (timestamp AT TIME ZONE 'Europe/London') as timestamp
+      SELECT source as module, message, level, ${logInstant()} as timestamp
       FROM logs
-      WHERE user_id = ? AND level IN ('warn', 'error') AND (timestamp AT TIME ZONE 'Europe/London') >= ?
+      WHERE user_id = ? AND level IN ('warn', 'error') AND ${logInstant()} >= ?
       ORDER BY timestamp DESC
     `).all(userId, issueCutoffStr) as any[];
 
@@ -3479,15 +3508,13 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     // The `logs`-based queries above keep 'Europe/London' and are untouched: that column
     // has no explicit value and takes the DEFAULT CURRENT_TIMESTAMP in the server's
     // session zone (Europe/London).
-    // Proper fix is sweep item 13 (migrate the columns to timestamptz) plus item 19
-    // (make the healthsync writer send UTC); until then this is the honest mapping.
-    const naiveToInstant = (col: string) =>
-      `(CASE WHEN source = 'healthsync' THEN ${col} AT TIME ZONE 'Europe/London' ELSE ${col} AT TIME ZONE 'UTC' END)`;
+    // Sweep item 13 migrates the columns to timestamptz, after which `readingInstant` is
+    // the bare column; item 19 pins the healthsync writer to an explicit offset.
     noteFreshness(await db.prepare(
-      `SELECT source, MAX(${naiveToInstant('timestamp')}) AS timestamp FROM metrics WHERE user_id = ? GROUP BY source`
+      `SELECT source, MAX(${readingInstant('metrics')}) AS timestamp FROM metrics WHERE user_id = ? GROUP BY source`
     ).all(userId) as any[]);
     noteFreshness(await db.prepare(
-      `SELECT source, MAX(${naiveToInstant('timestamp')}) AS timestamp FROM workouts WHERE user_id = ? GROUP BY source`
+      `SELECT source, MAX(${readingInstant('workouts')}) AS timestamp FROM workouts WHERE user_id = ? GROUP BY source`
     ).all(userId) as any[]);
 
     // A module id is not always its metrics `source`:
