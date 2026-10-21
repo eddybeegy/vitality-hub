@@ -23,6 +23,7 @@ import { AI_PROVIDERS } from "./ai_providers/index";
 import { probeProvider } from "./ai_providers/openai_compatible";
 import { setupDb } from "./src/lib/db";
 import { parseEnumParam, parseDateParam, parseDayParam, parseIntParam, checkDateOrder } from "./src/lib/queryParams";
+import { buildSettingsUpdate, hasSettingsField } from "./src/lib/settingsUpdate";
 import { parseLogLevel, parseSourceList, createLogFilter } from "./src/lib/logLevel";
 import { planRefresh, refreshStartMessage, refreshFinishMessage, RefreshModuleResult } from "./src/lib/refreshPlan";
 import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/lib/aggregatedMetrics";
@@ -5232,117 +5233,50 @@ Answer in Markdown. Be specific and cite actual values from the data. Keep it co
   });
 
   app.post("/api/settings", requireAuth, async (req: any, res) => {
-    const { 
-      withings_client_id, withings_client_secret, hevy_api_key, email, name, sync_history_days, age, dob, gender, height, display_mode,
-      ai_provider, ai_api_key, ai_base_url, ai_hints, ai_persona, ai_focus, meal_suggestion_breakfast, meal_suggestion_lunch, meal_suggestion_dinner,
-      show_debug_logs, ai_model, medications, preferred_units, default_graph_range, default_graph_grouping, timezone,
-      ai_generation_times, metric_priorities, font_size, dashboard_widgets, readiness_recovery_days
-    } = req.body;
-
-    // In a real app, we'd use environment variables or a more secure way to store these.
-    // For this demo, we'll update the database.
-
-    // sync_history_days feeds date-range math in withings/cronometer/hevy sync
-    // (Date.now() - historyDays*86400000) with no other bounds check downstream —
-    // an out-of-range or non-numeric value here reaches those modules unfiltered.
-    const parsedSyncHistoryDays = Number(sync_history_days);
-    const validSyncHistoryDays = Number.isFinite(parsedSyncHistoryDays) && parsedSyncHistoryDays >= 1 && parsedSyncHistoryDays <= 3650
-      ? Math.floor(parsedSyncHistoryDays)
-      : 30;
-
-    const parsedReadinessDays = Number(readiness_recovery_days);
-    const validReadinessDays = Number.isFinite(parsedReadinessDays) && parsedReadinessDays >= 1 && parsedReadinessDays <= 30
-      ? Math.floor(parsedReadinessDays)
-      : 3;
-
-    // Check if user exists
+    // Item 50: a partial update. Only the columns whose keys are present in the body are
+    // written; absent ones are left as stored. This used to write 28 columns
+    // unconditionally with hardcoded fallbacks, so a body naming one field reset the rest
+    // of the row -- and an array body passed every guard and wiped 18 of them.
     const existingUser = await db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id) as any;
+    const update = buildSettingsUpdate(req.body, existingUser || {});
+    if (update.error !== undefined) {
+      logEvent('warn', `Rejected POST /api/settings: ${update.error}`, 'settings', req.user.id);
+      return res.status(400).json({ error: update.error });
+    }
+    if (!hasSettingsField(req.body)) {
+      return res.status(400).json({ error: 'No settings fields in request body' });
+    }
+    const fields = Object.fromEntries(update.columns) as Record<string, any>;
 
     if (existingUser) {
-      const params = [
-        email || 'user@example.com',
-        name || null,
-        validSyncHistoryDays,
-        age || null,
-        dob || null,
-        gender || null,
-        height || null,
-        display_mode || 'auto',
-        ai_provider || 'gemini',
-        ai_base_url || null,
-        ai_hints || null,
-        ai_persona || 'Encouraging Coach',
-        ai_focus || 'General Health',
-        meal_suggestion_breakfast ? 1 : 0,
-        meal_suggestion_lunch ? 1 : 0,
-        meal_suggestion_dinner ? 1 : 0,
-        show_debug_logs ? 1 : 0,
-        ai_model || null,
-        medications ? JSON.stringify(medications) : null,
-        preferred_units || 'metric',
-        default_graph_range || '30d',
-        default_graph_grouping || 'day',
-        timezone || undefined,
-        ai_generation_times || '["off", "off", "off"]',
-        metric_priorities || null,
-        font_size || 'medium',
-        dashboard_widgets ? JSON.stringify(dashboard_widgets) : null,
-        validReadinessDays
-      ];
+      if (update.columns.length > 0) {
+        // Column names come only from SETTINGS_COLUMNS, never from the body.
+        const assignments = update.columns.map(([col]) => `${col} = ?`).join(', ');
+        await db.prepare(`UPDATE users SET ${assignments} WHERE id = ?`)
+          .run(...update.columns.map(([, v]) => v), req.user.id);
+      }
 
-      if (hevy_api_key) params.push(hevy_api_key);
-      if (ai_api_key) params.push(ai_api_key);
-      if (withings_client_id) params.push(withings_client_id);
-      if (withings_client_secret) params.push(withings_client_secret);
-      params.push(req.user.id);
-
-      await db.prepare(`
-        UPDATE users SET
-          email = ?,
-          name = ?,
-          sync_history_days = ?,
-          age = ?,
-          dob = ?,
-          gender = ?,
-          height = ?,
-          display_mode = ?,
-          ai_provider = ?,
-          ai_base_url = ?,
-          ai_hints = ?,
-          ai_persona = ?,
-          ai_focus = ?,
-          meal_suggestion_breakfast = ?,
-          meal_suggestion_lunch = ?,
-          meal_suggestion_dinner = ?,
-          show_debug_logs = ?,
-          ai_model = ?,
-          medications = ?,
-          preferred_units = ?,
-          default_graph_range = ?,
-          default_graph_grouping = ?,
-          timezone = ?,
-          ai_generation_times = ?,
-          metric_priorities = ?,
-          font_size = ?,
-          dashboard_widgets = ?,
-          readiness_recovery_days = ?
-          ${hevy_api_key ? ', hevy_api_key = ?' : ''}
-          ${ai_api_key ? ', ai_api_key = ?' : ''}
-          ${withings_client_id ? ', withings_client_id = ?' : ''}
-          ${withings_client_secret ? ', withings_client_secret = ?' : ''}
-        WHERE id = ?
-      `).run(...params);
-
-      // Save to ai_configs as well
-      if (ai_provider) {
+      // Save to ai_configs as well -- also only what was sent. The provider is the one
+      // in the body, else the stored one; nothing is touched unless a provider-scoped
+      // field (key, model, base URL) or the provider itself was sent.
+      const aiKeys = (['ai_api_key', 'ai_model', 'ai_base_url'] as const).filter(k => Object.prototype.hasOwnProperty.call(req.body, k));
+      const provider = fields.ai_provider ?? req.body.ai_provider ?? existingUser.ai_provider;
+      if (provider && (aiKeys.length > 0 || Object.prototype.hasOwnProperty.call(req.body, 'ai_provider'))) {
+        const configCol = { ai_api_key: 'api_key', ai_model: 'model', ai_base_url: 'base_url' } as const;
+        // Blank means "none" here, as it did before: the AI key is round-tripped by the form.
+        const configValue = (k: typeof aiKeys[number]) => (typeof req.body[k] === 'string' && req.body[k] !== '' ? req.body[k] : null);
+        const sets = aiKeys.map(k => `${configCol[k]} = excluded.${configCol[k]}`).join(', ');
         await db.prepare(`
           INSERT INTO ai_configs (user_id, provider, api_key, model, base_url)
           VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(user_id, provider) DO UPDATE SET
-            api_key = excluded.api_key,
-            model = excluded.model,
-            base_url = excluded.base_url
-        `).run(req.user.id, ai_provider, ai_api_key || null, ai_model || null, ai_base_url || null);
+          ON CONFLICT(user_id, provider) DO ${sets ? `UPDATE SET ${sets}` : 'NOTHING'}
+        `).run(
+          req.user.id,
+          provider,
+          aiKeys.includes('ai_api_key') ? configValue('ai_api_key') : null,
+          aiKeys.includes('ai_model') ? configValue('ai_model') : null,
+          aiKeys.includes('ai_base_url') ? configValue('ai_base_url') : null,
+        );
       }
     } else {
       const defaultWidgets = ['readiness_card', 'stats', 'charts', 'nutrition', 'micronutrient_radar', 'macronutrient_radar', 'smart_adjustments', 'sleep_stages', 'lean_body_mass_chart'];
@@ -5351,18 +5285,18 @@ Answer in Markdown. Be specific and cite actual values from the data. Keep it co
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         req.user.id,
-        email || 'user@example.com',
-        hevy_api_key || '',
-        validSyncHistoryDays,
-        withings_client_id || '',
-        withings_client_secret || '',
-        age || null,
-        gender || null,
-        display_mode || 'auto',
-        preferred_units || 'metric',
-        default_graph_range || '30d',
-        default_graph_grouping || 'day',
-        JSON.stringify(defaultWidgets)
+        fields.email ?? 'user@example.com',
+        fields.hevy_api_key ?? '',
+        fields.sync_history_days ?? 30,
+        fields.withings_client_id ?? '',
+        fields.withings_client_secret ?? '',
+        fields.age ?? null,
+        fields.gender ?? null,
+        fields.display_mode ?? 'auto',
+        fields.preferred_units ?? 'metric',
+        fields.default_graph_range ?? '30d',
+        fields.default_graph_grouping ?? 'day',
+        fields.dashboard_widgets ?? JSON.stringify(defaultWidgets)
       );
     }
 
