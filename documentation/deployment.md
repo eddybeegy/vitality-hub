@@ -23,6 +23,9 @@ NODE_ENV=production node dist/server.cjs
 ```
 
 ## Environment
-See `.env.example`. At minimum set `JWT_SECRET`, `APP_URL` (used for OAuth redirects),
+See `.env.example`. `JWT_SECRET` has no default anywhere: `docker compose up` fails
+with "required variable JWT_SECRET is missing a value" until `.env` sets it
+(`openssl rand -base64 32`), and rotating it invalidates every existing session.
+At minimum set `JWT_SECRET`, `APP_URL` (used for OAuth redirects),
 and `DATABASE_TYPE` with its connection URL. Set `TRUST_PROXY` to a hop count or an
 address list when running behind a reverse proxy or tunnel; `true` is refused.

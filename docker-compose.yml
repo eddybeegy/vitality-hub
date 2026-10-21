@@ -9,7 +9,9 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
     environment:
-      - JWT_SECRET=${JWT_SECRET:-vitality-hub-secret}
+      # No default: a public fallback secret let anyone mint a valid session token.
+      # Compose refuses to start the stack if JWT_SECRET is unset or empty.
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in .env (generate one with openssl rand -base64 32)}
       - PORT=${PORT:-3000}
       - NODE_ENV=${NODE_ENV:-production}
       - APP_URL=${APP_URL:-http://localhost:3000}
