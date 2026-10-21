@@ -5340,6 +5340,11 @@ Answer in Markdown. Be specific and cite actual values from the data. Keep it co
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.join(process.cwd(), "dist")));
+    // A missing hashed asset (e.g. a chunk renamed by a deploy) must 404, not get
+    // index.html with a 200 — the client relies on the failure to reload.
+    app.use("/assets", (req, res) => {
+      res.status(404).type("text/plain").send("Not found");
+    });
     await app.get("*", (req, res) => {
       res.sendFile(path.join(process.cwd(), "dist", "index.html"));
     });
