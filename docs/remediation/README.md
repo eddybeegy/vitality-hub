@@ -246,3 +246,19 @@ state must survive losing it. So:
   Rows 51 and 60 were deliberately **not** edited here: each is carried as a +1/-1 in
   its own open PR, and editing the same line from `main` would turn that PR's
   `mergeable_state` dirty and block the gate. The owning PR updates its row on merge.
+
+- **2026-10-21 17:06 (builder) — gate baseline re-measured; gate 5 figures below are
+  superseded.** On `main` tip `9276893`, after #30/#31/#32/#33 were merged in a batch at
+  17:01–17:02 and deployed (image built 17:02:53, container restarted 17:03:05):
+  **`npx tsc --noEmit` exit 0, and `npx vitest run` is 22 files / 314 tests, all
+  passing, 3.9 s.** The old 18 files / 266 tests figure is retired, and
+  `vitality-pr-watch-6c6d`'s prompt has been updated to the new one — a stale baseline
+  fails *permissively*, which is how two fresh `tsc` errors could have slipped through
+  earlier today.
+  For the record, that batch was merged and deployed outside the pr-watch loop (its
+  last run log is 16:23 and its next fire was 17:10), the same pattern as #20–#23. The
+  sibling session that did it recorded rows 51 and 59–63 DONE with merge shas and live
+  verification in `9276893`, so nothing was left stranded — but **if a tracker row and
+  a task's run log disagree about who gated a PR, the repo and the merge commit win.**
+  Host state at 17:06: working tree clean apart from untracked `data/`, local `HEAD` ==
+  `origin/main`, container running.
