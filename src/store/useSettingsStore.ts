@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { useUIStore } from './useUIStore';
+import { fetchJson } from '../lib/apiFetch';
 import { normaliseTargetValue, toApiTargetValue, type TargetValue } from '../lib/targets';
 
 interface Medication {
@@ -146,8 +147,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   })),
   fetchSettings: async () => {
     try {
-      const res = await fetch('/api/settings');
-      const data = await res.json();
+      // A failed fetch must not reach the merge below: a 500's {"error": ...} used to be
+      // spread into settings and every boolean re-defaulted from it.
+      const data = await fetchJson('/api/settings');
       let medications = [];
       if (data.medications) {
         try {
@@ -191,8 +193,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
   fetchTargets: async () => {
     try {
-      const res = await fetch('/api/targets');
-      const data = await res.json();
+      const data = await fetchJson('/api/targets');
+      if (!Array.isArray(data)) throw new Error('/api/targets did not return a list');
       const targetTypes = [
         { type: 'weight', label: 'Weight', unit: 'kg' },
         { type: 'body_fat', label: 'Body Fat', unit: '%' },

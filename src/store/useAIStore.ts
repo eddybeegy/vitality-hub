@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { ChatMessage } from '../services/geminiService';
+import { fetchJson, fetchOk } from '../lib/apiFetch';
 
 interface AIState {
   chatHistory: ChatMessage[];
@@ -127,7 +128,7 @@ export const useAIStore = create<AIState>((set, get) => ({
   },
   saveAIInsight: async (type, content, date, provider, model, batch_id, updated_at) => {
     try {
-      await fetch('/api/ai/insights', {
+      await fetchOk('/api/ai/insights', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type, content, date, provider, model, batch_id, updated_at })
@@ -221,7 +222,8 @@ export const useAIStore = create<AIState>((set, get) => ({
     set({ isReviewLoading: true });
     try {
       const type = specificType || 'combined';
-      await fetch(`/api/ai/insights?force=true&type=${type}`);
+      // A failed force run is logged, but the list is still refreshed as before.
+      await fetchOk(`/api/ai/insights?force=true&type=${type}`).catch(e => console.error('Forced insight run failed', e));
       await fetchAIInsights();
     } catch (e) {
       console.error("checkAndRegenerateAI failed", e);
@@ -235,15 +237,25 @@ export const useAIStore = create<AIState>((set, get) => ({
     const { selectedBatchId } = get();
     set({ isChatLoading: true });
     try {
-      // Save user message
-      await fetch('/api/chat-history', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'user', content: message, date, batch_id: selectedBatchId })
-      });
+      // Saving either side of the turn to history is logged on failure but never
+      // aborts the chat -- above all not after the user already has the reply.
+      const saveTurn = (body: object) =>
+        fetchOk('/api/chat-history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        }).catch(e => console.error('Save chat history failed', e));
 
-      const res = await fetch('/api/ai/data');
-      const data = await res.json();
+      // Save user message
+      await saveTurn({ role: 'user', content: message, date, batch_id: selectedBatchId });
+
+      // chatWithData (server-side since the coach move) reads only `chatDate` from
+      // commonData, so this slice is unused; a failed fetch is logged and the chat goes
+      // ahead rather than aborting on a request it doesn't need.
+      const data: any = await fetchJson('/api/ai/data').catch(e => {
+        console.error('Fetch AI data failed', e);
+        return {};
+      });
 
       const { combinedReview, allAIInsights } = get();
       const today = new Date().toISOString().split('T')[0];
@@ -282,11 +294,7 @@ export const useAIStore = create<AIState>((set, get) => ({
       const response = await chatWithData(commonData, message, currentChatHistory, modelToUse, providerToUse);
       if (response) {
         // Save assistant message
-        await fetch('/api/chat-history', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ role: 'assistant', content: response, date, batch_id: selectedBatchId })
-        });
+        await saveTurn({ role: 'assistant', content: response, date, batch_id: selectedBatchId });
         return response;
       }
     } catch (e: any) {
