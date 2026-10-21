@@ -5,13 +5,19 @@ import { useSettingsStore } from '../store/useSettingsStore';
 import { parseUTCDate } from '../lib/utils';
 import { isIssueResolved } from '../lib/syncIssues';
 import { freshnessStatus, stalenessThresholdHours } from '../lib/freshness';
+import { fetchJson } from '../lib/apiFetch';
+import { useUIStore } from '../store/useUIStore';
 
 // Duplicated from App.tsx's handleConnectWithings rather than threading a prop
 // through Dashboard for one widget — same self-contained popup OAuth flow.
 const handleReconnectWithings = async () => {
-  const res = await fetch('/api/auth/withings/url');
-  const { url } = await res.json();
-  window.open(url, 'withings_oauth', 'width=600,height=700');
+  try {
+    const { url } = await fetchJson<{ url: string }>('/api/auth/withings/url');
+    window.open(url, 'withings_oauth', 'width=600,height=700');
+  } catch (e) {
+    console.error('Withings reconnect failed', e);
+    useUIStore.getState().showToast("Couldn't start Withings sign-in. Try again shortly.", 'error');
+  }
 };
 
 export const SyncHealthWidget = () => {

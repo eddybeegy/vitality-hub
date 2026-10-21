@@ -7,6 +7,7 @@ import { InsightSkeleton } from './ui/Skeleton';
 import { getLocalDateString, formatDateWithTimezone, normalizeAIMarkdown } from '../lib/utils';
 import { useAIStore } from '../store/useAIStore';
 import { useHealthStore } from '../store/useHealthStore';
+import { fetchJson } from '../lib/apiFetch';
 
 interface ApplyProgressionButtonProps {
   data: string;
@@ -37,14 +38,13 @@ const ApplyProgressionButton: React.FC<ApplyProgressionButtonProps> = ({ data })
          throw new Error("No routine ID found for this workout. This usually means the workout wasn't linked to a Hevy routine.");
       }
 
-      const res = await fetch('/api/hevy/update-routine', {
+      // fetchJson throws with the server's `error` on a non-2xx, and a clear message
+      // (not "Unexpected token '<'") when the body isn't JSON.
+      await fetchJson('/api/hevy/update-routine', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(parsed)
       });
-
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.error || 'Failed to update routine');
 
       setStatus('success');
       setTimeout(() => setStatus('idle'), 5000);
