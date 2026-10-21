@@ -43,6 +43,22 @@ export interface SourceChoice {
   contenders: string[];
 }
 
+/**
+ * The user's priority list for `type`. Item 67: Settings > Metric Source Priority
+ * offers one entry per reading -- `blood_pressure` -- and writes the list under that
+ * key, but the stored types are the halves, so an exact `priorities[type]` lookup
+ * never found it and the setting had no effect. A paired type now reads its group's
+ * key first (the one the UI writes), then a list stored under either half's own name,
+ * so all halves of a reading always share one list. Unpaired types are an exact
+ * lookup, as before.
+ */
+export function listFor(type: string, priorities: Record<string, string[]> | null | undefined): string[] | undefined {
+  if (!priorities) return undefined;
+  const group = GROUP_OF[type];
+  const keys = group ? [group, ...PAIRED_TYPES[group]] : [type];
+  return keys.map(k => priorities[k]).find(l => Array.isArray(l) && l.length > 0);
+}
+
 function userRanker(list: string[] | undefined) {
   return (src: string) => {
     if (!list || list.length === 0) return Infinity;
@@ -88,8 +104,7 @@ export function chooseSource(
     for (const [src, n] of Object.entries(counts)) combined[src] = (combined[src] ?? 0) + n;
   }
   const complete = (src: string) => perMember.every(counts => (counts[src] ?? 0) > 0);
-  // The list that applies to the reading as a whole: the first member that has one.
-  const list = members.map(t => policy.priorities?.[t]).find(l => l && l.length > 0);
+  const list = listFor(type, policy.priorities);
   const byPolicy = rankSources(combined, list, policy);
   const joint = [...byPolicy.filter(complete), ...byPolicy.filter(s => !complete(s))];
 
