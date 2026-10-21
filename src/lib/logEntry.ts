@@ -14,7 +14,7 @@
 //
 // Pure functions, no fs or Express, so they are unit-tested directly.
 
-import { LOG_LEVELS, type LogLevel } from './logLevel';
+import { LOG_LEVELS, normaliseLogLevel, type LogLevel } from './logLevel';
 
 export const MAX_CLIENT_LOG_MESSAGE = 2000;
 
@@ -33,10 +33,12 @@ export function validateClientLog(body: unknown): ClientLogResult {
   if (!isPlainObject(body)) return { error: 'Request body must be a JSON object' };
   const { level, message, source } = body;
 
+  // Item 60: the same normalisation the LOG_LEVEL gate ranks by, so what the route stores
+  // and what the gate compares can never disagree. Case and surrounding space are not a
+  // different level; anything else is unknown.
   if (typeof level !== 'string') return { error: `level must be one of ${LOG_LEVELS.join(', ')}` };
-  // Case and surrounding space are not a different level; anything else is unknown.
-  const lvl = level.trim().toLowerCase();
-  if (!(LOG_LEVELS as readonly string[]).includes(lvl)) {
+  const lvl = normaliseLogLevel(level);
+  if (lvl === null) {
     return { error: `Invalid level '${level}': expected one of ${LOG_LEVELS.join(', ')}` };
   }
 
@@ -49,7 +51,7 @@ export function validateClientLog(body: unknown): ClientLogResult {
     return { error: 'source must be 1-64 characters of letters, digits, _ . -' };
   }
 
-  return { entry: { level: lvl as LogLevel, message, source } };
+  return { entry: { level: lvl, message, source } };
 }
 
 // \r and \n would start a new line; the rest of C0 (and DEL) has no business in a log

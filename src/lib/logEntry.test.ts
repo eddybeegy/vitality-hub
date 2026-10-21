@@ -65,3 +65,17 @@ describe('validateClientLog', () => {
     expect(validateClientLog(body).error).toMatch(re);
   });
 });
+
+describe('validateClientLog — item 60', () => {
+  it.each([
+    ['DEBUG', 'debug'],
+    ['debug ', 'debug'],
+    ['\tWarn\n', 'warn'],
+  ])('stores %j as the canonical %s, so the LOG_LEVEL gate and LogsTab filter both match it', (raw, canonical) => {
+    expect(validateClientLog({ level: raw, message: 'm', source: 's' }).entry?.level).toBe(canonical);
+  });
+
+  it.each(['totally-made-up-level', 'information', 'warning', ''])('rejects the invented level %j', (raw) => {
+    expect(validateClientLog({ level: raw, message: 'm', source: 's' }).error).toMatch(/level/);
+  });
+});
