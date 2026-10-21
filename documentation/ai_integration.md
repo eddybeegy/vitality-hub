@@ -1,20 +1,25 @@
-# AI Integration
+# AI integration
 
-The application leverages the Gemini API to provide intelligent health insights and chat capabilities.
+## Providers
+Defined in `ai_providers/index.ts`:
 
-## AI Configuration
-Users can configure the AI experience in the Settings tab:
-- **AI Provider**: Select between Gemini, OpenAI, Groq, Mistral, OpenRouter, or Ollama.
-- **AI Model**: Choose from available models (e.g., `gemini-flash-latest`, `gemini-pro-latest`).
-- **AI Persona**: Defines the tone and style of AI responses (e.g., "Encouraging Coach", "Strict Analyst").
-- **AI Focus**: Defines the goal of the AI's advice (e.g., "Fat Loss", "Muscle Gain", "Body Recomposition").
-- **AI Hints**: Custom instructions to further guide the AI.
+| Id | Provider |
+| --- | --- |
+| `claude` | Anthropic Claude (`ANTHROPIC_API_KEY` or a per-user key) |
+| `gemini` | Google Gemini (`GEMINI_API_KEY` or a per-user key) |
+| `groq` | Groq |
+| `openai`, `mistral`, `openrouter`, `ollama` | OpenAI-compatible endpoints |
 
-## Prompt Engineering
-The application dynamically constructs prompts for the Gemini API by injecting:
-- User profile data (age, gender, medications).
-- Health targets.
-- Recent health metrics and meal data.
-- User-defined AI Persona, Focus, and Hints.
+Users pick a provider, model, persona, focus and free-text hints in Settings; per-provider
+keys are stored in `ai_configs`.
 
-This ensures that all AI-generated content is highly personalized and relevant to the user's current health status and goals.
+## Insights and chat
+- Daily insights are generated off-box by the **coach** agent, which reads
+  `GET /api/ai/data` and writes back through `POST /api/ai/insights` using a scoped service
+  token. `POST /api/ai/regenerate` asks coach to regenerate (signed with
+  `VITALITY_CHAT_SHARED_SECRET`, target `COACH_REGEN_URL`).
+- `GET /api/ai/insights/freshness` drives the stale-insight banner; a watchdog re-triggers
+  generation when insights are older than `INSIGHT_STALE_HOURS`.
+- `POST /api/ai/chat` forwards chat to coach (`COACH_CHAT_URL`).
+- `POST /api/ai/generate` (on-demand in-app generation) currently returns an error: that
+  feature moved to coach.

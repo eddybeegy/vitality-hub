@@ -413,3 +413,21 @@ openapi-generator-cli generate -i documentation/openapi.yaml -g typescript-axios
 ```
 
 This makes it easy to consume the Vitality Hub API from tooling, client code, or automation workflows.
+
+## Not yet in the OpenAPI contract
+
+These routes exist in `server.ts` but are missing from `openapi.yaml` / `openapi.json`
+(checked 2026-10-21). Add them to the contract when it is next regenerated.
+
+| Route | Auth | Purpose |
+| --- | --- | --- |
+| `POST /api/auth/register` | none (rate-limited) | Create an account; needs admin approval before use |
+| `GET /api/export-token` | cookie | Return the caller's Health Auto Export URL, creating a token on first use |
+| `POST /health-export` | export token | Health Auto Export push endpoint (Apple Health metrics and workouts) |
+| `GET /auth/callback/withings` | none | Withings OAuth redirect target |
+| `GET /api/export/metrics.csv` | cookie | Stream all metrics as CSV (no date range yet) |
+| `GET /api/export/workouts.csv` | cookie | Stream all workouts as CSV |
+| `GET /api/export/all.json` | cookie | Full JSON export |
+| `GET /api/ai/insights/freshness` | cookie | Insight age, drives the stale banner |
+| `POST /api/ai/regenerate` | cookie | Ask the coach agent to regenerate an insight type |
+| `POST /api/ai/chat` | cookie | Chat with the coach agent (`{ message }`, max 4000 chars) |
