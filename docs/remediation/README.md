@@ -1,13 +1,50 @@
 # Remediation coordination
 
-Two threads work this list:
+Two threads work this list. **Kieron set the split below on 2026-10-21 16:10
+(Telegram, Tier 1); it supersedes any earlier division of labour in this file.**
 
-- **cloud** — a claude.ai project session working from this repo. Self-contained
-  front-end items and the `timestamptz` migration draft. No access to the deploy
-  host, the database, or a live browser.
-- **builder** — the host/ops agent on `ser5`. Everything that needs SQL ground
-  truth, a deploy, or verification against the running app. Also merges, deploys
-  and verifies every cloud PR.
+## Ownership split (Kieron, 2026-10-21 16:10)
+
+**cloud — the claude.ai project session "Vitality Hub" — is the primary
+developer.** It owns:
+
+- All application code: `server.ts`, migration SQL, and tests.
+- Turning builder's findings into fixes. **builder does not write app code**,
+  with two exceptions — an emergency hotfix and a rollback — and must tell
+  Kieron when it uses either.
+- The feature roadmap. Once open items **50–53, 55** and cleanup **PR #22** land,
+  it builds features in this order:
+  1. HRV / resting-HR personal baselines
+  2. Estimated 1RM and PRs
+  3. Adaptive TDEE
+  4. Day tags
+  5. Phone alerts
+  6. The rest of <https://claude.ai/artifact/BvnqazRXJJYEVrVRqEHrKZ>
+
+**builder — the host/ops agent on `ser5` — is test, deploy and operations.** It
+owns:
+
+- Gating, merging, deploying and live-verifying every cloud PR
+  (`vitality-pr-watch-6c6d`, exactly as described in the Protocol below).
+- Anything needing the host: running migrations behind a backup, SQL ground
+  truth, container and `kb-health` config, secrets, restarts, rollbacks.
+- Sweeps and monitoring. **Report findings; do not fix them in code.**
+- The tracker, except the row a cloud PR names (rule 3 below is unchanged).
+
+### How builder feeds back
+
+- Review objections, gate failures, test results and live verification go as
+  **comments on the PR**. The cloud session sees those within moments; a relay
+  through Kieron on Telegram is slow and lossy.
+- A **new bug** becomes a tracker row with evidence — the query and its output,
+  timings, a described screenshot — and the cloud session picks it up from
+  there. builder does not open a fix branch for it.
+- Say plainly what was verified and what could not be. A partial verification
+  reported as complete is worse than an honest gap.
+
+Everything else in this file (draft-claim protocol, one PR per item, the five
+gates, the channel-of-record rule) is unchanged. **PR #22 fixes the two known
+`tsc` errors, so the gate baseline becomes 0 errors once it lands.**
 
 ## Files
 
@@ -70,7 +107,8 @@ an extract if an item needs it.
 4. **PR body states** what changed, what a reviewer should see on screen or in the
    response body, and what you could not check.
 5. builder runs five gates before merging: the diff stays in scope for the named
-   item; `npx tsc --noEmit` adds no error beyond the two known pre-existing ones;
+   item; `npx tsc --noEmit` adds no error beyond the two known pre-existing ones
+   (**zero** once PR #22 lands);
    `npx vitest run` is green (baseline 2026-10-21: 5 files, 60 tests, 1.3 s — pass
    no `--reporter=basic`, it was removed in vitest 4); no DELETE of `apple_health`
    nutrition rows is reintroduced; no blanket `AT TIME ZONE` is applied to
