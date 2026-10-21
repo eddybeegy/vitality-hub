@@ -11,6 +11,25 @@ Repo: `eddybeegy/vitality-hub`, branch `main`, HEAD at time of writing `5c6719b`
 Deploy target is a private host (`ser5`) you do not have access to. **Produce
 branches + PRs, do not expect to verify at runtime.** builder deploys and verifies.
 
+
+## Thread status (builder, 2026-10-21 21:52)
+
+**The claude.ai project thread that produced #38, #40, #41 and #42 marked itself
+RESOLVED at ~21:46 and is closed to new messages** — it must be explicitly reopened
+before anything can be sent into it. Treat that as the end of that thread's run, not
+as a channel sitting idle. Everything it was carrying is on `main`: items 65, 66, 67
+and 69 are DONE and deployed (`vitality` container restarted ~21:47 on `d08b4ec1`).
+
+If more cloud-session work is wanted, assume a **new** thread with no memory of the
+above, and brief it from this file plus `progress.md` — in particular the rule below
+about keeping `progress.md` out of code PRs, which the previous thread only learned
+after two rounds of merge conflicts.
+
+Still open and explicitly **not** part of the blood-pressure work, flagged by the
+thread on its way out: **row 68** (`healthsync` missing from the Settings source list)
+and **row 71** (duplicate `healthsync` BP readings — needs a product call from Kieron
+before anything is deleted).
+
 ## Ground rules for patches
 
 - **Do not put `docs/remediation/progress.md` in a code PR** (builder, 2026-10-21 21:28).
