@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import path from "path";
 import { parse } from "csv-parse/sync";
 import { DataSourceModule } from "./types";
+import { utcDayRange } from "./timeRange";
 
 export const CronometerModule: DataSourceModule = {
   id: "cronometer",
@@ -140,7 +141,7 @@ export const CronometerModule: DataSourceModule = {
             timestamp, source
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'cronometer')
         `);
-        const deleteMetricsStmt = db.prepare("DELETE FROM metrics WHERE user_id = ? AND source = 'cronometer' AND CAST(timestamp AS TEXT) LIKE ?");
+        const deleteMetricsStmt = db.prepare("DELETE FROM metrics WHERE user_id = ? AND source = 'cronometer' AND timestamp >= ? AND timestamp < ?");
         const deleteMealsStmt = db.prepare("DELETE FROM meal_items WHERE user_id = ? AND source = 'cronometer' AND CAST(timestamp AS TEXT) LIKE ?");
 
         const uniqueDays = Array.from(new Set(records.map((r: any) => {
@@ -159,7 +160,8 @@ export const CronometerModule: DataSourceModule = {
         let count = 0;
         await db.transaction(async () => {
           for (const day of uniqueDays) {
-            await deleteMetricsStmt.run(userId, `${day}%`);
+            const range = utcDayRange(day);
+            if (range) await deleteMetricsStmt.run(userId, ...range);
             await deleteMealsStmt.run(userId, `${day}%`);
           }
 

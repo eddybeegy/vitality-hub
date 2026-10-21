@@ -1,5 +1,6 @@
 import axios from "axios";
 import { DataSourceModule } from "./types";
+import { utcDayRange } from "./timeRange";
 
 export const HevyModule: DataSourceModule = {
   id: "hevy",
@@ -55,14 +56,16 @@ export const HevyModule: DataSourceModule = {
         return total > 0 ? total : null;
       };
       
-      // 2026-10-18: store UTC-naive, matching every other sync module and the
-      // `timestamp without time zone` column. This used to write user-local
-      // wall-clock via Intl, which put Hevy rows 1h ahead of reality during BST
-      // and broke every cross-source comparison (see memory/infra/kb-stack.md).
+      // 2026-10-18: store UTC, matching every other sync module. This used to write
+      // user-local wall-clock via Intl, which put Hevy rows 1h ahead of reality during
+      // BST and broke every cross-source comparison (see memory/infra/kb-stack.md).
+      // Keeps the `Z` (sweep item 13): a naive column drops it either way, but a
+      // timestamptz column reads a string without one in the session zone
+      // (Europe/London), which would put Hevy rows an hour early under BST.
       const toStorageTimestamp = (isoStr: string): string => {
         const d = new Date(isoStr);
         if (isNaN(d.getTime())) return isoStr;
-        return d.toISOString().slice(0, 19);
+        return d.toISOString();
       };
 
       const user = await db.prepare("SELECT sync_history_days FROM users WHERE id = ?").get(userId) as any;
@@ -227,12 +230,12 @@ export const HevyModule: DataSourceModule = {
         }
 
         // Delete existing Hevy data for the days being imported to ensure Hevy is the source of truth
-        const deleteWorkoutsByDayStmt = db.prepare("DELETE FROM workouts WHERE user_id = ? AND source = 'hevy' AND CAST(timestamp AS TEXT) LIKE ?");
+        const deleteWorkoutsByDayStmt = db.prepare("DELETE FROM workouts WHERE user_id = ? AND source = 'hevy' AND timestamp >= ? AND timestamp < ?");
         const deleteExercisesByDayStmt = db.prepare(`
           DELETE FROM workout_exercises 
           WHERE workout_id IN (
             SELECT id FROM workouts 
-            WHERE user_id = ? AND source = 'hevy' AND CAST(timestamp AS TEXT) LIKE ?
+            WHERE user_id = ? AND source = 'hevy' AND timestamp >= ? AND timestamp < ?
           )
         `);
         const deleteSetsByDayStmt = db.prepare(`
@@ -241,16 +244,17 @@ export const HevyModule: DataSourceModule = {
             SELECT id FROM workout_exercises 
             WHERE workout_id IN (
               SELECT id FROM workouts 
-              WHERE user_id = ? AND source = 'hevy' AND CAST(timestamp AS TEXT) LIKE ?
+              WHERE user_id = ? AND source = 'hevy' AND timestamp >= ? AND timestamp < ?
             )
           )
         `);
 
         for (const day of uniqueDays) {
-          const pattern = `${day}%`;
-          await deleteSetsByDayStmt.run(userId, pattern);
-          await deleteExercisesByDayStmt.run(userId, pattern);
-          await deleteWorkoutsByDayStmt.run(userId, pattern);
+          const range = utcDayRange(day);
+          if (!range) continue;
+          await deleteSetsByDayStmt.run(userId, ...range);
+          await deleteExercisesByDayStmt.run(userId, ...range);
+          await deleteWorkoutsByDayStmt.run(userId, ...range);
         }
 
         for (const w of allWorkouts) {

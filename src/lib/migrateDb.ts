@@ -100,6 +100,14 @@ async function migrate() {
                             if (val.includes('null') || val.includes('undefined')) return null;
                             // If it doesn't start with a date pattern, it's likely garbage
                             if (!/^\d{4}-\d{2}-\d{2}/.test(val)) return null;
+                            // SQLite holds UTC (toISOString, CURRENT_TIMESTAMP). A zoneless
+                            // string sent to a timestamptz column would be read in the
+                            // session zone instead, so say UTC explicitly (sweep item 13).
+                            if (pgType === 'timestamp with time zone') {
+                                const v = val.trim();
+                                if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return `${v}T00:00:00Z`;
+                                if (!/\d{2}:\d{2}(:\d{2}(\.\d+)?)?\s*(Z|[+-]\d{2}(:?\d{2})?)$/i.test(v)) return `${v}Z`;
+                            }
                         }
                     }
 

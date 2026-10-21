@@ -50,6 +50,8 @@ export class DatabaseWrapper {
       text = text.replace(/replace\(timestamp/gi, "replace(CAST(timestamp AS TEXT)");
       text = text.replace(/substr\(timestamp/gi, "substr(CAST(timestamp AS TEXT)");
     } else {
+      // MySQL has no zone-aware column type; keep the DATETIME these columns always had.
+      text = text.replace(/\bTIMESTAMPTZ\b/g, 'DATETIME');
       text = text.replace(/DATETIME/g, 'DATETIME');
     }
 
