@@ -77,7 +77,15 @@ export const HealthChart = ({
           else if (period === '1y') startDate.setFullYear(now.getFullYear() - 1);
           else startDate.setFullYear(now.getFullYear() - 10); // All time
 
-          const response = await fetch(`${url}&granularity=${granularity}&aggregation=${aggregation}&startDate=${startDate.toISOString()}`);
+          // Always request DAY granularity, regardless of the toggle. The server applies
+          // `aggregation` to collapse intraday samples into a day -- that is stage one and
+          // it is correct. Asking it for week/month made it apply the SAME aggregation a
+          // second time to collapse days into the coarser bucket, which for
+          // `aggregation="sum"` produced a weekly/monthly TOTAL still labelled with the
+          // daily unit ("80.5 hrs" of sleep for a month). It also destroyed the per-day
+          // values this component needs to do stage two itself. The day->week/month
+          // collapse now happens in `processedData` below. See sweep item 9.
+          const response = await fetch(`${url}&granularity=day&aggregation=${aggregation}&startDate=${startDate.toISOString()}`);
           const result = await response.json();
           setFetchedData(result);
         } catch (error) {
@@ -88,7 +96,10 @@ export const HealthChart = ({
       };
       fetchData();
     }
-  }, [url, granularity, aggregation, period]);
+    // `granularity` is deliberately NOT a dependency any more: the request is always
+    // day-granularity, so toggling DAY/WEEK/MONTH re-buckets the data we already have
+    // instead of refetching identical rows.
+  }, [url, aggregation, period]);
 
   const isMini = variant === 'mini';
   const isWeightBased = dataKey === 'weight' || dataKey === 'muscle_mass' || dataKey === 'bone_mass' || dataKey === 'lean_body_mass' || dataKey === 'fat_mass';
@@ -142,20 +153,18 @@ export const HealthChart = ({
       day: '2-digit'
     }).format(cutoff);
 
-    // If data is already processed (from server), just filter by period and return
-    if (url) {
-      return chartData
-        .filter(item => {
-          if (!item.date) return false;
-          const isDateOnly = typeof item.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.date);
-          if (isDateOnly) return item.date >= cutoffDateOnly;
-          
-          const d = new Date(item.date);
-          return !isNaN(d.getTime()) && d >= cutoff;
-        })
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    }
-    
+    // NO early return for `url` data any more. This used to be:
+    //   if (url) return chartData.filter(byPeriod).sort(byDate);
+    // i.e. server-fetched rows skipped the client-side grouping below entirely, and the
+    // DAY/WEEK/MONTH toggle only had an effect because it was passed to the server in the
+    // request (`&granularity=${granularity}`) -- which is the double-aggregation bug of
+    // sweep item 9. Now that the request is pinned to `granularity=day`, keeping this
+    // early return would leave every url-backed chart (Active Energy, Calorie Intake, all
+    // of ActivityTab) permanently stuck on day buckets with the toggle doing nothing.
+    // So url rows fall through to the same stage-two grouping as `data` rows. The filter
+    // and sort below are identical to the ones this block used, so nothing else changes.
+    // Rows arrive as one-per-day with a date-only `date`, which the grouping handles via
+    // its `isDateOnly` branches.
     // Filter out invalid dates and sort
     const validData = chartData.filter(item => {
       if (!item.date) return false;
@@ -264,8 +273,21 @@ export const HealthChart = ({
         const result: any = { date: g.date };
         allKeys.forEach(k => {
           if (g.counts[k] > 0) {
+            // Stage two. Each `item` fed into `grouped` is one DAY (the server now always
+            // returns day granularity), so at `granularity === 'day'` every bucket holds
+            // exactly one value and all four branches agree.
+            //
+            // For coarser buckets, `sum` becomes the MEAN of the daily values, not their
+            // total. That is the fix for sweep item 9: a weekly/monthly total carries a
+            // different unit from the daily one it is labelled with, and it made the
+            // card's "latest" and "avg" incomparable -- "latest" is the current, PARTIAL
+            // bucket, so WEEK showed a one-day part-total (6.1 hrs) next to an average of
+            // whole-week totals (32.2 hrs). Averaging daily values keeps the unit honest,
+            // makes DAY/WEEK/MONTH directly comparable, and makes a partial bucket a
+            // valid daily average rather than a meaningless fragment. `max`/`min` stay as
+            // the extreme daily value in the bucket, which is already the useful reading.
             let val: number;
-            if (aggregation === 'sum') val = g.sums[k];
+            if (aggregation === 'sum') val = granularity === 'day' ? g.sums[k] : g.sums[k] / g.counts[k];
             else if (aggregation === 'max') val = g.maxes[k];
             else if (aggregation === 'min') val = g.mins[k];
             else val = g.sums[k] / g.counts[k];

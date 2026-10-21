@@ -2,6 +2,27 @@ import axios from "axios";
 import qs from "qs";
 import { DataSourceModule } from "./types";
 
+export function buildWithingsTokenRequestParams(clientId: string, clientSecret: string, refreshToken: string) {
+  return {
+    action: 'requesttoken',
+    grant_type: 'refresh_token',
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+  };
+}
+
+export function extractWithingsTokens(payload: any, previousRefreshToken?: string) {
+  const body = payload?.body || {};
+  const accessToken = body.access_token;
+  const refreshToken = body.refresh_token || previousRefreshToken || '';
+
+  return {
+    access_token: accessToken,
+    refresh_token: refreshToken,
+  };
+}
+
 export const WithingsModule: DataSourceModule = {
   id: "withings",
   name: "Withings",
@@ -36,34 +57,66 @@ export const WithingsModule: DataSourceModule = {
       return { success: false, message: "Withings credentials missing" };
     }
 
-    const refreshWithingsToken = async () => {
+    const doRefreshWithingsToken = async () => {
       try {
         logEvent('info', 'Attempting Withings token refresh...', 'withings');
         if (!clientId || !clientSecret || !user.withings_refresh_token) {
            logEvent('error', `Token refresh failed: Missing credentials or refresh token. CID: ${!!clientId}, CS: ${!!clientSecret}, RT: ${!!user.withings_refresh_token}`, 'withings');
            return null;
         }
-        const response = await axios.post("https://wbsapi.withings.net/v2/oauth2", qs.stringify({
-          action: "requesttoken",
-          grant_type: "refresh_token",
-          client_id: clientId,
-          client_secret: clientSecret,
-          refresh_token: user.withings_refresh_token
-        }));
+        const response = await axios.post(
+          "https://wbsapi.withings.net/v2/oauth2",
+          null,
+          {
+            params: buildWithingsTokenRequestParams(clientId, clientSecret, user.withings_refresh_token),
+            timeout: 15000,
+          }
+        );
 
         if (response.data.status === 0) {
-          const { access_token, refresh_token } = response.data.body;
+          const { access_token, refresh_token } = extractWithingsTokens(response.data, user.withings_refresh_token);
+          if (!access_token) {
+            logEvent('error', 'Withings token refresh response missing access_token', 'withings');
+            return null;
+          }
           await db.prepare("UPDATE users SET withings_token = ?, withings_refresh_token = ? WHERE id = ?").run(access_token, refresh_token, userId);
           logEvent('info', 'Withings token refreshed successfully', 'withings');
           return access_token;
         } else {
-          logEvent('error', `Withings token refresh API Error: ${JSON.stringify(response.data)}`, 'withings');
+          // Withings' refresh grant only fails this way when the refresh_token
+          // itself is dead (revoked/rotated-out/expired) — unlike the measure
+          // endpoints' 401s, there's no transient variant here. Retrying an
+          // already-rejected refresh_token every hour forever just repeats the
+          // same rejection, so clear the stored tokens once: this flips the
+          // withings_connected flag /api/settings derives (server.ts) to false,
+          // surfacing "reconnect needed" in Settings instead of silently
+          // failing in the logs indefinitely.
+          const apiError = String(response.data?.error || '');
+          if (/invalid refresh_token/i.test(apiError)) {
+            await db.prepare("UPDATE users SET withings_token = NULL, withings_refresh_token = NULL WHERE id = ?").run(userId);
+            logEvent('error', `Withings refresh_token rejected as invalid — cleared stored tokens, reconnect required: ${JSON.stringify(response.data)}`, 'withings');
+          } else {
+            logEvent('error', `Withings token refresh API Error: ${JSON.stringify(response.data)}`, 'withings');
+          }
           return null;
         }
       } catch (e: any) {
         logEvent('error', `Withings token refresh exception: ${e.message}`, 'withings');
         return null;
       }
+    };
+    // Measures/workouts/activity/sleep are fetched in separate sections below,
+    // each independently retrying on a 401. Memoize into one shared in-flight
+    // promise so a bad/expired refresh token is only ever attempted once per
+    // sync() run instead of once per section (previously caused up to 4
+    // back-to-back refresh calls with the same token, tripping Withings' own
+    // "Same arguments in less than 10 seconds" rate limit).
+    let refreshWithingsTokenPromise: ReturnType<typeof doRefreshWithingsToken> | null = null;
+    const refreshWithingsToken = () => {
+      if (!refreshWithingsTokenPromise) {
+        refreshWithingsTokenPromise = doRefreshWithingsToken();
+      }
+      return refreshWithingsTokenPromise;
     };
 
     try {

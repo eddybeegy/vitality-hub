@@ -12,6 +12,16 @@ interface SummaryData {
   exercises: any[];
   sets: any[];
   syncLogs: any[];
+  syncIssues: Record<string, { message: string; level: string; timestamp: string }>;
+  // Same issues, re-keyed by module id via the server's MODULE_SOURCES map, because
+  // logs.source and module.id are not the same namespace. See SyncHealthWidget.
+  syncIssuesByModule?: Record<string, { message: string; level: string; timestamp: string; source: string }>;
+  // Newest actual reading per source / per module, computed server-side from the raw
+  // tables. Optional because a cached payload from before this shipped will not have it.
+  dataFreshness?: {
+    bySource: Record<string, string>;
+    byModule: Record<string, { lastReading: string | null; sources: string[] }>;
+  };
 }
 
 interface HealthState {
@@ -48,7 +58,7 @@ interface HealthState {
 }
 
 export const useHealthStore = create<HealthState>((set, get) => ({
-  summaryData: { metrics: [], latestMetrics: [], workouts: [], routines: [], routineExercises: [], exercises: [], sets: [], syncLogs: [] },
+  summaryData: { metrics: [], latestMetrics: [], workouts: [], routines: [], routineExercises: [], exercises: [], sets: [], syncLogs: [], syncIssues: {}, syncIssuesByModule: {} },
   isSyncing: false,
   isInitialLoading: true,
   lastAppleHealthSync: null,

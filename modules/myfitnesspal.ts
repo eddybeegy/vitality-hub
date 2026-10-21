@@ -26,8 +26,8 @@ export const MyFitnessPalModule: DataSourceModule = {
   },
   purge: async (userId, db, userSettings) => {
     try {
-      db.prepare("DELETE FROM metrics WHERE user_id = ? AND source = 'myfitnesspal'").run(userId);
-      db.prepare("DELETE FROM meal_items WHERE user_id = ? AND source = 'myfitnesspal'").run(userId);
+      await db.prepare("DELETE FROM metrics WHERE user_id = ? AND source = 'myfitnesspal'").run(userId);
+      await db.prepare("DELETE FROM meal_items WHERE user_id = ? AND source = 'myfitnesspal'").run(userId);
       return { success: true, message: "MyFitnessPal data purged" };
     } catch (error: any) {
       return { success: false, message: error.message };

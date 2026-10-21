@@ -241,6 +241,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       if (res.ok) {
         set({ settings: trimmedSettings });
         useUIStore.getState().showToast("Settings saved successfully!", "success");
+      } else if (res.status === 401) {
+        useUIStore.getState().showToast("Your session has expired — please log in again.", "error");
+      } else {
+        let message = "Failed to save settings.";
+        try {
+          const body = await res.json();
+          if (body?.error) message = body.error;
+        } catch {
+          // non-JSON error body, fall back to the default message
+        }
+        useUIStore.getState().showToast(message, "error");
       }
     } catch (err) {
       useUIStore.getState().showToast("Failed to save settings.", "error");
@@ -260,6 +271,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       });
       if (res.ok) {
         useUIStore.getState().showToast("Targets saved successfully!", "success");
+      } else if (res.status === 401) {
+        useUIStore.getState().showToast("Your session has expired — please log in again.", "error");
+      } else {
+        let message = "Failed to save targets.";
+        try {
+          const body = await res.json();
+          if (body?.error) message = body.error;
+        } catch {
+          // non-JSON error body, fall back to the default message
+        }
+        useUIStore.getState().showToast(message, "error");
       }
     } catch (err) {
       useUIStore.getState().showToast("Failed to save targets.", "error");

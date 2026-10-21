@@ -83,14 +83,15 @@ export const ActivityTab = React.memo(({
           preferredUnits={settings?.preferred_units}
           referenceLines={[
             { value: 60, label: 'Low', color: '#3b82f6' },
-            { value: 100, label: 'High', color: '#ef4444' }
+            { value: 100, label: 'High', color: '#ef4444' },
+            ...(getTargetValue('resting_heart_rate') ? [{ value: getTargetValue('resting_heart_rate'), label: 'Target', color: '#10b981' }] : [])
           ]}
           sourceName="Apple Health"
           lastSyncStr={lastSynced}
         />
-        <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
-          data={getChartData('hrv', 'ms')} 
-          title="Heart Rate Variability (HRV)" 
+        <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any}
+          data={getChartData('hrv', 'ms')}
+          title="Heart Rate Variability (HRV)"
           dataKey="ms" 
           color="#10b981" 
           type="line" 
@@ -238,15 +239,16 @@ export const ActivityTab = React.memo(({
           />
           <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
             url="/api/metrics/aggregated?type=oxygen_saturation" 
-            title="Blood Oxygen" 
-            dataKey="oxygen_saturation" 
-            color="#3b82f6" 
-            type="line" 
+            title="Blood Oxygen"
+            dataKey="oxygen_saturation"
+            color="#3b82f6"
+            type="line"
             unit="%"
             variant="mini"
             preferredUnits={settings?.preferred_units}
             sourceName="Apple Health"
             lastSyncStr={lastSynced}
+            referenceLines={getTargetValue('blood_oxygen_saturation') ? [{ value: getTargetValue('blood_oxygen_saturation'), label: 'Target', color: '#ef4444' }] : undefined}
           />
           <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
             url="/api/metrics/aggregated?type=respiratory_rate" 

@@ -1,9 +1,16 @@
 import React from 'react';
-import { motion } from 'motion/react';
-import { Activity, Zap, History, Info } from 'lucide-react';
+import { History, Info } from 'lucide-react';
 import { calculateReadinessScore } from '../lib/readiness';
 import { StandardizedMetric } from '../services/healthDataService';
 import { cn } from '../lib/utils';
+import { ProgressRing } from './ui/ProgressRing';
+
+const getReadinessLabel = (score: number) => {
+  if (score > 80) return 'Ready';
+  if (score > 60) return 'Good to go';
+  if (score > 40) return 'Train with care';
+  return 'Prioritize rest';
+};
 
 interface ReadinessCardProps {
   metrics: StandardizedMetric[];
@@ -47,32 +54,20 @@ export const ReadinessCard: React.FC<ReadinessCardProps> = ({ metrics, targets, 
         getScoreBg(score)
       )} />
 
-      <div className="flex justify-between items-start mb-6">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 bg-zinc-100 dark:bg-zinc-800 rounded-2xl">
-            <Zap className={cn("transition-transform duration-500 group-hover:scale-110", getScoreColor(score))} size={20} fill="currentColor" fillOpacity={0.2} />
-          </div>
-          <div>
-            <h3 className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest italic font-serif">Today's Pulse</h3>
-            <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100">Readiness Score</p>
-          </div>
-        </div>
-        <div className="flex flex-col items-end">
-            <span className={cn("text-4xl font-black tracking-tighter font-mono leading-none", getScoreColor(score))}>
-                {score}
-            </span>
-            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-tighter mt-1">/ 100</span>
-        </div>
-      </div>
-
-      {/* Progress Bar */}
-      <div className="w-full h-1.5 bg-zinc-100 dark:bg-zinc-800 rounded-full mb-6 overflow-hidden">
-        <motion.div 
-          initial={{ width: 0 }}
-          animate={{ width: `${score}%` }}
-          transition={{ duration: 1.5, ease: "circOut" }}
-          className={cn("h-full rounded-full shadow-[0_0_12px_rgba(16,185,129,0.3)]", getScoreBg(score))}
+      <div className="flex items-start gap-4 mb-6">
+        <ProgressRing
+          radius={40}
+          stroke={7}
+          progress={score}
+          color={score > 80 ? '#10b981' : score > 60 ? '#f59e0b' : score > 40 ? '#f59e0b' : '#f43f5e'}
+          value={`${score}%`}
+          label="Ready"
         />
+        <div className="pt-1">
+          <h3 className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest italic font-serif mb-1">Today's Pulse</h3>
+          <p className={cn("text-lg font-bold leading-tight", getScoreColor(score))}>{getReadinessLabel(score)}</p>
+          <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1">Readiness score, based on HRV, sleep &amp; yesterday's strain</p>
+        </div>
       </div>
 
       <div className="space-y-4 flex-grow">

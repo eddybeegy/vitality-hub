@@ -25,32 +25,47 @@ export const HevyModule: DataSourceModule = {
         const n = Number(v);
         return isNaN(n) ? 0 : n;
       };
-      
-      const userTimezone = userSettings?.timezone || 'UTC';
-      
-      // Helper to convert ISO timestamp to local wall-clock time for storage
-      const toLocalTimestamp = (isoStr: string): string => {
-        try {
-          const date = new Date(isoStr);
-          const formatter = new Intl.DateTimeFormat('en-CA', {
-            timeZone: userTimezone,
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: false
-          });
-          const parts = formatter.format(date);
-          const [datePart, timePart] = parts.split(', ');
-          return `${datePart}T${timePart}`;
-        } catch (e) {
-          return new Date(isoStr).toISOString();
+
+      // 2026-10-18: `duration` was being written as 0 for every Hevy workout.
+      // The cause was `num(w.duration_seconds)` below — the Hevy v1 workout object
+      // has no `duration_seconds` field at all (its keys are created_at,
+      // description, end_time, exercises, id, routine_id, start_time, title,
+      // updated_at), so num(undefined) returned 0 and all 151 rows stored 0
+      // minutes. Derive it from start/end instead, keeping duration_seconds as a
+      // fallback in case Hevy ever adds it. Whole minutes, to match the column.
+      const workoutDurationMin = (w: any) => {
+        const start = Date.parse(w.start_time);
+        const end = Date.parse(w.end_time);
+        if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+          return Math.round((end - start) / 60000);
         }
+        const secs = num(w.duration_seconds);
+        return secs > 0 ? Math.round(secs / 60) : 0;
       };
 
-      const user = db.prepare("SELECT sync_history_days FROM users WHERE id = ?").get(userId) as any;
+      // Hevy exposes no workout-level distance, but distance_meters is present on
+      // individual sets for cardio work. Sum them so workouts.distance is
+      // populated for those sessions; null rather than 0 for pure strength
+      // sessions, so "no distance" stays distinguishable from "zero distance".
+      const workoutDistanceM = (w: any) => {
+        let total = 0;
+        for (const ex of w.exercises || []) {
+          for (const st of ex.sets || []) total += num(st.distance_meters);
+        }
+        return total > 0 ? total : null;
+      };
+      
+      // 2026-10-18: store UTC-naive, matching every other sync module and the
+      // `timestamp without time zone` column. This used to write user-local
+      // wall-clock via Intl, which put Hevy rows 1h ahead of reality during BST
+      // and broke every cross-source comparison (see memory/infra/kb-stack.md).
+      const toStorageTimestamp = (isoStr: string): string => {
+        const d = new Date(isoStr);
+        if (isNaN(d.getTime())) return isoStr;
+        return d.toISOString().slice(0, 19);
+      };
+
+      const user = await db.prepare("SELECT sync_history_days FROM users WHERE id = ?").get(userId) as any;
       const historyDays = user?.sync_history_days || 90;
       const cutoffDate = new Date();
       cutoffDate.setDate(cutoffDate.getDate() - historyDays);
@@ -78,6 +93,80 @@ export const HevyModule: DataSourceModule = {
         folderMap.set("2315551", "Archive");
       }
       
+      // Sync Exercise Templates (muscle group mapping, matched by exercise title)
+      const exerciseTemplateMap = new Map<string, { primary: string; secondary: string[] }>();
+      try {
+        let templatePage = 1;
+        let keepFetchingTemplates = true;
+
+        while (keepFetchingTemplates && templatePage <= 20) {
+          const templatesRes = await axios.get("https://api.hevyapp.com/v1/exercise_templates", {
+            headers: {
+              "api-key": apiKey,
+              "accept": "application/json"
+            },
+            params: { page: templatePage, pageSize: 100 }
+          });
+
+          const fetchedTemplates = templatesRes.data.exercise_templates;
+          if (!fetchedTemplates || fetchedTemplates.length === 0) {
+            keepFetchingTemplates = false;
+            break;
+          }
+
+          for (const t of fetchedTemplates) {
+            if (t.title && t.primary_muscle_group) {
+              exerciseTemplateMap.set(String(t.title).toLowerCase().trim(), {
+                primary: t.primary_muscle_group,
+                secondary: Array.isArray(t.secondary_muscle_groups) ? t.secondary_muscle_groups : []
+              });
+            }
+          }
+
+          if (fetchedTemplates.length < 100) {
+            keepFetchingTemplates = false;
+          }
+          templatePage++;
+        }
+        logEvent('debug', `Hevy API returned muscle group data for ${exerciseTemplateMap.size} exercise templates`, 'hevy');
+      } catch (templateErr: any) {
+        logEvent('warn', `Hevy exercise templates endpoint failed: ${templateErr.message}. Muscle group data will be unavailable this sync.`, 'hevy');
+      }
+
+      const getMuscleGroups = (title: string): { primary: string | null; secondary: string | null } => {
+        const t = exerciseTemplateMap.get((title || '').toLowerCase().trim());
+        return { primary: t?.primary || null, secondary: t && t.secondary.length > 0 ? t.secondary.join(',') : null };
+      };
+
+      // Backfill muscle groups onto exercises synced before this feature existed
+      // (only new/updated workouts get muscle-group data during the loop below).
+      if (exerciseTemplateMap.size > 0) {
+        try {
+          const staleTitles = await db.prepare(
+            `SELECT DISTINCT we.exercise_title AS title FROM workout_exercises we
+             JOIN workouts w ON w.id = we.workout_id
+             WHERE w.user_id = ? AND we.primary_muscle_group IS NULL`
+          ).all(userId) as { title: string }[];
+
+          let backfilled = 0;
+          for (const row of staleTitles) {
+            const mg = getMuscleGroups(row.title);
+            if (!mg.primary) continue;
+            const res = await db.prepare(
+              `UPDATE workout_exercises SET primary_muscle_group = ?, secondary_muscle_groups = ?
+               WHERE exercise_title = ? AND primary_muscle_group IS NULL
+               AND workout_id IN (SELECT id FROM workouts WHERE user_id = ?)`
+            ).run(mg.primary, mg.secondary, row.title, userId);
+            backfilled += num((res as any)?.changes);
+          }
+          if (backfilled > 0) {
+            logEvent('info', `Backfilled muscle group data on ${backfilled} previously-synced exercises`, 'hevy');
+          }
+        } catch (backfillErr: any) {
+          logEvent('warn', `Muscle group backfill failed: ${backfillErr.message}`, 'hevy');
+        }
+      }
+
       // Sync Workouts
       let allWorkouts: any[] = [];
       let page = 1;
@@ -209,8 +298,9 @@ export const HevyModule: DataSourceModule = {
             AND timestamp BETWEEN ? AND ?
           `).run(userId, startTimeMin, startTimeMax);
 
-          const sqlInsert = "INSERT INTO workouts (user_id, name, duration, volume, timestamp, source, external_id, routine_external_id) VALUES (?, ?, ?, ?, ?, 'hevy', ?, ?)" + (db.type === 'postgres' ? " RETURNING id" : "");
-          const res = await db.prepare(sqlInsert).run(userId, w.title, Math.round(num(w.duration_seconds) / 60), num(volume), toLocalTimestamp(w.start_time), w.id, w.routine_id ? String(w.routine_id) : null);
+          const sqlInsert = "INSERT INTO workouts (user_id, name, duration, volume, timestamp, source, external_id, routine_external_id, distance, distance_unit) VALUES (?, ?, ?, ?, ?, 'hevy', ?, ?, ?, ?)" + (db.type === 'postgres' ? " RETURNING id" : "");
+          const distanceM = workoutDistanceM(w);
+          const res = await db.prepare(sqlInsert).run(userId, w.title, workoutDurationMin(w), num(volume), toStorageTimestamp(w.start_time), w.id, w.routine_id ? String(w.routine_id) : null, distanceM, distanceM === null ? null : 'm');
           const workoutId = res.lastInsertRowid as number;
           workoutsCount++;
 
@@ -240,8 +330,9 @@ export const HevyModule: DataSourceModule = {
               exerciseType = 'cardio';
             }
 
-            const sqlExInsert = "INSERT INTO workout_exercises (workout_id, exercise_title, sets_count, best_weight, best_reps, best_distance, best_time, best_steps, best_calories, best_avg_hr, best_max_hr, exercise_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + (db.type === 'postgres' ? " RETURNING id" : "");
-            const exRes = await db.prepare(sqlExInsert).run(workoutId, ex.title, num(ex.sets.length), num(bestWeight), num(bestReps), num(bestDist), num(bestTime), num(bestSteps), num(bestCals), num(bestAvgHr), num(bestMaxHr), exerciseType);
+            const muscleGroups = getMuscleGroups(ex.title);
+            const sqlExInsert = "INSERT INTO workout_exercises (workout_id, exercise_title, sets_count, best_weight, best_reps, best_distance, best_time, best_steps, best_calories, best_avg_hr, best_max_hr, exercise_type, primary_muscle_group, secondary_muscle_groups) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + (db.type === 'postgres' ? " RETURNING id" : "");
+            const exRes = await db.prepare(sqlExInsert).run(workoutId, ex.title, num(ex.sets.length), num(bestWeight), num(bestReps), num(bestDist), num(bestTime), num(bestSteps), num(bestCals), num(bestAvgHr), num(bestMaxHr), exerciseType, muscleGroups.primary, muscleGroups.secondary);
             const exerciseId = exRes.lastInsertRowid as number;
 
             for (let idx = 0; idx < ex.sets.length; idx++) {

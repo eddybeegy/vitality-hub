@@ -14,3 +14,7 @@ logs/
 gha-creds-*.json
 backups/
 .claude/
+
+# deploy-convention timestamped backups (see CLAUDE.md deploy notes)
+*.bak-*
+*.bak

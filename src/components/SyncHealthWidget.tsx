@@ -4,6 +4,14 @@ import { useHealthStore } from '../store/useHealthStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { parseUTCDate } from '../lib/utils';
 
+// Duplicated from App.tsx's handleConnectWithings rather than threading a prop
+// through Dashboard for one widget — same self-contained popup OAuth flow.
+const handleReconnectWithings = async () => {
+  const res = await fetch('/api/auth/withings/url');
+  const { url } = await res.json();
+  window.open(url, 'withings_oauth', 'width=600,height=700');
+};
+
 export const SyncHealthWidget = () => {
   const { modules, summaryData } = useHealthStore();
   const timezone = useSettingsStore((state) => state.settings.timezone);
@@ -38,17 +46,30 @@ export const SyncHealthWidget = () => {
     }
   };
 
-  const getSyncStatus = (moduleId: string) => {
+  // "Data Freshness" has to mean the newest READING. This used to read
+  // summaryData.syncLogs, which the server builds as MAX(timestamp) FROM logs WHERE
+  // level='info' GROUP BY source and hardcodes to status 'success' -- so a sync that ran
+  // and imported nothing still showed as fresh, and every module read the same
+  // minutes-ago timestamp regardless of whether any data had arrived.
+  //
+  // Thresholds are deliberately looser than the old 4h/12h: those were sensible for "did
+  // the sync run" but wrong for readings, since daily-granularity sources (weight,
+  // nutrition) legitimately produce nothing for most of the day. Tunable.
+  const getDataStatus = (moduleId: string) => {
+    const reading = summaryData.dataFreshness?.byModule?.[moduleId]?.lastReading;
+    if (!reading) return { status: 'unknown', time: 'Never' };
+
+    const diffHours = (Date.now() - parseUTCDate(reading).getTime()) / (1000 * 60 * 60);
+    if (diffHours < 24) return { status: 'good', time: reading };
+    if (diffHours < 72) return { status: 'warning', time: reading };
+    return { status: 'error', time: reading };
+  };
+
+  // Kept as a secondary line: "we tried, but nothing came back" is a different and still
+  // useful signal from "the data is old".
+  const getLastSync = (moduleId: string) => {
     const log = summaryData.syncLogs?.find(l => l.module === moduleId);
-    if (!log) return { status: 'unknown', time: 'Never' };
-    
-    const timestamp = parseUTCDate(log.timestamp).getTime();
-    const now = Date.now();
-    const diffHours = (now - timestamp) / (1000 * 60 * 60);
-    
-    if (diffHours < 4) return { status: 'good', time: log.timestamp };
-    if (diffHours < 12) return { status: 'warning', time: log.timestamp };
-    return { status: 'error', time: log.timestamp };
+    return log?.timestamp ? formatSyncTime(log.timestamp) : null;
   };
 
   return (
@@ -59,18 +80,67 @@ export const SyncHealthWidget = () => {
       </h3>
       <div className="space-y-2 flex-grow">
         {enabledModules.map(module => {
-          const { status, time } = getSyncStatus(module.id);
+          const { status: dataStatus, time } = getDataStatus(module.id);
+          // Two separate bugs lived on this line (sweep item 11, fixed 2026-10-21):
+          //
+          // 1. `status !== 'good'` meant an issue was only ever shown for a module whose
+          //    data was ALREADY stale. A module that is half-working -- metrics arriving
+          //    but workouts failing, say -- is 'good' on freshness, so its errors were
+          //    suppressed exactly when they were the only warning you would get. An
+          //    error is now always rendered, and an error-level one pulls the tick off
+          //    green: a module logging errors is not healthy, however fresh its data.
+          //
+          // 2. `syncIssues` is keyed by `logs.source`; this looked it up by `module.id`.
+          //    Different namespaces -- `apple_workouts` logs under `apple_health`,
+          //    Nutracheck is `nutrachek` here and `nutracheck` in some writers -- so
+          //    those modules' errors were never displayed at all. The server now also
+          //    returns `syncIssuesByModule`, resolved through the same MODULE_SOURCES
+          //    map freshness uses. The flat lookup stays as a fallback so an older
+          //    cached summary payload still renders something.
+          const issue = summaryData.syncIssuesByModule?.[module.id] ?? summaryData.syncIssues?.[module.id];
+          const status = (issue?.level === 'error' && dataStatus === 'good') ? 'warning' : dataStatus;
           const iconColor = status === 'good' ? 'text-emerald-500' : status === 'warning' ? 'text-amber-500' : 'text-red-500';
-          
+          const lastSync = getLastSync(module.id);
+          const dataTime = time === 'Never' ? 'No data' : formatSyncTime(time);
+
           return (
-            <div key={module.id} className="flex items-center justify-between p-2 bg-zinc-50 dark:bg-zinc-800 rounded-lg">
-              <span className="text-[10px] font-semibold text-zinc-700 dark:text-zinc-300 capitalize">{module.id}</span>
-              <div className="flex items-center gap-1.5">
-                {status === 'good' ? <CheckCircle size={12} className={iconColor} /> : <AlertCircle size={12} className={iconColor} />}
-                <span className="text-[9px] text-zinc-500 dark:text-zinc-400 font-mono">
-                  {time === 'Never' ? 'Never' : formatSyncTime(time)}
-                </span>
+            <div key={module.id} className="flex flex-col gap-0.5 p-2 bg-zinc-50 dark:bg-zinc-800 rounded-lg">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-semibold text-zinc-700 dark:text-zinc-300 capitalize">{module.id}</span>
+                <div className="flex items-center gap-1.5">
+                  {status === 'good' ? <CheckCircle size={12} className={iconColor} /> : <AlertCircle size={12} className={iconColor} />}
+                  <span
+                    title={lastSync ? `Newest reading ${dataTime} \u2014 last sync attempt ${lastSync}` : `Newest reading ${dataTime}`}
+                    className="text-[9px] text-zinc-500 dark:text-zinc-400 font-mono"
+                  >
+                    {dataTime}
+                  </span>
+                </div>
               </div>
+              {lastSync && dataTime !== lastSync && (
+                <span className="text-[9px] text-zinc-400 dark:text-zinc-500 font-mono">
+                  sync {lastSync}
+                </span>
+              )}
+              {issue && (
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    title={`${issue.level}: ${issue.message}`}
+                    className={`text-[9px] truncate ${issue.level === 'error' ? 'text-red-500 dark:text-red-400' : 'text-amber-600 dark:text-amber-500'}`}
+                  >
+                    {issue.message}
+                  </span>
+                  {module.id === 'withings' && (
+                    <button
+                      onClick={handleReconnectWithings}
+                      className="shrink-0 flex items-center gap-1 text-[9px] font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      <RefreshCw size={10} />
+                      Reconnect
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}

@@ -16,8 +16,6 @@ interface AIInsightsTabProps {
   selectedBatchId: string | null;
   setSelectedBatchId: (batchId: string | null) => void;
   fetchChatHistory: (date: string, batchId?: string | null) => Promise<void>;
-  conversationMemory?: string;
-  conversationMemoryUpdatedAt?: string | null;
 }
 
 export const AIInsightsTab: React.FC<AIInsightsTabProps> = React.memo(({
@@ -34,8 +32,6 @@ export const AIInsightsTab: React.FC<AIInsightsTabProps> = React.memo(({
   selectedBatchId,
   setSelectedBatchId,
   fetchChatHistory,
-  conversationMemory,
-  conversationMemoryUpdatedAt,
 }) => {
   return (
     <motion.div
@@ -59,8 +55,6 @@ export const AIInsightsTab: React.FC<AIInsightsTabProps> = React.memo(({
         selectedBatchId={selectedBatchId}
         setSelectedBatchId={setSelectedBatchId}
         fetchChatHistory={fetchChatHistory}
-        conversationMemory={conversationMemory}
-        conversationMemoryUpdatedAt={conversationMemoryUpdatedAt}
       />
     </motion.div>
   );

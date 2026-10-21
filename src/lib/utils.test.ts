@@ -10,6 +10,7 @@ import {
   parseUTCDate,
   convertHeight,
   getHeightUnit,
+  normalizeAIMarkdown,
 } from './utils';
 
 describe('formatWorkoutWeight', () => {
@@ -136,4 +137,16 @@ describe('getHeightUnit', () => {
   it('returns m for metric', () => expect(getHeightUnit('metric')).toBe('m'));
   it('returns in for imperial', () => expect(getHeightUnit('imperial')).toBe('in'));
   it('defaults to m', () => expect(getHeightUnit()).toBe('m'));
+});
+
+describe('normalizeAIMarkdown', () => {
+  it('unwraps markdown fences that wrap an AI response', () => {
+    const input = '```markdown\n## Progress\n- Keep it up\n```';
+    expect(normalizeAIMarkdown(input)).toBe('## Progress\n- Keep it up');
+  });
+
+  it('removes fenced code blocks so the response stays in the app font', () => {
+    const input = '```markdown\n## Progress\n- Keep it up\n```\n\n```json\n{"x":1}\n```';
+    expect(normalizeAIMarkdown(input)).toBe('## Progress\n- Keep it up\n\n{"x":1}');
+  });
 });

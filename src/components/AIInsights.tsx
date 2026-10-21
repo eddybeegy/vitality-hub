@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { BarChart3, Calendar, RefreshCw, Dumbbell, Send, User, Bot, Check, AlertCircle, ChevronLeft, ChevronRight, Sparkles, Brain } from 'lucide-react';
+import { BarChart3, Calendar, RefreshCw, Dumbbell, Send, User, Bot, Check, AlertCircle, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
 import { ChatMessage } from '../services/geminiService';
 import { InsightSkeleton } from './ui/Skeleton';
-import { getLocalDateString, formatDateWithTimezone } from '../lib/utils';
+import { getLocalDateString, formatDateWithTimezone, normalizeAIMarkdown } from '../lib/utils';
+import { useAIStore } from '../store/useAIStore';
 
 interface ApplyProgressionButtonProps {
   data: string;
@@ -104,15 +105,15 @@ interface AIInsightsProps {
   selectedBatchId: string | null;
   setSelectedBatchId: (batchId: string | null) => void;
   fetchChatHistory: (date: string, batchId?: string | null) => Promise<void>;
-  conversationMemory?: string;
-  conversationMemoryUpdatedAt?: string | null;
 }
 
 export const AIInsights: React.FC<AIInsightsProps> = ({
   combinedReview,
   insightsLastUpdated,
   isReviewLoading,
-  checkAndRegenerateAI,
+  // checkAndRegenerateAI is deliberately not used any more: since 2026-10-19 the
+  // refresh button asks coach for a real on-demand run instead of driving the
+  // old (now removed) client-side force=true generation path.
   chatHistory,
   setChatHistory,
   isChatLoading,
@@ -122,12 +123,11 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
   selectedBatchId,
   setSelectedBatchId,
   fetchChatHistory,
-  conversationMemory,
-  conversationMemoryUpdatedAt,
 }) => {
   const [chatInput, setChatInput] = useState('');
   const today = getLocalDateString(timezone);
   const [selectedDate, setSelectedDate] = useState<string>(today);
+  const { requestRegeneration, regenPending, regenNotice } = useAIStore();
 
   const onSubmit = async () => {
     if (!chatInput.trim()) return;
@@ -339,6 +339,9 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
     type?: string
   ) => {
     const formattedLastUpdated = formatDate(lastUpdated);
+    const regenType = type || 'combined';
+    const regenBusy = !!regenPending[regenType];
+    const regenMessage = regenNotice[regenType];
 
     return (
       <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm mb-4">
@@ -362,17 +365,20 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                // This triggers regeneration for the combined insight
-                checkAndRegenerateAI(true, undefined, undefined, type);
+                void requestRegeneration(regenType);
               }}
-              disabled={isReviewLoading}
+              disabled={isReviewLoading || regenBusy}
               className="bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 p-1.5 rounded-lg transition-all disabled:opacity-50"
-              title="Refresh this insight"
+              title={regenBusy ? 'Coach is regenerating this' : 'Ask coach to regenerate this insight'}
             >
-              <RefreshCw size={14} className={isReviewLoading ? "animate-spin" : ""} />
+              <RefreshCw size={14} className={isReviewLoading || regenBusy ? "animate-spin" : ""} />
             </button>
           </div>
         </div>
+
+        {regenMessage && (
+          <div className="mb-3 text-[10px] font-medium text-indigo-600 dark:text-indigo-400">{regenMessage}</div>
+        )}
 
         {content ? (
           <div className="prose prose-zinc dark:prose-invert max-w-none ai-response-container prose-xs">
@@ -446,7 +452,7 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
                 }
               }}
             >
-              {content}
+              {normalizeAIMarkdown(content)}
             </ReactMarkdown>
           </div>
         ) : (isReviewLoading && selectedDate === today) ? (
@@ -560,40 +566,6 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
         )}
       </div>
 
-      {/* What the AI is remembering from recent conversations */}
-      {conversationMemory && conversationMemory.trim() && (
-        <div className="bg-gradient-to-br from-violet-50 to-white dark:from-violet-950/30 dark:to-zinc-900 p-4 rounded-2xl border border-violet-200/60 dark:border-violet-900/40 shadow-sm">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-8 h-8 bg-violet-600 rounded-lg flex items-center justify-center text-white shadow-md">
-              <Brain size={18} />
-            </div>
-            <div>
-              <h2 className="text-base font-bold tracking-tight text-zinc-900 dark:text-zinc-100">Remembered from our chats</h2>
-              <span className="text-[9px] text-zinc-400 dark:text-zinc-500 font-medium">
-                Steering your insights{conversationMemoryUpdatedAt ? ` • Updated: ${formatDate(conversationMemoryUpdatedAt)}` : ''}
-              </span>
-            </div>
-          </div>
-          <div className="prose prose-zinc dark:prose-invert max-w-none prose-xs">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                ul: ({node, children, ...props}) => <ul className="space-y-1.5 list-none p-0 m-0" {...props}>{children}</ul>,
-                li: ({node, children, ...props}) => (
-                  <li className="flex items-start gap-2" {...props}>
-                    <div className="w-1 h-1 rounded-full bg-violet-500 mt-1.5 shrink-0" />
-                    <div className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">{children}</div>
-                  </li>
-                ),
-                p: ({node, children, ...props}) => <p className="text-zinc-600 dark:text-zinc-400 leading-relaxed text-xs m-0" {...props}>{children}</p>,
-              }}
-            >
-              {conversationMemory}
-            </ReactMarkdown>
-          </div>
-        </div>
-      )}
-
       {renderMarkdown(
         review.content,
         'Health & Fitness Review',
@@ -615,7 +587,7 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
                 {msg.role === 'assistant' ? (
                   <div className="prose prose-zinc dark:prose-invert max-w-none prose-xs">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {msg.content}
+                      {normalizeAIMarkdown(msg.content)}
                     </ReactMarkdown>
                   </div>
                 ) : (

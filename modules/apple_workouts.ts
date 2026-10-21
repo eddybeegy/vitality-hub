@@ -16,13 +16,42 @@ export const AppleWorkoutsModule: DataSourceModule = {
     if (workouts.length === 0) return { success: true, message: "No workouts to sync", count: 0 };
 
     const workoutInsertStmt = db.prepare(`
-      INSERT INTO workouts (user_id, name, duration, volume, timestamp, source, external_id) 
-      VALUES (?, ?, ?, 0, ?, 'apple_health', ?)
+      INSERT INTO workouts (user_id, name, duration, volume, timestamp, source, external_id,
+                            distance, distance_unit, energy_burned, energy_burned_unit,
+                            heart_rate_avg, heart_rate_max, elevation, elevation_unit)
+      VALUES (?, ?, ?, 0, ?, 'apple_health', ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(external_id) DO UPDATE SET
         name = excluded.name,
         duration = excluded.duration,
-        timestamp = excluded.timestamp
+        timestamp = excluded.timestamp,
+        distance = COALESCE(excluded.distance, workouts.distance),
+        distance_unit = COALESCE(excluded.distance_unit, workouts.distance_unit),
+        energy_burned = COALESCE(excluded.energy_burned, workouts.energy_burned),
+        energy_burned_unit = COALESCE(excluded.energy_burned_unit, workouts.energy_burned_unit),
+        heart_rate_avg = COALESCE(excluded.heart_rate_avg, workouts.heart_rate_avg),
+        heart_rate_max = COALESCE(excluded.heart_rate_max, workouts.heart_rate_max),
+        elevation = COALESCE(excluded.elevation, workouts.elevation),
+        elevation_unit = COALESCE(excluded.elevation_unit, workouts.elevation_unit)
     `);
+
+    // 2026-10-18: Health Auto Export reports these either as a bare number or as
+    // a {qty, units} object, and the old nano_health store kept the unit
+    // alongside the value. Return both so nothing has to assume metres/kcal.
+    // COALESCE on conflict above means a later payload that omits a field does
+    // not wipe a value an earlier one supplied.
+    const measure = (v: any, fallbackUnit: string | null): [number | null, string | null] => {
+      if (v == null) return [null, null];
+      if (typeof v === 'object') {
+        const qty = Number(v.qty ?? v.value);
+        return isNaN(qty) ? [null, null] : [qty, v.units ?? v.unit ?? fallbackUnit];
+      }
+      const n = Number(v);
+      return isNaN(n) ? [null, null] : [n, fallbackUnit];
+    };
+    const scalar = (v: any): number | null => {
+      const [n] = measure(v, null);
+      return n;
+    };
     
     const normalizeTimestamp = (ts: any): string => {
       if (!ts) return new Date().toISOString();
@@ -64,7 +93,7 @@ export const AppleWorkoutsModule: DataSourceModule = {
     }
 
     let count = 0;
-    db.transaction(() => {
+    await db.transaction(async () => {
       for (const w of workouts) {
         const name = w.name || w.workoutType || w.type || "Workout";
         const start = w.start || w.startDate;
@@ -85,16 +114,23 @@ export const AppleWorkoutsModule: DataSourceModule = {
         const startTimeMin = new Date(startTime - windowMs).toISOString();
         const startTimeMax = new Date(startTime + windowMs).toISOString();
         
-        const duplicate = db.prepare(`
-          SELECT id FROM workouts 
-          WHERE user_id = ? AND source != 'apple_health' 
+        const duplicate = await db.prepare(`
+          SELECT id FROM workouts
+          WHERE user_id = ? AND source != 'apple_health'
           AND timestamp BETWEEN ? AND ?
         `).get(userId, startTimeMin, startTimeMax) as any;
-        
+
         if (duplicate) continue;
 
+        const [distance, distanceUnit] = measure(w.distance ?? w.totalDistance, 'm');
+        const [energy, energyUnit] = measure(w.activeEnergyBurned ?? w.activeEnergy ?? w.totalEnergyBurned, 'kcal');
+        const [elevation, elevationUnit] = measure(w.elevationUp ?? w.elevationAscended, 'm');
+        const hrAvg = scalar(w.avgHeartRate ?? w.averageHeartRate);
+        const hrMax = scalar(w.maxHeartRate);
+
         const externalId = `apple_health_${ts}_${name.replace(/\s+/g, '_')}`;
-        workoutInsertStmt.run(userId, name, duration, ts, externalId);
+        await workoutInsertStmt.run(userId, name, duration, ts, externalId,
+          distance, distanceUnit, energy, energyUnit, hrAvg, hrMax, elevation, elevationUnit);
         count++;
       }
     })();
@@ -103,25 +139,25 @@ export const AppleWorkoutsModule: DataSourceModule = {
   },
   purge: async (userId, db, userSettings) => {
     try {
-      db.transaction(() => {
-        db.prepare(`
-          DELETE FROM workout_sets 
+      await db.transaction(async () => {
+        await db.prepare(`
+          DELETE FROM workout_sets
           WHERE exercise_id IN (
-            SELECT id FROM workout_exercises 
+            SELECT id FROM workout_exercises
             WHERE workout_id IN (
               SELECT id FROM workouts WHERE user_id = ? AND source = 'apple_health'
             )
           )
         `).run(userId);
 
-        db.prepare(`
-          DELETE FROM workout_exercises 
+        await db.prepare(`
+          DELETE FROM workout_exercises
           WHERE workout_id IN (
             SELECT id FROM workouts WHERE user_id = ? AND source = 'apple_health'
           )
         `).run(userId);
 
-        db.prepare("DELETE FROM workouts WHERE user_id = ? AND source = 'apple_health'").run(userId);
+        await db.prepare("DELETE FROM workouts WHERE user_id = ? AND source = 'apple_health'").run(userId);
       })();
       return { success: true, message: "Apple Workouts purged" };
     } catch (error: any) {

@@ -18,7 +18,8 @@ import {
   Plus,
   Target,
   ChevronDown,
-  LayoutDashboard
+  LayoutDashboard,
+  Download
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -112,6 +113,27 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
   const [exportLoading, setExportLoading] = React.useState(false);
   const [exportError, setExportError] = React.useState<string | null>(null);
 
+  // Module credential fields are write-only: GET /api/modules sends a
+  // `configuredSettings` boolean instead of the stored secret, so the inputs
+  // can no longer be bound to module.userSettings. Keep what the user types
+  // locally and commit on blur (the old code POSTed on every keystroke, which
+  // wrote a partial credential to the DB once per character).
+  const [moduleDrafts, setModuleDrafts] = React.useState<Record<string, string>>({});
+
+  const draftKey = (moduleId: string, key: string) => `${moduleId}_${key}`;
+
+  const commitModuleDraft = (moduleId: string, key: string) => {
+    const k = draftKey(moduleId, key);
+    const draft = moduleDrafts[k];
+    if (draft === undefined) return;
+    updateModuleSettings(moduleId, { [key]: draft });
+    setModuleDrafts(prev => {
+      const next = { ...prev };
+      delete next[k];
+      return next;
+    });
+  };
+
   const fetchExportUrl = React.useCallback(async () => {
     setExportLoading(true);
     setExportError(null);
@@ -197,6 +219,18 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
                   onChange={(e) => setSettings({ ...settings, sync_history_days: parseInt(e.target.value) || 90 })}
                   className="w-full px-4 py-3 rounded-xl border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all text-zinc-900 dark:text-zinc-100"
                   placeholder="90"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Muscle Readiness Window (Days)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="30"
+                  value={settings.readiness_recovery_days ?? 3}
+                  onChange={(e) => setSettings({ ...settings, readiness_recovery_days: parseInt(e.target.value) || 3 })}
+                  className="w-full px-4 py-3 rounded-xl border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all text-zinc-900 dark:text-zinc-100"
+                  placeholder="3"
                 />
               </div>
               <div className="space-y-2">
@@ -342,7 +376,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
                                       }}
                                       className="w-full px-3 py-2 rounded-lg border border-black/5 dark:border-white/5 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all text-xs text-zinc-900 dark:text-zinc-100"
                                     />
-                                    {module.userSettings[s.key] && (
+                                    {(module.configuredSettings?.[s.key] || module.userSettings[s.key]) && (
                                       <p className="text-[10px] text-emerald-500 font-medium">✓ File uploaded and ready to sync</p>
                                     )}
                                   </div>
@@ -350,10 +384,24 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
                                 <div className="relative">
                                   <input 
                                     type={s.type === 'password' ? (showModulePasswords[`${module.id}_${s.key}`] ? 'text' : 'password') : 'text'}
-                                    value={module.userSettings[s.key] || ''}
-                                    onChange={(e) => updateModuleSettings(module.id, { [s.key]: e.target.value })}
+                                    value={
+                                      moduleDrafts[draftKey(module.id, s.key)] ??
+                                      (s.type === 'password' ? '' : (module.userSettings[s.key] || ''))
+                                    }
+                                    onChange={(e) => setModuleDrafts(prev => ({
+                                      ...prev,
+                                      [draftKey(module.id, s.key)]: e.target.value
+                                    }))}
+                                    onBlur={() => commitModuleDraft(module.id, s.key)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') commitModuleDraft(module.id, s.key);
+                                    }}
                                     className="w-full px-3 py-2 pr-10 rounded-lg border border-black/5 dark:border-white/5 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all text-xs text-zinc-900 dark:text-zinc-100"
-                                    placeholder={s.placeholder}
+                                    placeholder={
+                                      s.type === 'password' && module.configuredSettings?.[s.key]
+                                        ? '•••••••• stored — type to replace'
+                                        : s.placeholder
+                                    }
                                   />
                                   {s.type === 'password' && (
                                     <button
@@ -368,6 +416,9 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
                                     </button>
                                   )}
                                 </div>
+                                )}
+                                {s.type === 'password' && module.configuredSettings?.[s.key] && moduleDrafts[draftKey(module.id, s.key)] === undefined && (
+                                  <p className="text-[10px] text-emerald-500 font-medium">✓ Stored</p>
                                 )}
                               </div>
                             ))}
@@ -458,6 +509,33 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
                     )}
                   </div>
                 ))}
+              </div>
+            </div>
+
+            <div className="space-y-4 pt-6 border-t border-black/5 dark:border-white/5">
+              <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                <Download size={16} /> Data Export &amp; Backup
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">Download your own data at any time. CSV files cover a single dataset; the JSON backup includes everything (metrics, workouts with exercises/sets, targets, meals, routines).</p>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <a
+                  href="/api/export/metrics.csv"
+                  className="flex items-center justify-center gap-2 bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 text-zinc-900 dark:text-zinc-100 py-3 rounded-xl font-bold text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all"
+                >
+                  <Download size={14} /> Metrics (CSV)
+                </a>
+                <a
+                  href="/api/export/workouts.csv"
+                  className="flex items-center justify-center gap-2 bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 text-zinc-900 dark:text-zinc-100 py-3 rounded-xl font-bold text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all"
+                >
+                  <Download size={14} /> Workouts (CSV)
+                </a>
+                <a
+                  href="/api/export/all.json"
+                  className="flex items-center justify-center gap-2 bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 text-zinc-900 dark:text-zinc-100 py-3 rounded-xl font-bold text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all"
+                >
+                  <Download size={14} /> Full Backup (JSON)
+                </a>
               </div>
             </div>
 

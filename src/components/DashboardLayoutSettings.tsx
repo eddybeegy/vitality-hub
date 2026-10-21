@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { LayoutDashboard, ChevronLeft, GripVertical } from 'lucide-react';
+import { LayoutDashboard, ChevronLeft, GripVertical, Search } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export const DashboardLayoutSettings = React.memo(({
@@ -35,10 +35,39 @@ export const DashboardLayoutSettings = React.memo(({
     { id: 'sleep_stages', label: 'Sleep Stages Chart' },
     { id: 'sleep_quality', label: 'Sleep Quality Card' },
     { id: 'weight_card', label: 'Weight Card' },
-    { id: 'readiness_card', label: 'Daily Readiness Score' }
+    { id: 'weight_goal_progress', label: 'Weight Goal Progress' },
+    { id: 'readiness_card', label: 'Daily Readiness Score' },
+    { id: 'workout_streak', label: 'Workout Streak & Consistency' },
+    { id: 'workout_stats', label: 'Workout Stats (Sessions/Volume/Time)' },
+    { id: 'training_status', label: 'Training Status (Load Balance)' },
+    { id: 'training_trends', label: 'Training Trends (Monthly Sparklines)' },
+    { id: 'muscle_heatmap', label: 'Muscle Group Load (Heatmap)' },
+    { id: 'body_diagram', label: 'Body Diagram (Muscle Readiness)' },
+    { id: 'weekly_trends', label: 'This Week vs Last Week' },
+    { id: 'sleep_consistency', label: 'Sleep Trend & Consistency' },
+    { id: 'water_intake', label: 'Water Intake' },
+    { id: 'todays_targets', label: "Today's Targets Overview" },
+    { id: 'nutrition_streak', label: 'Nutrition Logging Streak' },
+    { id: 'step_streak', label: 'Step Goal Streak' }
   ];
 
   const [localSettings, setLocalSettings] = React.useState(settings);
+  const [filter, setFilter] = React.useState('');
+
+  const visibleWidgets = allWidgets.filter(w =>
+    w.label.toLowerCase().includes(filter.trim().toLowerCase())
+  );
+
+  const selectAllVisible = () => {
+    const ids = new Set([...(localSettings.dashboard_widgets || []), ...visibleWidgets.map(w => w.id)]);
+    setLocalSettings({ ...localSettings, dashboard_widgets: Array.from(ids) });
+  };
+
+  const clearAllVisible = () => {
+    const visibleIds = new Set(visibleWidgets.map(w => w.id));
+    const newWidgets = (localSettings.dashboard_widgets || []).filter((id: string) => !visibleIds.has(id));
+    setLocalSettings({ ...localSettings, dashboard_widgets: newWidgets });
+  };
 
   return (
     <motion.div 
@@ -84,8 +113,36 @@ export const DashboardLayoutSettings = React.memo(({
           </div>
         </div>
 
+        <div className="flex items-center gap-3 mb-4">
+          <div className="relative flex-1">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+            <input
+              type="text"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter widgets..."
+              className="w-full pl-9 pr-3 py-2 text-sm bg-zinc-50 dark:bg-zinc-800 border border-black/5 dark:border-white/5 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+          </div>
+          <button
+            onClick={selectAllVisible}
+            className="px-3 py-2 text-xs font-bold text-zinc-600 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-xl border border-black/5 dark:border-white/5 transition-colors whitespace-nowrap"
+          >
+            Select All
+          </button>
+          <button
+            onClick={clearAllVisible}
+            className="px-3 py-2 text-xs font-bold text-zinc-600 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-xl border border-black/5 dark:border-white/5 transition-colors whitespace-nowrap"
+          >
+            Clear All
+          </button>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {allWidgets.map(widget => (
+          {visibleWidgets.length === 0 && (
+            <p className="col-span-2 text-sm text-zinc-400 text-center py-6">No widgets match "{filter}"</p>
+          )}
+          {visibleWidgets.map(widget => (
             <label key={widget.id} className="flex items-center gap-3 bg-zinc-50 dark:bg-zinc-800 p-4 rounded-xl border border-black/5 dark:border-white/5 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-all">
               <input 
                 type="checkbox"

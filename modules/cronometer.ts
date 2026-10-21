@@ -90,12 +90,23 @@ export const CronometerModule: DataSourceModule = {
 
       const { error, stdout, stderr } = attemptResult;
 
+      // The go wrapper's stderr is verbose per-request DEBUG chatter (includes the
+      // Cronometer login JWT) emitted on every run, success or failure — redact the
+      // token and truncate before persisting so a routine sync doesn't write a
+      // 100KB+ row containing a live session credential into the logs table every hour.
+      const sanitizedStderr = stderr
+        ? stderr.replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED_JWT]')
+        : stderr;
+      const stderrForLog = sanitizedStderr && sanitizedStderr.length > 2000
+        ? `${sanitizedStderr.slice(0, 2000)}... [truncated, ${sanitizedStderr.length} chars total]`
+        : sanitizedStderr;
+
       if (stderr) {
-        logEvent('warn', `Cronometer wrapper stderr: ${stderr}`, 'cronometer');
+        logEvent(error ? 'warn' : 'debug', `Cronometer wrapper stderr: ${stderrForLog}`, 'cronometer');
       }
 
       if (error) {
-        logEvent('error', `Cronometer sync failed: ${error.message}${stderr ? `, Stderr: ${stderr}` : ''}`, 'cronometer');
+        logEvent('error', `Cronometer sync failed: ${error.message}${stderr ? `, Stderr: ${stderrForLog}` : ''}`, 'cronometer');
         return resolve({ success: false, message: error.message });
       }
 
@@ -122,7 +133,7 @@ export const CronometerModule: DataSourceModule = {
 
         const insertStmt = db.prepare("INSERT OR REPLACE INTO metrics (user_id, type, value, unit, timestamp, source) VALUES (?, ?, ?, ?, ?, 'cronometer')");
         const mealInsertStmt = db.prepare(`
-          INSERT INTO meal_items (
+          INSERT OR REPLACE INTO meal_items (
             user_id, name, calories, protein, carbs, fat, fiber, sodium, iron,
             calcium, vitamin_c, vitamin_a, vitamin_d, vitamin_e, vitamin_k,
             vitamin_b12, vitamin_b6, magnesium, potassium, zinc, water,

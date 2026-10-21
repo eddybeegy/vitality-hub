@@ -3,95 +3,81 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, ArrowRight, CheckCircle2, ChevronRight, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { useHealthStore } from '../store/useHealthStore';
 import { useSettingsStore } from '../store/useSettingsStore';
+import { useAIStore } from '../store/useAIStore';
 import { calculateReadinessScore } from '../lib/readiness';
-import { getSmartTargetAdjustments } from '../services/geminiService';
-import { calculateAge, getLocalDateString } from '../lib/utils';
+import { getLocalDateString } from '../lib/utils';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 export const SmartAdjustments: React.FC = () => {
     const { summaryData } = useHealthStore();
     const { settings, targets } = useSettingsStore();
+    const { allAIInsights, fetchAIInsights, requestRegeneration, regenPending, regenNotice } = useAIStore();
     const [loading, setLoading] = useState(false);
-    const [adjustmentData, setAdjustmentData] = useState<{ text: string, json: any } | null>(null);
-    const [updatedAt, setUpdatedAt] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const readiness = calculateReadinessScore(summaryData.metrics || [], targets, settings.timezone);
 
-    const CACHE_KEY = `smart_adjustments_${getLocalDateString(settings.timezone)}`;
+    const today = getLocalDateString(settings.timezone);
 
-    const fetchAdjustments = async () => {
-        if (!readiness) return;
+    // 2026-10-18 (Option E): this widget used to call an LLM from the browser and
+    // stash the answer in user_cache under smart_adjustments_<date>. Generation is
+    // coach's now — it pre-bakes the day's advice early each morning (the prompt is
+    // explicitly "today only", driven by last night's sleep and HRV, so it has to
+    // land before the day is spent) and writes it to ai_insights as type
+    // 'smart_adjustments' via its allowlisted POST /api/ai/insights. So this is a
+    // read of today's row. The refresh button was briefly a refetch-only no-op
+    // after that demotion; since 2026-10-19 it triggers a real on-demand coach
+    // run via POST /api/ai/regenerate (see requestRegeneration in useAIStore).
+    const insight = React.useMemo(
+        () => (allAIInsights || []).find((i: any) => i.type === 'smart_adjustments' && i.date === today),
+        [allAIInsights, today]
+    );
+
+    const adjustmentData = React.useMemo(() => {
+        if (!insight?.content) return null;
+        // The fenced JSON block is the card contract: adjustments[].{type,current,
+        // suggested,unit,reason}. A malformed block degrades to prose only, which is
+        // silent by design but worth knowing about when coach's output changes.
+        let json = null;
+        const jsonMatch = insight.content.match(/```json\n([\s\S]*?)\n```/);
+        if (jsonMatch) {
+            try {
+                json = JSON.parse(jsonMatch[1]);
+            } catch (e) {
+                console.error("Failed to parse adjustment JSON", e);
+            }
+        }
+        return { text: insight.content as string, json };
+    }, [insight]);
+
+    const updatedAt = insight?.updated_at || null;
+
+    const refresh = async () => {
         setLoading(true);
         setError(null);
         try {
-            const data = await fetch('/api/ai/data').then(res => res.json());
-            const age = calculateAge(settings.dob) || 30;
-            const gender = settings.gender || 'male';
-
-            const aiInput = {
-                ...data,
-                age,
-                gender,
-                readiness,
-                targets,
-                ai_focus: settings.ai_focus,
-                ai_persona: settings.ai_persona,
-                aiHints: settings.ai_hints,
-                timezone: settings.timezone
-            };
-
-            const result = await getSmartTargetAdjustments(aiInput, settings.ai_model, settings.ai_provider);
-            
-            // Extract JSON from markdown if present
-            let json = null;
-            const jsonMatch = result.text.match(/```json\n([\s\S]*?)\n```/);
-            if (jsonMatch) {
-                try {
-                    json = JSON.parse(jsonMatch[1]);
-                } catch (e) {
-                    console.error("Failed to parse adjustment JSON", e);
-                }
-            }
-
-            const newData = { text: result.text, json };
-            setAdjustmentData(newData);
-            setUpdatedAt(new Date().toISOString());
-            
-            // Cache for today in DB
-            await fetch(`/api/ai/cache/${CACHE_KEY}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: newData })
-            });
+            await fetchAIInsights();
         } catch (e) {
-            console.error("Failed to fetch smart adjustments", e);
-            setError("Could not generate smart adjustments. Please try again.");
+            console.error("Failed to refresh smart adjustments", e);
+            setError("Could not load today's smart adjustments. Please try again.");
         } finally {
             setLoading(false);
         }
     };
 
-    useEffect(() => {
-        // Load from DB cache on mount
-        const loadCache = async () => {
-            try {
-                const res = await fetch(`/api/ai/cache/${CACHE_KEY}`);
-                const cached = await res.json();
-                if (cached && cached.content) {
-                    setAdjustmentData(cached.content);
-                    if (cached.updated_at) setUpdatedAt(cached.updated_at);
-                }
-            } catch (e) {
-                console.error("Failed to load cached adjustments from DB", e);
-            }
-        };
+    // Ask coach to redo today's adjustments now. Distinct from `refresh` above,
+    // which is still the right action for the error-state retry: that one failed
+    // to LOAD, so it should try loading again, not spend an agent turn.
+    const pending = !!regenPending['smart_adjustments'];
+    const notice = regenNotice['smart_adjustments'];
+    const regenerate = () => { void requestRegeneration('smart_adjustments'); };
 
-        if (readiness) {
-            loadCache();
+    useEffect(() => {
+        if (readiness && !(allAIInsights || []).length) {
+            fetchAIInsights().catch(e => console.error("Failed to load smart adjustments", e));
         }
-    }, [CACHE_KEY, !!readiness]);
+    }, [!!readiness]);
 
     if (!readiness) return null;
 
@@ -115,14 +101,19 @@ export const SmartAdjustments: React.FC = () => {
                         </div>
                     )}
                     <button 
-                        onClick={fetchAdjustments}
-                        disabled={loading}
-                        className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors text-zinc-400 hover:text-zinc-600"
+                        onClick={regenerate}
+                        disabled={loading || pending}
+                        title={pending ? 'Coach is regenerating this' : "Ask coach to redo today's adjustments"}
+                        className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors text-zinc-400 hover:text-zinc-600 disabled:opacity-50"
                     >
-                        <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+                        <RefreshCw size={16} className={loading || pending ? 'animate-spin' : ''} />
                     </button>
                 </div>
             </div>
+
+            {notice && (
+                <div className="px-6 pt-3 text-[10px] font-medium text-amber-600 dark:text-amber-400">{notice}</div>
+            )}
 
             <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
                 <AnimatePresence mode="wait">
@@ -135,7 +126,7 @@ export const SmartAdjustments: React.FC = () => {
                             className="h-40 flex flex-col items-center justify-center space-y-4"
                         >
                             <Loader2 className="animate-spin text-amber-500" size={32} />
-                            <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest animate-pulse font-serif italic">Analyzing recovery state...</p>
+                            <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest animate-pulse font-serif italic">Fetching today’s plan...</p>
                         </motion.div>
                     ) : error ? (
                         <motion.div 
@@ -147,7 +138,7 @@ export const SmartAdjustments: React.FC = () => {
                             <AlertCircle className="text-rose-500" size={32} />
                             <p className="text-sm text-zinc-500 max-w-[200px]">{error}</p>
                             <button 
-                                onClick={fetchAdjustments}
+                                onClick={refresh}
                                 className="px-4 py-2 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded-xl text-xs font-bold transition-all"
                             >
                                 Retry
@@ -193,12 +184,13 @@ export const SmartAdjustments: React.FC = () => {
                     ) : (
                         <div className="h-40 flex flex-col items-center justify-center text-center space-y-3">
                             <Sparkles className="text-zinc-200 dark:text-zinc-800" size={48} />
-                            <p className="text-zinc-400 text-xs italic tracking-wide">Generate dynamic goals optimized for your recovery score</p>
+                            <p className="text-zinc-400 text-xs italic tracking-wide">No adjustments yet for today &mdash; your coach prepares these each morning</p>
                             <button 
-                                onClick={fetchAdjustments}
-                                className="px-6 py-2.5 bg-amber-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-amber-500/20 hover:bg-amber-600 transition-all font-serif italic"
+                                onClick={regenerate}
+                                disabled={pending}
+                                className="px-6 py-2.5 bg-amber-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-amber-500/20 hover:bg-amber-600 transition-all font-serif italic disabled:opacity-50"
                             >
-                                Get Smart Advice
+                                {pending ? 'Asking coach\u2026' : 'Generate Now'}
                             </button>
                         </div>
                     )}

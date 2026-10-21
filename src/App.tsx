@@ -90,8 +90,7 @@ export default function App() {
     setCombinedReview, setInsightsLastUpdated,
     fetchAIInsights, checkAndRegenerateAI, fetchAIProviders,
     chatHistory, setChatHistory, isChatLoading, handleChatSubmit, allAIInsights,
-    selectedBatchId, setSelectedBatchId, fetchChatHistory,
-    conversationMemory, conversationMemoryUpdatedAt, fetchConversationMemory
+    selectedBatchId, setSelectedBatchId, fetchChatHistory
   } = useAIStore();
   const { activeTab, selectedRoutine, toast, setActiveTab, setSelectedRoutine, hideToast, showToast } = useUIStore();
 
@@ -156,8 +155,7 @@ export default function App() {
             fetchSummary(),
             fetchTargets(),
             fetchAIInsights(),
-            fetchAIProviders(),
-            fetchConversationMemory()
+            fetchAIProviders()
           ]);
         }
       } catch (e) {
@@ -239,6 +237,11 @@ export default function App() {
     return target && target.value > 0 ? target.value : undefined;
   };
 
+  // Callers pass metrics `source` values, not module ids. `healthsync` must be listed
+  // alongside `apple_health` wherever Apple Health data is meant: it is HealthSync's
+  // HASS-routed copy of the same data, it has no module of its own, and it is routinely
+  // the freshest source in the DB -- omitting it made the badge read older than the Data
+  // Freshness panel, which groups the two (see MODULE_SOURCES in server.ts).
   const getLatestMetricTime = useCallback((sources: string | string[]) => {
     let maxTimestamp: string | null = null;
     const sourceList = Array.isArray(sources) ? sources : [sources];
@@ -265,16 +268,21 @@ export default function App() {
       }
     }
     
-    // Check sync logs
-    if (summaryData?.syncLogs) {
-       for (const source of sourceList) {
-         const latestLog = summaryData.syncLogs.find((l: any) => l.module === source && l.status === 'success');
-         if (latestLog) {
-           if (!maxTimestamp || parseUTCDate(latestLog.timestamp).getTime() > parseUTCDate(maxTimestamp).getTime()) {
-             maxTimestamp = latestLog.timestamp;
-           }
-         }
-       }
+    // Server-computed newest READING per source. This replaces a leg that took the max
+    // over summaryData.syncLogs -- which is MAX(timestamp) FROM logs WHERE level='info',
+    // i.e. "this module last logged something", relabelled 'success'. A sync that ran and
+    // imported nothing bumped it, so the badge claimed the data was minutes old when the
+    // newest reading was days old. The metrics scan above also can't be trusted on its
+    // own: aggregateDailyMetrics stamps rolled-up rows with `timestamp: day` (midnight),
+    // so today's aggregate reads 00:00. dataFreshness comes from the raw tables.
+    if (summaryData?.dataFreshness?.bySource) {
+      for (const source of sourceList) {
+        const t = summaryData.dataFreshness.bySource[source];
+        if (!t) continue;
+        if (!maxTimestamp || parseUTCDate(t).getTime() > parseUTCDate(maxTimestamp).getTime()) {
+          maxTimestamp = t;
+        }
+      }
     }
 
     if (!maxTimestamp) return null;
@@ -306,7 +314,7 @@ export default function App() {
     }
     
     return formatDateWithTimezone(maxTimestamp, tz);
-  }, [summaryData.metrics, summaryData.workouts, summaryData.syncLogs, settings?.timezone]);
+  }, [summaryData.metrics, summaryData.workouts, summaryData.dataFreshness, settings?.timezone]);
 
   if (isAuthChecking) {
     return (
@@ -507,7 +515,7 @@ export default function App() {
 
               {activeTab === 'dashboard' && (
                 <div id="dashboard-container" className="max-w-4xl mx-auto">
-                  <Dashboard lastSynced={getLatestMetricTime(['apple_health', 'withings'])} />
+                  <Dashboard lastSynced={getLatestMetricTime(['apple_health', 'healthsync', 'withings'])} />
                 </div>
               )}
 
@@ -516,7 +524,7 @@ export default function App() {
                   settings={settings}
                   getChartData={getChartData}
                   summaryData={summaryData}
-                  lastSynced={getLatestMetricTime(['apple_health', 'withings'])}
+                  lastSynced={getLatestMetricTime(['apple_health', 'healthsync', 'withings'])}
                   syncAllModules={syncAllModules}
                   isSyncing={isSyncing}
                   getTargetValue={getTargetValue}
@@ -534,7 +542,7 @@ export default function App() {
                   expandedWorkouts={expandedWorkouts}
                   setExpandedWorkouts={setExpandedWorkouts}
                   settings={settings}
-                  lastSynced={getLatestMetricTime(['apple_health', 'hevy'])}
+                  lastSynced={getLatestMetricTime(['apple_health', 'healthsync', 'hevy'])}
                   syncAllModules={syncAllModules}
                   isSyncing={isSyncing}
                 />
@@ -556,8 +564,6 @@ export default function App() {
                   selectedBatchId={selectedBatchId}
                   setSelectedBatchId={setSelectedBatchId}
                   fetchChatHistory={fetchChatHistory}
-                  conversationMemory={conversationMemory}
-                  conversationMemoryUpdatedAt={conversationMemoryUpdatedAt}
                 />
               )}
 

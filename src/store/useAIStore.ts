@@ -8,10 +8,10 @@ interface AIState {
   combinedReview: any | null;
   allAIInsights: any[];
   insightsLastUpdated: Record<string, string>;
+  regenPending: Record<string, boolean>;
+  regenNotice: Record<string, string | null>;
   aiProviders: any[];
   selectedBatchId: string | null;
-  conversationMemory: string;
-  conversationMemoryUpdatedAt: string | null;
   setChatHistory: (history: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   setIsChatLoading: (isLoading: boolean) => void;
   setAIProviders: (updater: any[] | ((prev: any[]) => any[])) => void;
@@ -21,10 +21,10 @@ interface AIState {
   setSelectedBatchId: (batch_id: string | null) => void;
   fetchAIInsights: () => Promise<void>;
   fetchAIProviders: () => Promise<void>;
-  fetchConversationMemory: () => Promise<void>;
   fetchChatHistory: (date: string, batchId?: string | null) => Promise<void>;
   handleChatSubmit: (message: string, date: string, currentChatHistory: ChatMessage[], settings: any, targets: any) => Promise<string | null>;
   checkAndRegenerateAI: (force?: boolean, currentTargets?: any[], settings?: any, specificType?: string) => Promise<void>;
+  requestRegeneration: (type: string) => Promise<void>;
   saveAIInsight: (type: string, content: string, date?: string, provider?: string, model?: string, batch_id?: string, updated_at?: string) => Promise<void>;
 }
 
@@ -35,10 +35,10 @@ export const useAIStore = create<AIState>((set, get) => ({
   combinedReview: null,
   allAIInsights: [],
   insightsLastUpdated: {},
+  regenPending: {},
+  regenNotice: {},
   aiProviders: [],
   selectedBatchId: null,
-  conversationMemory: '',
-  conversationMemoryUpdatedAt: null,
   setChatHistory: (updater) => set((state) => ({
     chatHistory: typeof updater === 'function' ? updater(state.chatHistory) : updater
   })),
@@ -70,17 +70,6 @@ export const useAIStore = create<AIState>((set, get) => ({
       }
     } catch (e) {
       console.error("Fetch AI providers failed", e);
-    }
-  },
-  fetchConversationMemory: async () => {
-    try {
-      const res = await fetch('/api/ai/memory');
-      if (res.ok) {
-        const data = await res.json();
-        set({ conversationMemory: data.memory || '', conversationMemoryUpdatedAt: data.updated_at || null });
-      }
-    } catch (e) {
-      console.error("Fetch conversation memory failed", e);
     }
   },
   fetchAIInsights: async () => {
@@ -147,8 +136,78 @@ export const useAIStore = create<AIState>((set, get) => ({
       console.error("Save AI insight failed", e);
     }
   },
+  /**
+   * Ask coach to regenerate an insight now (Option E replacement for the old
+   * force=true Gemini bypass, 2026-10-19).
+   *
+   * The server returns as soon as the run is QUEUED — coach is an agent turn,
+   * so the new content lands a minute or two later via its own POST. There is
+   * no completion callback to wait on, so this polls the insight's updated_at
+   * until it moves. The notice is what the user sees instead of the old silent
+   * no-op; it's deliberately set in every branch, including failure.
+   */
+  requestRegeneration: async (type: string) => {
+    const { regenPending, insightsLastUpdated, fetchAIInsights } = get();
+    if (regenPending[type]) return;
+
+    const before = insightsLastUpdated[type];
+    const setPending = (pending: boolean) =>
+      set((state) => ({ regenPending: { ...state.regenPending, [type]: pending } }));
+    const notify = (message: string | null) =>
+      set((state) => ({ regenNotice: { ...state.regenNotice, [type]: message } }));
+
+    setPending(true);
+    notify('Asking coach to regenerate — this usually takes a minute or two.');
+    try {
+      const res = await fetch('/api/ai/regenerate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type }),
+      });
+      const data = await res.json().catch(() => null);
+
+      if (res.status === 429) {
+        const secs = data?.retry_after_seconds;
+        notify(
+          secs
+            ? `Just regenerated — try again in about ${Math.ceil(secs / 60)} min.`
+            : 'Just regenerated — try again shortly.',
+        );
+        setPending(false);
+        return;
+      }
+      if (!res.ok || data?.status !== 'queued') {
+        notify("Couldn't reach coach to regenerate. The scheduled run will still happen.");
+        setPending(false);
+        return;
+      }
+
+      // Queued. Poll for the row to change; coach writes it back when done.
+      const DEADLINE_MS = 4 * 60_000;
+      const INTERVAL_MS = 10_000;
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < DEADLINE_MS) {
+        await new Promise((r) => setTimeout(r, INTERVAL_MS));
+        await fetchAIInsights();
+        const now = get().insightsLastUpdated[type];
+        if (now && now !== before) {
+          notify('Updated just now by coach.');
+          setPending(false);
+          return;
+        }
+      }
+      // Still running, most likely — the turn outlives our patience, not the
+      // other way round, so say so rather than reporting a failure.
+      notify('Coach is still working on it. It will appear here when it lands.');
+    } catch (e) {
+      console.error('requestRegeneration failed', e);
+      notify("Couldn't reach coach to regenerate. The scheduled run will still happen.");
+    } finally {
+      setPending(false);
+    }
+  },
   checkAndRegenerateAI: async (force = false, currentTargets, settings, specificType) => {
-    const { isReviewLoading, fetchAIInsights, fetchConversationMemory } = get();
+    const { isReviewLoading, fetchAIInsights } = get();
     if (isReviewLoading) {
       return;
     }
@@ -164,8 +223,6 @@ export const useAIStore = create<AIState>((set, get) => ({
       const type = specificType || 'combined';
       await fetch(`/api/ai/insights?force=true&type=${type}`);
       await fetchAIInsights();
-      // The regeneration refreshes conversation memory server-side; pull the latest.
-      await fetchConversationMemory();
     } catch (e) {
       console.error("checkAndRegenerateAI failed", e);
     } finally {

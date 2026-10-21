@@ -7,27 +7,40 @@ const providerHealth = new Map<string, { ok: boolean; checked: number }>();
 export const HEALTH_TTL_MS = 5 * 60 * 1000; // 5 minutes for successful checks
 export const UNHEALTHY_TTL_MS = 15 * 1000;  // 15 seconds for failed checks
 
+function normalizeBaseUrl(rawUrl: string): string {
+  return rawUrl.trim().replace(/\/+$/, '');
+}
+
+function getOpenAICompatibleBaseUrl(rawUrl: string, id?: string): string {
+  const normalized = normalizeBaseUrl(rawUrl);
+  if (id === 'ollama' && !normalized.endsWith('/v1')) {
+    return `${normalized}/v1`;
+  }
+  return normalized;
+}
+
 export async function probeProvider(rawUrl: string, id?: string, apiKey?: string): Promise<boolean> {
-  const url = rawUrl.endsWith('/v1') ? rawUrl : (rawUrl.endsWith('/') ? `${rawUrl}v1` : `${rawUrl}/v1`);
+  const normalizedUrl = normalizeBaseUrl(rawUrl);
+  const url = getOpenAICompatibleBaseUrl(normalizedUrl, id);
   try {
-    await assertSafeProviderUrl(rawUrl, id === 'ollama');
+    await assertSafeProviderUrl(normalizedUrl, id === 'ollama');
     const headers: any = { 'Content-Type': 'application/json' };
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
     // Try OpenAI-compatible /v1/models
-    await axios.get(`${url}/models`.replace(/\/v1\/models\/v1/, '/v1/models'), { headers, timeout: 3000 });
-    providerHealth.set(rawUrl, { ok: true, checked: Date.now() });
+    await axios.get(`${url}/models`, { headers, timeout: 3000 });
+    providerHealth.set(normalizedUrl, { ok: true, checked: Date.now() });
     return true;
   } catch (e) {
     // If Ollama, try native /api/tags
     try {
       if (id === 'ollama') {
-        const nativeUrl = rawUrl.endsWith('/v1') ? rawUrl.replace(/\/v1$/, '') : rawUrl;
+        const nativeUrl = normalizedUrl.endsWith('/v1') ? normalizedUrl.replace(/\/v1$/, '') : normalizedUrl;
         await axios.get(`${nativeUrl}/api/tags`, { timeout: 3000 });
-        providerHealth.set(rawUrl, { ok: true, checked: Date.now() });
+        providerHealth.set(normalizedUrl, { ok: true, checked: Date.now() });
         return true;
       }
     } catch (e2) {}
-    providerHealth.set(rawUrl, { ok: false, checked: Date.now() });
+    providerHealth.set(normalizedUrl, { ok: false, checked: Date.now() });
     return false;
   }
 }
@@ -38,9 +51,10 @@ export const OpenAICompatibleProvider = (id: string, name: string, defaultBaseUr
   baseUrl: defaultBaseUrl,
 
   async getModels(apiKey: string, baseUrl?: string): Promise<string[]> {
-    const url = baseUrl || this.baseUrl;
+    const normalizedUrl = normalizeBaseUrl(baseUrl || this.baseUrl);
+    const url = getOpenAICompatibleBaseUrl(normalizedUrl, id);
     // Short-circuit if provider was recently probed and marked unhealthy
-    const health = providerHealth.get(url);
+    const health = providerHealth.get(normalizedUrl);
     const unhealthyTtl = id === 'ollama' ? 10000 : UNHEALTHY_TTL_MS;
     if (health && health.ok === false && (Date.now() - health.checked) < unhealthyTtl) {
       if (id === 'mistral') return ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "open-mixtral-8x22b", "open-mixtral-8x7b"];
@@ -49,7 +63,7 @@ export const OpenAICompatibleProvider = (id: string, name: string, defaultBaseUr
       return [];
     }
     try {
-      await assertSafeProviderUrl(url, id === 'ollama');
+      await assertSafeProviderUrl(normalizedUrl, id === 'ollama');
       const headers: any = { 'Content-Type': 'application/json' };
       if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
@@ -62,7 +76,7 @@ export const OpenAICompatibleProvider = (id: string, name: string, defaultBaseUr
       } catch (innerError) {
         // If /v1/models fails and it's ollama, try native /api/tags
         if (id === 'ollama') {
-          const nativeUrl = url.endsWith('/v1') ? url.replace(/\/v1$/, '') : url;
+          const nativeUrl = normalizedUrl.endsWith('/v1') ? normalizedUrl.replace(/\/v1$/, '') : normalizedUrl;
           const nativeResponse = await axios.get(`${nativeUrl}/api/tags`, { timeout: 5000 });
           if (nativeResponse.data && nativeResponse.data.models) {
             return nativeResponse.data.models.map((m: any) => m.name).sort();
@@ -94,13 +108,9 @@ export const OpenAICompatibleProvider = (id: string, name: string, defaultBaseUr
   },
 
   async generate({ model, prompt, maxTokens, apiKey, baseUrl, logEvent }: GenerateParams): Promise<GenerateResult> {
-    const rawUrl = baseUrl || this.baseUrl;
+    const rawUrl = normalizeBaseUrl(baseUrl || this.baseUrl);
     await assertSafeProviderUrl(rawUrl, id === 'ollama');
-    // Prefer the /v1 OpenAI-compatible prefix for Ollama when it's not already present
-     let openAIUrl = rawUrl;
-     if (id === 'ollama' && !rawUrl.includes('/v1')) {
-       openAIUrl = rawUrl.endsWith('/') ? `${rawUrl}v1` : `${rawUrl}/v1`;
-     }
+    const openAIUrl = getOpenAICompatibleBaseUrl(rawUrl, id);
     const headers: any = { 'Content-Type': 'application/json' };
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 

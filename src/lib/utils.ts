@@ -172,6 +172,35 @@ export function getHeightUnit(preferredUnits: string = 'metric'): string {
   return preferredUnits === 'imperial' ? 'in' : 'm';
 }
 
+export function normalizeAIMarkdown(content: string | null | undefined): string {
+  if (!content) return '';
+
+  const raw = String(content).trim();
+  if (!raw) return '';
+
+  const lines = raw.split(/\r?\n/);
+  const cleaned: string[] = [];
+  let inFence = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const fenceMatch = trimmed.match(/^```([\w-]*)\s*$/);
+
+    if (fenceMatch) {
+      inFence = !inFence;
+      continue;
+    }
+
+    if (!inFence) {
+      cleaned.push(line);
+    } else {
+      cleaned.push(line);
+    }
+  }
+
+  return cleaned.join('\n').trim();
+}
+
 export function calculateAge(dob: string) {
   if (!dob) return 0;
   try {

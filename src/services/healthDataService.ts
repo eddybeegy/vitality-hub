@@ -41,6 +41,8 @@ export interface StandardizedExercise {
   id: string | number;
   title: string;
   type: 'strength' | 'cardio' | 'bodyweight' | 'unknown';
+  primaryMuscleGroup?: string;
+  secondaryMuscleGroups?: string[];
   sets: StandardizedSet[];
 }
 
@@ -141,6 +143,8 @@ export const standardizeWorkout = (w: any, exercises: any[] = [], sets: any[] = 
       id: ex.id,
       title: ex.exercise_title,
       type: ex.exercise_type as any || 'strength',
+      primaryMuscleGroup: ex.primary_muscle_group || undefined,
+      secondaryMuscleGroups: ex.secondary_muscle_groups ? String(ex.secondary_muscle_groups).split(',').filter(Boolean) : undefined,
       sets: sets
         .filter(s => String(s.exercise_id) === String(ex.id))
         .map(s => ({
@@ -323,10 +327,10 @@ export const getSleepDurationData = (metrics: StandardizedMetric[], timezone: st
   });
   
   return Object.values(grouped).map((d: any) => {
-    let hours = d.direct > 0 ? d.direct : d.stages;
-    if (!hours && d.total > 0) {
-      hours = d.total > 15 ? 8 : d.total; // Provide sensible capping if fallback is massive timeframe 
-    }
+    // The stage breakdown (core/deep/rem) can undercount when HealthKit's
+    // classification has gaps, so never let it override a larger recorded total.
+    const total = d.total > 15 ? 8 : d.total; // sensible capping if total is a massive timeframe
+    let hours = Math.max(total, d.direct, d.stages);
     return { date: d.date, hours };
   }).filter((d: any) => d.hours > 0).sort((a: any, b: any) => a.date.localeCompare(b.date));
 };

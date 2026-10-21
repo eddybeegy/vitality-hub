@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Dumbbell, Activity, ChevronUp, ChevronDown, SearchX, Search } from 'lucide-react';
+import { Dumbbell, Activity, ChevronUp, ChevronDown, SearchX, Search, Trophy } from 'lucide-react';
 import { SyncButton } from './SyncButton';
 import { SyncStatus } from './SyncStatus';
 import { EmptyState } from './ui/EmptyState';
@@ -35,6 +35,120 @@ export const WorkoutsTab = React.memo(({
   isSyncing
 }: WorkoutsTabProps) => {
   const [searchQuery, setSearchQuery] = React.useState('');
+  const [dateRangeFilter, setDateRangeFilter] = React.useState<'all' | '7d' | '30d' | '90d'>('all');
+
+  const filteredWorkouts = React.useMemo(() => {
+    const query = searchQuery.toLowerCase().trim();
+    const dateRangeDays = dateRangeFilter === '7d' ? 7 : dateRangeFilter === '30d' ? 30 : dateRangeFilter === '90d' ? 90 : null;
+    const dateRangeCutoff = dateRangeDays != null ? Date.now() - dateRangeDays * 24 * 60 * 60 * 1000 : null;
+    return summaryData.workouts.filter((workout: any) => {
+      // Type filter
+      let matchesType = true;
+      if (workoutTypeFilter === 'cardio') {
+        matchesType = workout.exercises.some((ex: any) => ex.type === 'cardio') || workout.source === 'apple_health';
+      } else if (workoutTypeFilter === 'strength') {
+        matchesType = workout.exercises.some((ex: any) => ex.type === 'strength' || ex.type === 'bodyweight') || workout.source === 'hevy';
+      }
+
+      if (!matchesType) return false;
+
+      // Date range filter
+      if (dateRangeCutoff != null && new Date(workout.timestamp).getTime() < dateRangeCutoff) return false;
+
+      // Search query filter
+      if (!query) return true;
+
+      const matchesName = workout.name.toLowerCase().includes(query);
+      const matchesExercise = workout.exercises.some((ex: any) =>
+        ex.title.toLowerCase().includes(query)
+      );
+
+      return matchesName || matchesExercise;
+    });
+  }, [summaryData.workouts, workoutTypeFilter, dateRangeFilter, searchQuery]);
+
+  const exportFilteredWorkoutsCsv = () => {
+    const csvCell = (value: unknown) => {
+      const s = String(value ?? '');
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ['Date', 'Name', 'Source', 'Duration (min)', 'Volume', 'Exercises'];
+    const rows = filteredWorkouts.map((workout: any) => [
+      formatDateWithTimezone(workout.timestamp, settings?.timezone),
+      workout.name,
+      workout.source,
+      workout.duration,
+      workout.volume || 0,
+      workout.exercises.map((ex: any) => ex.title).join('; '),
+    ]);
+    const csv = [header, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `workouts-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const prData = React.useMemo(() => {
+    // Walk workouts oldest-first so we can detect the set where each exercise's
+    // all-time-best weight was first reached (a "new PR" at the time it happened).
+    const sorted = [...summaryData.workouts].sort(
+      (a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+    const bestByExercise: Record<string, number> = {};
+    const prSets: Record<string, boolean> = {};
+    const recentPRs: Array<{ title: string; weight: number; reps: number; date: string }> = [];
+
+    sorted.forEach((workout: any) => {
+      workout.exercises.forEach((ex: any, exIdx: number) => {
+        if (ex.type === 'cardio' || ex.type === 'bodyweight') return;
+        ex.sets.forEach((set: any, setIdx: number) => {
+          const weight = set.weight || 0;
+          if (weight <= 0) return;
+          const prevBest = bestByExercise[ex.title] || 0;
+          if (weight > prevBest) {
+            bestByExercise[ex.title] = weight;
+            prSets[`${workout.id}-${exIdx}-${setIdx}`] = true;
+            recentPRs.push({ title: ex.title, weight, reps: set.reps || 0, date: workout.timestamp });
+          }
+        });
+      });
+    });
+
+    return { prSets, recentPRs: recentPRs.reverse().slice(0, 5) };
+  }, [summaryData.workouts]);
+
+  const weekVolumeComparison = React.useMemo(() => {
+    // Strength-set volume (weight x reps) summed over two trailing 7-day
+    // windows, same "strength"/"weightlifting" + weight>0/reps>0 filter as
+    // the Progressive Overload Visualizer chart below, so the badge and the
+    // chart always agree on what counts as volume.
+    const volumeBetween = (startDaysAgo: number, endDaysAgo: number) => {
+      const windowStart = Date.now() - endDaysAgo * 24 * 60 * 60 * 1000;
+      const windowEnd = Date.now() - startDaysAgo * 24 * 60 * 60 * 1000;
+      let total = 0;
+      summaryData.workouts.forEach((workout: any) => {
+        const t = new Date(workout.timestamp).getTime();
+        if (t < windowStart || t >= windowEnd) return;
+        workout.exercises.forEach((ex: any) => {
+          if (ex.type !== 'strength' && ex.type !== 'weightlifting') return;
+          ex.sets.forEach((set: any) => {
+            const weight = set.weight_kg || set.weight || 0;
+            const reps = set.reps || 0;
+            if (weight > 0 && reps > 0) total += weight * reps;
+          });
+        });
+      });
+      return total;
+    };
+
+    const thisWeek = volumeBetween(0, 7);
+    const lastWeek = volumeBetween(7, 14);
+    const pctChange = lastWeek > 0 ? ((thisWeek - lastWeek) / lastWeek) * 100 : null;
+    return { thisWeek, pctChange };
+  }, [summaryData.workouts]);
 
   return (
     <motion.div 
@@ -88,8 +202,8 @@ export const WorkoutsTab = React.memo(({
                     key={type}
                     onClick={() => setWorkoutTypeFilter(type)}
                     className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${
-                      workoutTypeFilter === type 
-                        ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-sm' 
+                      workoutTypeFilter === type
+                        ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-sm'
                         : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
                     }`}
                   >
@@ -97,7 +211,27 @@ export const WorkoutsTab = React.memo(({
                   </button>
                 ))}
               </div>
-              <select 
+              <div className="flex bg-zinc-50 dark:bg-zinc-800 p-1 rounded-xl border border-black/5 dark:border-white/5">
+                {([
+                  { key: 'all', label: 'All' },
+                  { key: '7d', label: '7d' },
+                  { key: '30d', label: '30d' },
+                  { key: '90d', label: '90d' },
+                ] as const).map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => setDateRangeFilter(key)}
+                    className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${
+                      dateRangeFilter === key
+                        ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-sm'
+                        : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <select
                 value={recentSessionsCount}
                 onChange={(e) => setRecentSessionsCount(Number(e.target.value))}
                 className="text-xs font-bold text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-800 border border-black/5 dark:border-white/5 rounded-lg px-2 py-1 outline-none"
@@ -106,41 +240,28 @@ export const WorkoutsTab = React.memo(({
                 <option value={20}>20</option>
                 <option value={50}>50</option>
               </select>
+              <button
+                onClick={exportFilteredWorkoutsCsv}
+                disabled={filteredWorkouts.length === 0}
+                title="Export the currently filtered sessions as CSV"
+                className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-800 border border-black/5 dark:border-white/5 rounded-lg px-3 py-1.5 outline-none hover:text-zinc-700 dark:hover:text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                Export CSV
+              </button>
             </div>
           </div>
           <div className="space-y-4">
             {(() => {
-              const query = searchQuery.toLowerCase().trim();
-              const filteredWorkouts = summaryData.workouts
-                .filter((workout: any) => {
-                  // Type filter
-                  let matchesType = true;
-                  if (workoutTypeFilter === 'cardio') {
-                    matchesType = workout.exercises.some((ex: any) => ex.type === 'cardio') || workout.source === 'apple_health';
-                  } else if (workoutTypeFilter === 'strength') {
-                    matchesType = workout.exercises.some((ex: any) => ex.type === 'strength' || ex.type === 'bodyweight') || workout.source === 'hevy';
-                  }
-
-                  if (!matchesType) return false;
-
-                  // Search query filter
-                  if (!query) return true;
-                  
-                  const matchesName = workout.name.toLowerCase().includes(query);
-                  const matchesExercise = workout.exercises.some((ex: any) => 
-                    ex.title.toLowerCase().includes(query)
-                  );
-                  
-                  return matchesName || matchesExercise;
-                });
+              const dateRangeDays = dateRangeFilter === '7d' ? 7 : dateRangeFilter === '30d' ? 30 : dateRangeFilter === '90d' ? 90 : null;
+              const dateRangeCutoff = dateRangeDays != null ? Date.now() - dateRangeDays * 24 * 60 * 60 * 1000 : null;
 
               if (filteredWorkouts.length === 0) {
                 return (
                   <EmptyState 
                     icon={SearchX}
                     title={searchQuery ? "No matching workouts" : `No ${workoutTypeFilter} sessions`}
-                    description={searchQuery ? `We couldn't find any workouts matching "${searchQuery}".` : "We couldn't find any workouts matching your filter. Sync your data from Apple Health or Hevy to see them here."}
-                    action={!searchQuery ? {
+                    description={searchQuery ? `We couldn't find any workouts matching "${searchQuery}".` : dateRangeCutoff != null ? "No sessions in this date range. Try widening it to All." : "We couldn't find any workouts matching your filter. Sync your data from Apple Health or Hevy to see them here."}
+                    action={!searchQuery && dateRangeCutoff == null ? {
                       label: "Sync Now",
                       onClick: syncAllModules
                     } : undefined}
@@ -236,6 +357,11 @@ export const WorkoutsTab = React.memo(({
                                               <span>{set.reps} reps</span>
                                             ) : (
                                               <span>{formatWorkoutWeight(set.weight, settings?.preferred_units)} x {set.reps}</span>
+                                            )}
+                                            {prData.prSets[`${workout.id}-${idx}-${sIdx}`] && (
+                                              <span className="text-amber-500" title="New personal record">
+                                                <Trophy size={11} />
+                                              </span>
                                             )}
                                             {(set.time || 0) > 0 && (
                                               <span className="text-emerald-600 dark:text-emerald-400 font-bold">
@@ -335,7 +461,25 @@ export const WorkoutsTab = React.memo(({
         <div className="space-y-6 mt-8">
           <div className="flex justify-between items-center">
             <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Progressive Overload Visualizer</h3>
-            <span className="text-xs font-bold text-zinc-400 dark:text-zinc-500 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-lg">Last 90 Days</span>
+            <div className="flex items-center gap-2">
+              {weekVolumeComparison.thisWeek > 0 && (
+                <span
+                  title="Strength-set volume (weight x reps), this week vs the trailing 7 days before it"
+                  className={`text-xs font-bold px-2 py-1 rounded-lg ${
+                    weekVolumeComparison.pctChange == null
+                      ? 'text-zinc-400 dark:text-zinc-500 bg-zinc-100 dark:bg-zinc-800'
+                      : weekVolumeComparison.pctChange >= 0
+                        ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20'
+                        : 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20'
+                  }`}
+                >
+                  {formatWorkoutWeight(weekVolumeComparison.thisWeek, settings?.preferred_units)} this week
+                  {weekVolumeComparison.pctChange != null &&
+                    ` (${weekVolumeComparison.pctChange >= 0 ? '+' : ''}${weekVolumeComparison.pctChange.toFixed(0)}% vs last wk)`}
+                </span>
+              )}
+              <span className="text-xs font-bold text-zinc-400 dark:text-zinc-500 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-lg">Last 90 Days</span>
+            </div>
           </div>
           <div className="grid grid-cols-1 gap-4">
             {(() => {
@@ -420,21 +564,30 @@ export const WorkoutsTab = React.memo(({
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {(() => {
-              const exerciseStats: Record<string, { count: number, bestWeight: number, bestReps: number, type: string }> = {};
+              const exerciseStats: Record<string, { count: number, bestWeight: number, bestReps: number, best1RM: number, type: string }> = {};
               summaryData.workouts.forEach((workout: any) => {
                 workout.exercises.forEach((ex: any) => {
                   const title = ex.title;
                   if (!exerciseStats[title]) {
-                    exerciseStats[title] = { count: 0, bestWeight: 0, bestReps: 0, type: ex.type };
+                    exerciseStats[title] = { count: 0, bestWeight: 0, bestReps: 0, best1RM: 0, type: ex.type };
                   }
                   exerciseStats[title].count += 1;
-                  
+
                   ex.sets.forEach((set: any) => {
                     if ((set.weight || 0) > exerciseStats[title].bestWeight) {
                       exerciseStats[title].bestWeight = set.weight;
                     }
                     if ((set.reps || 0) > exerciseStats[title].bestReps) {
                       exerciseStats[title].bestReps = set.reps;
+                    }
+                    // Epley formula: estimates the 1-rep max implied by a weight x reps set,
+                    // so sets at different rep ranges can be compared on the same scale
+                    // (a plain "best weight" alone favours low-rep sets).
+                    if ((set.weight || 0) > 0 && (set.reps || 0) > 1) {
+                      const estimated1RM = set.weight * (1 + set.reps / 30);
+                      if (estimated1RM > exerciseStats[title].best1RM) {
+                        exerciseStats[title].best1RM = estimated1RM;
+                      }
                     }
                   });
                 });
@@ -452,8 +605,21 @@ export const WorkoutsTab = React.memo(({
                 );
               }
 
-              return sortedExercises.map(([title, stats], idx) => (
-                <div key={idx} className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm flex items-center justify-between">
+              const activeExercise = searchQuery.trim().toLowerCase();
+
+              return sortedExercises.map(([title, stats], idx) => {
+                const isActive = activeExercise.length > 0 && title.toLowerCase() === activeExercise;
+                return (
+                <div
+                  key={idx}
+                  onClick={() => setSearchQuery(isActive ? '' : title)}
+                  title={isActive ? 'Click to clear filter' : `Filter Recent Sessions to ${title}`}
+                  className={`bg-white dark:bg-zinc-900 p-4 rounded-2xl border shadow-sm flex items-center justify-between cursor-pointer transition-all ${
+                    isActive
+                      ? 'border-emerald-500/40 ring-1 ring-emerald-500/30'
+                      : 'border-black/5 dark:border-white/5 hover:border-emerald-500/20'
+                  }`}
+                >
                   <div>
                     <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100">{title}</h4>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">{stats.count} sessions</p>
@@ -465,10 +631,43 @@ export const WorkoutsTab = React.memo(({
                     {stats.bestReps > 0 && stats.bestWeight === 0 && (
                       <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400">{stats.bestReps} reps</p>
                     )}
+                    {stats.best1RM > 0 && (
+                      <p className="text-[10px] text-zinc-400 dark:text-zinc-500">Est. 1RM {formatWorkoutWeight(stats.best1RM, settings?.preferred_units)}</p>
+                    )}
                   </div>
                 </div>
-              ));
+                );
+              });
             })()}
+          </div>
+        </div>
+
+        {/* Recent Personal Records */}
+        <div className="space-y-6 mt-8">
+          <div className="flex justify-between items-center">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Recent Personal Records</h3>
+          </div>
+          <div className="grid grid-cols-1 gap-3">
+            {prData.recentPRs.length === 0 ? (
+              <div className="text-center py-8 border-2 border-dashed border-zinc-100 dark:border-zinc-800 rounded-2xl">
+                <p className="text-zinc-400 dark:text-zinc-500 text-sm italic">No personal records tracked yet</p>
+              </div>
+            ) : (
+              prData.recentPRs.map((pr, idx) => (
+                <div key={idx} className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-amber-100 dark:bg-amber-900/30 rounded-lg flex items-center justify-center text-amber-500">
+                      <Trophy size={14} />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100">{pr.title}</h4>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400">{formatDateWithTimezone(pr.date, settings?.timezone).split(',')[0]}</p>
+                    </div>
+                  </div>
+                  <p className="text-sm font-bold text-amber-500">{formatWorkoutWeight(pr.weight, settings?.preferred_units)}{pr.reps > 0 ? ` x ${pr.reps}` : ''}</p>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>

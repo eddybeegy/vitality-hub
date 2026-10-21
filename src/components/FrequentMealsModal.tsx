@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, ArrowUpDown, ArrowUp, ArrowDown, Utensils } from 'lucide-react';
+import { X, ArrowUpDown, ArrowUp, ArrowDown, Utensils, Search } from 'lucide-react';
 
 interface FrequentMeal {
   name: string;
@@ -19,11 +19,20 @@ interface FrequentMealsModalProps {
 type SortField = 'log_count' | 'name' | 'calories' | 'protein' | 'carbs' | 'fat';
 type SortDirection = 'asc' | 'desc';
 
+const NUMERIC_FIELDS: SortField[] = ['log_count', 'calories', 'protein', 'carbs', 'fat'];
+
 export const FrequentMealsModal = ({ isOpen, onClose }: FrequentMealsModalProps) => {
   const [meals, setMeals] = useState<FrequentMeal[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [sortField, setSortField] = useState<SortField>('log_count');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [filterText, setFilterText] = useState('');
+
+  useEffect(() => {
+    if (isOpen) {
+      setFilterText('');
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
@@ -54,22 +63,28 @@ export const FrequentMealsModal = ({ isOpen, onClose }: FrequentMealsModalProps)
     }
   };
 
+  const filteredMeals = useMemo(() => {
+    const q = filterText.trim().toLowerCase();
+    if (!q) return meals;
+    return meals.filter(m => m.name.toLowerCase().includes(q));
+  }, [meals, filterText]);
+
   const sortedMeals = useMemo(() => {
-    return [...meals].sort((a, b) => {
+    return [...filteredMeals].sort((a, b) => {
       const aVal = a[sortField];
       const bVal = b[sortField];
-      
-      if (typeof aVal === 'string' && typeof bVal === 'string') {
-        return sortDirection === 'asc' 
-          ? aVal.localeCompare(bVal)
-          : bVal.localeCompare(aVal);
+
+      if (!NUMERIC_FIELDS.includes(sortField)) {
+        return sortDirection === 'asc'
+          ? String(aVal).localeCompare(String(bVal))
+          : String(bVal).localeCompare(String(aVal));
       }
-      
-      return sortDirection === 'asc' 
-        ? (aVal as number) - (bVal as number)
-        : (bVal as number) - (aVal as number);
+
+      return sortDirection === 'asc'
+        ? Number(aVal) - Number(bVal)
+        : Number(bVal) - Number(aVal);
     });
-  }, [meals, sortField, sortDirection]);
+  }, [filteredMeals, sortField, sortDirection]);
 
   const SortIcon = ({ field }: { field: SortField }) => {
     if (sortField !== field) return <ArrowUpDown size={14} className="text-zinc-400 opacity-50 ml-1" />;
@@ -105,13 +120,31 @@ export const FrequentMealsModal = ({ isOpen, onClose }: FrequentMealsModalProps)
                   <p className="text-sm text-zinc-500 dark:text-zinc-400">Your most frequent foods and their average macros</p>
                 </div>
               </div>
-              <button 
+              <button
                 onClick={onClose}
                 className="w-10 h-10 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors shrink-0"
               >
                 <X size={20} />
               </button>
             </div>
+
+            {!isLoading && meals.length > 0 && (
+              <div className="flex-none flex items-center gap-3 px-6 py-3 border-b border-black/5 dark:border-white/5 bg-white dark:bg-zinc-900">
+                <div className="relative flex-1 max-w-xs">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                  <input
+                    type="text"
+                    value={filterText}
+                    onChange={(e) => setFilterText(e.target.value)}
+                    placeholder="Filter by food name..."
+                    className="w-full pl-8 pr-3 py-2 text-sm rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-transparent focus:border-orange-400 focus:outline-none text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400"
+                  />
+                </div>
+                <span className="text-xs font-medium text-zinc-400 dark:text-zinc-500 shrink-0">
+                  {sortedMeals.length} / {meals.length}
+                </span>
+              </div>
+            )}
 
             <div className="flex-auto overflow-y-auto min-h-0 bg-white dark:bg-zinc-900">
               {isLoading ? (
@@ -123,6 +156,11 @@ export const FrequentMealsModal = ({ isOpen, onClose }: FrequentMealsModalProps)
                   <Utensils size={48} className="text-zinc-200 dark:text-zinc-800 mb-4" />
                   <p className="text-zinc-500 dark:text-zinc-400 font-medium">No meal data found.</p>
                   <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-2">Log some meals via Apple Health/Cronometer to see insights here.</p>
+                </div>
+              ) : sortedMeals.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-64 text-center p-6">
+                  <Search size={48} className="text-zinc-200 dark:text-zinc-800 mb-4" />
+                  <p className="text-zinc-500 dark:text-zinc-400 font-medium">No matches.</p>
                 </div>
               ) : (
                 <table className="w-full text-left text-sm whitespace-nowrap">

@@ -34,8 +34,8 @@ export const StravaModule: DataSourceModule = {
   },
   purge: async (userId, db, userSettings) => {
     try {
-      db.prepare("DELETE FROM metrics WHERE user_id = ? AND source = 'strava'").run(userId);
-      db.prepare("DELETE FROM workouts WHERE user_id = ? AND source = 'strava'").run(userId);
+      await db.prepare("DELETE FROM metrics WHERE user_id = ? AND source = 'strava'").run(userId);
+      await db.prepare("DELETE FROM workouts WHERE user_id = ? AND source = 'strava'").run(userId);
       return { success: true, message: "Strava data purged" };
     } catch (error: any) {
       return { success: false, message: error.message };

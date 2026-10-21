@@ -1,9 +1,11 @@
+import { ClaudeProvider } from "./claude";
 import { GeminiProvider } from "./gemini";
 import { GroqProvider } from "./groq";
 import { OpenAICompatibleProvider } from "./openai_compatible";
 import { AIProvider } from "./types";
 
 export const AI_PROVIDERS: Record<string, AIProvider> = {
+  claude: ClaudeProvider,
   gemini: GeminiProvider,
   groq: GroqProvider,
   mistral: OpenAICompatibleProvider('mistral', 'Mistral AI', 'https://api.mistral.ai/v1'),

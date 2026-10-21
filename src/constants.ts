@@ -1,4 +1,5 @@
 export const AI_MODELS: Record<string, string[]> = {
+  claude: ["claude-sonnet-4-5-20250929", "claude-opus-4-1-20250805", "claude-3-5-haiku-20241022"],
   gemini: ["gemini-3-pro-preview", "gemini-3.1-flash-preview", "gemini-3.1-flash-lite-preview"],
   groq: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama-3.2-11b-vision-preview", "llama-3.2-3b-preview"],
   mistral: ["mistral-large-latest", "mistral-small-latest", "open-mixtral-8x22b"],
@@ -26,6 +27,9 @@ export const METRIC_MAP: Record<string, string> = {
   "appleStandTime": "stand_time",
 
   // Heart & Vitals
+  "apple_sleeping_wrist_temperature": "wrist_temperature",
+  "sleeping_wrist_temperature": "wrist_temperature",
+  "breathing_disturbances": "breathing_disturbances",
   "heart_rate": "heart_rate",
   "heartRate": "heart_rate",
   "heart_rate_avg": "heart_rate",
