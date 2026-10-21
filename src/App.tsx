@@ -72,6 +72,7 @@ import { useHealthStore } from './store/useHealthStore';
 import { useAIStore } from './store/useAIStore';
 import { useUIStore } from './store/useUIStore';
 import { getLocalDateString, formatDateWithTimezone, parseUTCDate, cn } from './lib/utils';
+import { isTargetSet } from './lib/targets';
 
 export default function App() {
   const { user, isAuthChecking, setUser, setIsAuthChecking } = useAuthStore();
@@ -234,7 +235,7 @@ export default function App() {
   const getTargetValue = (type: string) => {
     if (!targets) return undefined;
     const target = targets.find((t: any) => t.type === type);
-    return target && target.value > 0 ? target.value : undefined;
+    return target && isTargetSet(target.value) ? Number(target.value) : undefined;
   };
 
   // Callers pass metrics `source` values, not module ids. `healthsync` must be listed
