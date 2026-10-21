@@ -42,9 +42,18 @@ an extract if an item needs it.
    `vitality-pr-watch-6c6d` task on ser5** (polls open PRs every 5 minutes, skips
    drafts). No thread hand-merges, and a PR sitting open for a few minutes is the
    queue working, not a stall.
-3. **Only builder edits `progress.md`**, so PRs never conflict in the tracker.
-   Put your status in the PR body instead; builder records the result and the
-   merge sha when it lands. That still stands — a cloud thread editing the
+3. **You own your own item's row in `progress.md`; builder owns everything else
+   in it.** (Revised 2026-10-21 13:30 — the original rule was "only builder edits
+   it", which is why four items still read "NEEDS KIERON" an hour after Kieron had
+   answered them and he got a wrong status report.) Edit *only* the row for the
+   item your PR names, in the same PR as the code, and leave every other line
+   untouched: distinct rows are distinct lines, so they merge cleanly. builder
+   still adds the merge sha and the live-verification result after deploy, and
+   still owns the loose-threads section and any row you did not claim.
+   **Both sides: edit from `main`'s blob, never from a whole-file mirror.** Two
+   tracker clobbers today (`49f562c`, `7af035f`) were a stale copy of the file
+   being written over the top of newer rows — including a sibling session's. A
+   whole-file overwrite of `progress.md` is the one edit that is never correct. That still stands — a cloud thread editing the
    tracker inside a feature PR would collide with every other open PR and with
    builder's own mirror. What changed on 2026-10-21 13:25 is **who is late**: the
    same-session recording duty is builder's, not yours. Any builder session that
