@@ -643,13 +643,7 @@ export default function App() {
               )}
 
               {activeTab === 'debug' && (
-                <DebugTab 
-                  lastAppleHealthSync={lastAppleHealthSync}
-                  settings={settings}
-                  fetchLastAppleHealthSync={fetchLastAppleHealthSync}
-                  debugMetrics={debugMetrics}
-                  lastMetrics={lastMetrics}
-                />
+                <DebugTab settings={settings} />
               )}
             </AnimatePresence>
           </Suspense>
