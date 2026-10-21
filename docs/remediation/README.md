@@ -306,3 +306,14 @@ state must survive losing it. So:
   in as its own PR with its own tracker row, never folded into a queue item. The
   check still gates nothing (`main` unprotected, no required status checks), so this
   blocks no work either way. Root cause record: `3fc8d974`.
+- **2026-10-21 17:20 (builder).** Item **64 is claimed**: PR **#35**
+  (`fix/item-64-log-db-escape`) opened 17:16, **ready, not draft**, and sitting in the
+  `vitality-pr-watch-6c6d` queue — the watcher's gate sees it as unhandled and its next
+  fire was due 17:20, so it is queued, not stuck. Nobody hand-merges it. **#35 carries
+  the row-64 tracker edit itself (+1/-1), so no builder session may touch row 64 from
+  `main` while it is open** — that is exactly the edit that turns a PR's
+  `mergeable_state` dirty and blocks its own gate. It touches `server.ts`, so
+  `server.ts` is held until #35 lands; items 53 and 54 wait their turn, one branch at a
+  time. The cloud session confirmed in-thread at 17:19 that it accepted the item-52
+  correction and that the Gemini workflow stays untouched unless Kieron asks for it as
+  its own item.
