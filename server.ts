@@ -171,8 +171,25 @@ const UNKNOWN_SOURCE_RANK = 4;
 // healthsync writer send UTC). `logs.timestamp` is NOT covered by this: that column has
 // no explicit value and takes DEFAULT CURRENT_TIMESTAMP in the server's session zone
 // (Europe/London), so its queries keep the blanket `AT TIME ZONE 'Europe/London'`.
-const naiveToInstantSql = (col: string, srcCol: string = 'source') =>
+//
+// 2026-10-21, second correction: healthsync's convention SPLITS BY TABLE. The writer
+// is `kb-health` (a container on the deploy host, TZ=Europe/London): `upsertMetric`
+// stamps local wall-clock, but the workout INSERT stamps UTC. Proof: healthsync
+// workout 202737 has naive `2026-10-20 09:25:32` and
+// `external_id healthsync_2026-10-20T09:25:32.887Z_...` -- the naive value IS the
+// instant. So the `healthsync` exception is right for `metrics` and WRONG for
+// `workouts`, where every source is already UTC. Call `instantSql(table, col)` and
+// let it pick; do not reach for either variant directly.
+const naiveLocalOrUtcSql = (col: string, srcCol: string = 'source') =>
   `(CASE WHEN ${srcCol} = 'healthsync' THEN ${col} AT TIME ZONE 'Europe/London' ELSE ${col} AT TIME ZONE 'UTC' END)`;
+const naiveUtcSql = (col: string) => `(${col} AT TIME ZONE 'UTC')`;
+// `meal_items` is cronometer-only (3852 rows, no other source has ever written it)
+// and the module ends in `.toISOString()`, so it is UTC like every non-healthsync
+// writer. Narrowing this union is deliberate: it is what caught `meal_items`
+// silently taking the metrics mapping.
+type NaiveTsTable = 'metrics' | 'workouts' | 'meal_items';
+const instantSql = (table: NaiveTsTable, col: string, srcCol: string = 'source') =>
+  table === 'metrics' ? naiveLocalOrUtcSql(col, srcCol) : naiveUtcSql(col);
 
 function filterMetricsByPriority(metrics: any[], prioritiesJson: string | null, timezone: string = 'UTC') {
   // 2026-10-21: this used to return `metrics` untouched whenever the user had no
@@ -2445,7 +2462,7 @@ async function checkScheduledRegeneration(userId: number) {
       workoutCutoffDate.setDate(workoutCutoffDate.getDate() - workoutHistoryDays);
       const workoutCutoffStr = workoutCutoffDate.toISOString();
 
-      const rawMetrics = await db.prepare(`SELECT type, value, unit, source, ${ db.type === 'sqlite' ? 'timestamp' : naiveToInstantSql('timestamp') } AS timestamp FROM metrics WHERE user_id = ? AND timestamp >= ?`).all(userId, cutoffStr);
+      const rawMetrics = await db.prepare(`SELECT type, value, unit, source, ${ db.type === 'sqlite' ? 'timestamp' : instantSql('metrics', 'timestamp') } AS timestamp FROM metrics WHERE user_id = ? AND timestamp >= ?`).all(userId, cutoffStr);
       const timezone = user.timezone || undefined;
       const filteredMetrics = filterMetricsByPriority(rawMetrics, user.metric_priorities, timezone);
       const metrics = filteredMetrics;
@@ -3171,7 +3188,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
 
     const keyMetrics = await db.prepare(`
       SELECT id, user_id, type, value, unit, source,
-             ${ db.type === 'sqlite' ? 'timestamp' : naiveToInstantSql('timestamp') } AS timestamp
+             ${ db.type === 'sqlite' ? 'timestamp' : instantSql('metrics', 'timestamp') } AS timestamp
       FROM metrics 
       WHERE user_id = ? AND type IN ('weight', 'body_fat', 'muscle_mass', 'lean_body_mass')
       AND ${ db.type === 'sqlite' ? "replace(timestamp, ' ', 'T')" : "timestamp" } >= ?
@@ -3374,7 +3391,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
              w.routine_external_id, w.distance, w.distance_unit, w.energy_burned,
              w.energy_burned_unit, w.heart_rate_avg, w.heart_rate_max, w.elevation,
              w.elevation_unit,
-             ${ db.type === 'sqlite' ? 'w.timestamp' : naiveToInstantSql('w.timestamp', 'w.source') } AS timestamp,
+             ${ db.type === 'sqlite' ? 'w.timestamp' : instantSql('workouts', 'w.timestamp', 'w.source') } AS timestamp,
              r.folder_name as routine_folder 
       FROM workouts w 
       LEFT JOIN routines r ON w.routine_external_id = r.external_id 
@@ -3477,13 +3494,20 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     // `timestamp: day` (midnight), so a client-side max over it reports 00:00 for today
     // and understates freshness by up to a day.
     const readingFreshness: Record<string, string> = {};
-    const noteFreshness = (rows: any[]) => {
+    // Per (table, source) as well as merged. A module is a feed into ONE table -- the
+    // Apple Workouts module writes `workouts` rows tagged `apple_health`, so when its
+    // freshness was taken from the merged per-source max it reported the apple_health
+    // METRICS time: on 2026-10-21 it read 10:40 (33 minutes old) while its newest
+    // workout was 2026-10-13, eight days stale. A dead feed read fresh, which is the
+    // one thing this panel exists to catch (sweep item 39).
+    const readingFreshnessByTable: Record<string, Record<string, string>> = { metrics: {}, workouts: {} };
+    const noteFreshness = (table: string, rows: any[]) => {
       for (const r of rows) {
         if (!r?.source || !r?.timestamp) continue;
         const iso = r.timestamp instanceof Date ? r.timestamp.toISOString() : String(r.timestamp);
-        const prev = readingFreshness[r.source];
-        if (!prev || new Date(iso).getTime() > new Date(prev).getTime()) {
-          readingFreshness[r.source] = iso;
+        for (const bucket of [readingFreshness, readingFreshnessByTable[table]]) {
+          const prev = bucket[r.source];
+          if (!prev || new Date(iso).getTime() > new Date(prev).getTime()) bucket[r.source] = iso;
         }
       }
     };
@@ -3505,12 +3529,11 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     // session zone (Europe/London).
     // Proper fix is sweep item 13 (migrate the columns to timestamptz) plus item 19
     // (make the healthsync writer send UTC); until then this is the honest mapping.
-    const naiveToInstant = (col: string) => naiveToInstantSql(col);
-    noteFreshness(await db.prepare(
-      `SELECT source, MAX(${naiveToInstant('timestamp')}) AS timestamp FROM metrics WHERE user_id = ? GROUP BY source`
+    noteFreshness('metrics', await db.prepare(
+      `SELECT source, MAX(${instantSql('metrics', 'timestamp')}) AS timestamp FROM metrics WHERE user_id = ? GROUP BY source`
     ).all(userId) as any[]);
-    noteFreshness(await db.prepare(
-      `SELECT source, MAX(${naiveToInstant('timestamp')}) AS timestamp FROM workouts WHERE user_id = ? GROUP BY source`
+    noteFreshness('workouts', await db.prepare(
+      `SELECT source, MAX(${instantSql('workouts', 'timestamp')}) AS timestamp FROM workouts WHERE user_id = ? GROUP BY source`
     ).all(userId) as any[]);
 
     // A module id is not always its metrics `source`:
@@ -3533,18 +3556,37 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       strava: ['strava'],
       withings: ['withings'],
     };
-    const freshnessByModule: Record<string, { lastReading: string | null; sources: string[] }> = {};
+    // Which table a module actually writes. Workout feeds must not be able to read
+    // their freshness off a metrics row that another feed sharing the same `source`
+    // tag wrote, or vice versa (item 39). A module not listed here is read against
+    // both tables, as before.
+    const MODULE_TABLES: Record<string, string[]> = {
+      apple_health: ['metrics'],
+      apple_workouts: ['workouts'],
+      cronometer: ['metrics'],
+      hevy: ['workouts'],
+      myfitnesspal: ['metrics'],
+      nutrachek: ['metrics'],
+      strava: ['workouts'],
+      withings: ['metrics'],
+    };
+    const freshnessByModule: Record<string, { lastReading: string | null; sources: string[]; tables: string[] }> = {};
     for (const m of modules) {
       const srcs = MODULE_SOURCES[m.id] || [m.id];
+      const tables = MODULE_TABLES[m.id] || ['metrics', 'workouts'];
       let best: string | null = null;
       const contributing: string[] = [];
       for (const s of srcs) {
-        const t = readingFreshness[s];
+        let t: string | null = null;
+        for (const table of tables) {
+          const c = readingFreshnessByTable[table]?.[s];
+          if (c && (!t || new Date(c).getTime() > new Date(t).getTime())) t = c;
+        }
         if (!t) continue;
         contributing.push(s);
         if (!best || new Date(t).getTime() > new Date(best).getTime()) best = t;
       }
-      freshnessByModule[m.id] = { lastReading: best, sources: contributing };
+      freshnessByModule[m.id] = { lastReading: best, sources: contributing, tables };
     }
 
     // --- Sync issues, keyed by MODULE as well as by log source ---------------
@@ -3582,7 +3624,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
 
     const result = { metrics, latestMetrics, workouts, routines, routineExercises, exercises, sets, mealItems, syncLogs, syncIssues,
       syncIssuesByModule,
-      dataFreshness: { bySource: readingFreshness, byModule: freshnessByModule } };
+      dataFreshness: { bySource: readingFreshness, byTable: readingFreshnessByTable, byModule: freshnessByModule } };
     summaryCache.set(summaryCacheKey, { data: result, timestamp: Date.now() });
     res.json(result);
   });
@@ -3625,36 +3667,57 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
   // Respect backpressure: res.write() returning false means the socket buffer
   // is full, and ignoring it is how you reintroduce the memory problem you
   // just removed -- the rows stop being buffered but the chunks start.
+  // Both listeners have to come off whichever one fires: `once('drain')` removes
+  // itself, but the `error` listener it was paired with stays attached, so a large
+  // export leaked one listener per backpressured write and tripped the
+  // MaxListenersExceededWarning (seen live on a 200 MB all.json). Pair them.
   const writeChunk = (res: any, chunk: string): Promise<void> =>
     new Promise((resolve, reject) => {
       if (res.write(chunk)) return resolve();
-      res.once('drain', resolve);
-      res.once('error', reject);
+      const onDrain = () => { res.removeListener('error', onError); resolve(); };
+      const onError = (err: any) => { res.removeListener('drain', onDrain); reject(err); };
+      res.once('drain', onDrain);
+      res.once('error', onError);
     });
 
   // `table` is interpolated, so only ever pass a literal from this file.
   async function forEachExportBatch(
-    table: string,
+    table: NaiveTsTable,
     columns: string[],
     userId: number,
     onBatch: (rows: any[]) => Promise<void>,
     batchSize: number = EXPORT_BATCH_ROWS,
   ): Promise<void> {
-    const select = ['id', 'timestamp', ...columns.filter(c => c !== 'id' && c !== 'timestamp')].join(', ');
+    // An export is a backup, so the timestamps in it have to be real instants:
+    // `healthsync` rows hold Europe/London wall-clock in a column every reader
+    // treats as UTC, which put every one of them an hour into the future in
+    // metrics.csv and all.json (sweep item 44). Converted on the way out.
+    //
+    // The keyset cursor must keep using the RAW column: `(timestamp, id) > (?, ?)`
+    // compares against stored values, so feeding it a converted instant would
+    // shift the window by the offset and skip or repeat rows at every batch
+    // boundary. So the raw value is selected separately as `__cursor_ts`, which
+    // never reaches the output because the row serialisers only read `columns`.
+    // `ORDER BY` is table-qualified for the same reason: unqualified `timestamp`
+    // would resolve to the converted OUTPUT column and order rows by an instant
+    // the cursor comparison does not agree with.
+    const tsOut = db.type === 'sqlite' ? 'timestamp' : instantSql(table, 'timestamp');
+    const select = ['id', `${tsOut} AS timestamp`, 'timestamp AS __cursor_ts',
+      ...columns.filter(c => c !== 'id' && c !== 'timestamp')].join(', ');
     let lastTs: any = null;
     let lastId = 0;
     for (;;) {
       const rows = (lastTs === null
         ? await db.prepare(
-            `SELECT ${select} FROM ${table} WHERE user_id = ? ORDER BY timestamp ASC, id ASC LIMIT ${batchSize}`
+            `SELECT ${select} FROM ${table} WHERE user_id = ? ORDER BY ${table}.timestamp ASC, ${table}.id ASC LIMIT ${batchSize}`
           ).all(userId)
         : await db.prepare(
-            `SELECT ${select} FROM ${table} WHERE user_id = ? AND (timestamp, id) > (?, ?) ORDER BY timestamp ASC, id ASC LIMIT ${batchSize}`
+            `SELECT ${select} FROM ${table} WHERE user_id = ? AND (${table}.timestamp, ${table}.id) > (?, ?) ORDER BY ${table}.timestamp ASC, ${table}.id ASC LIMIT ${batchSize}`
           ).all(userId, lastTs, lastId)) as any[];
       if (!rows.length) return;
       await onBatch(rows);
       const last = rows[rows.length - 1];
-      lastTs = last.timestamp;
+      lastTs = last.__cursor_ts;
       lastId = last.id;
       if (rows.length < batchSize) return;
     }
@@ -3674,6 +3737,14 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
 
   await app.get("/api/export/metrics.csv", requireAuth, async (req: any, res) => {
     const columns = ['type', 'value', 'unit', 'timestamp', 'source'];
+    // Cloudflare caches by URL extension, so `.csv` landed in its default
+    // static rule: these responses came back `cf-cache-status: HIT` with
+    // `Cache-Control: max-age=14400` that the origin never set. A backup
+    // export served from a 4-hour-old edge copy silently omits everything
+    // since, and it is unfalsifiable from the client -- it masked a verified
+    // timestamp fix during the 2026-10-21 sweep until the request was
+    // cache-busted. An export is never cacheable: it is a point-in-time dump.
+    res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${exportFilename('metrics', 'csv')}"`);
     try {
@@ -3687,6 +3758,14 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
 
   await app.get("/api/export/workouts.csv", requireAuth, async (req: any, res) => {
     const columns = ['name', 'duration', 'volume', 'timestamp', 'source'];
+    // Cloudflare caches by URL extension, so `.csv` landed in its default
+    // static rule: these responses came back `cf-cache-status: HIT` with
+    // `Cache-Control: max-age=14400` that the origin never set. A backup
+    // export served from a 4-hour-old edge copy silently omits everything
+    // since, and it is unfalsifiable from the client -- it masked a verified
+    // timestamp fix during the 2026-10-21 sweep until the request was
+    // cache-busted. An export is never cacheable: it is a point-in-time dump.
+    res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${exportFilename('workouts', 'csv')}"`);
     try {
@@ -3702,6 +3781,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     const userId = req.user.id;
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${exportFilename('backup', 'json')}"`);
+    res.setHeader('Cache-Control', 'no-store');
     try {
       // Hand-rolled JSON streaming. res.json() serialises the entire object to
       // one string first, which for this install was ~170 MB resident on top of
@@ -3709,7 +3789,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       // with what res.json() produced, so existing restore tooling is unaffected.
       await writeChunk(res, `{"exportedAt":${JSON.stringify(new Date().toISOString())}`);
 
-      const streamArray = async (key: string, table: string, columns: string[]) => {
+      const streamArray = async (key: string, table: NaiveTsTable, columns: string[]) => {
         await writeChunk(res, `,${JSON.stringify(key)}:[`);
         let first = true;
         await forEachExportBatch(table, columns, userId, async rows => {
