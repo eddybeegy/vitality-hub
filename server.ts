@@ -157,6 +157,23 @@ const SOURCE_RANK: Record<string, number> = {
 };
 const UNKNOWN_SOURCE_RANK = 4;
 
+// The naive `timestamp` column in `metrics` and `workouts` does not hold one zone, it
+// holds one PER SOURCE: the five in-app ingest modules all end in `toISOString()` so
+// their rows are UTC, while `healthsync` (an external writer, sweep item 19, no module
+// in this codebase) stamps Europe/London wall-clock. 5c6719b converted per source in
+// the summary route's day bucketing and in the two reading-freshness queries, but the
+// routes that hand RAW rows to the client were left alone -- so every healthsync row in
+// `/api/data/summary` arrived at the browser as a London wall-clock value labelled `Z`,
+// and the client's `parseUTCDate` added the offset a second time. Live symptom: the
+// Dashboard header sync badge read 11:40 at 11:09 wall clock (sweep item 44).
+// This is the same mapping as the freshness queries, hoisted so the two cannot drift.
+// Proper fix remains item 13 (migrate the columns to `timestamptz`) + item 19 (make the
+// healthsync writer send UTC). `logs.timestamp` is NOT covered by this: that column has
+// no explicit value and takes DEFAULT CURRENT_TIMESTAMP in the server's session zone
+// (Europe/London), so its queries keep the blanket `AT TIME ZONE 'Europe/London'`.
+const naiveToInstantSql = (col: string, srcCol: string = 'source') =>
+  `(CASE WHEN ${srcCol} = 'healthsync' THEN ${col} AT TIME ZONE 'Europe/London' ELSE ${col} AT TIME ZONE 'UTC' END)`;
+
 function filterMetricsByPriority(metrics: any[], prioritiesJson: string | null, timezone: string = 'UTC') {
   // 2026-10-21: this used to return `metrics` untouched whenever the user had no
   // `metric_priorities`, and to fall back to `candidates[0].source` -- whichever row
@@ -2428,7 +2445,7 @@ async function checkScheduledRegeneration(userId: number) {
       workoutCutoffDate.setDate(workoutCutoffDate.getDate() - workoutHistoryDays);
       const workoutCutoffStr = workoutCutoffDate.toISOString();
 
-      const rawMetrics = await db.prepare("SELECT type, value, unit, timestamp, source FROM metrics WHERE user_id = ? AND timestamp >= ?").all(userId, cutoffStr);
+      const rawMetrics = await db.prepare(`SELECT type, value, unit, source, ${ db.type === 'sqlite' ? 'timestamp' : naiveToInstantSql('timestamp') } AS timestamp FROM metrics WHERE user_id = ? AND timestamp >= ?`).all(userId, cutoffStr);
       const timezone = user.timezone || undefined;
       const filteredMetrics = filterMetricsByPriority(rawMetrics, user.metric_priorities, timezone);
       const metrics = filteredMetrics;
@@ -3153,7 +3170,9 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     });
 
     const keyMetrics = await db.prepare(`
-      SELECT * FROM metrics 
+      SELECT id, user_id, type, value, unit, source,
+             ${ db.type === 'sqlite' ? 'timestamp' : naiveToInstantSql('timestamp') } AS timestamp
+      FROM metrics 
       WHERE user_id = ? AND type IN ('weight', 'body_fat', 'muscle_mass', 'lean_body_mass')
       AND ${ db.type === 'sqlite' ? "replace(timestamp, ' ', 'T')" : "timestamp" } >= ?
       ${ endStr ? `AND ${ db.type === 'sqlite' ? "replace(timestamp, ' ', 'T')" : "timestamp" } <= ?` : '' }
@@ -3351,7 +3370,12 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     }
 
     const workouts = await db.prepare(`
-      SELECT w.*, r.folder_name as routine_folder 
+      SELECT w.id, w.user_id, w.name, w.duration, w.volume, w.source, w.external_id,
+             w.routine_external_id, w.distance, w.distance_unit, w.energy_burned,
+             w.energy_burned_unit, w.heart_rate_avg, w.heart_rate_max, w.elevation,
+             w.elevation_unit,
+             ${ db.type === 'sqlite' ? 'w.timestamp' : naiveToInstantSql('w.timestamp', 'w.source') } AS timestamp,
+             r.folder_name as routine_folder 
       FROM workouts w 
       LEFT JOIN routines r ON w.routine_external_id = r.external_id 
       WHERE w.user_id = ?
@@ -3481,8 +3505,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     // session zone (Europe/London).
     // Proper fix is sweep item 13 (migrate the columns to timestamptz) plus item 19
     // (make the healthsync writer send UTC); until then this is the honest mapping.
-    const naiveToInstant = (col: string) =>
-      `(CASE WHEN source = 'healthsync' THEN ${col} AT TIME ZONE 'Europe/London' ELSE ${col} AT TIME ZONE 'UTC' END)`;
+    const naiveToInstant = (col: string) => naiveToInstantSql(col);
     noteFreshness(await db.prepare(
       `SELECT source, MAX(${naiveToInstant('timestamp')}) AS timestamp FROM metrics WHERE user_id = ? GROUP BY source`
     ).all(userId) as any[]);
