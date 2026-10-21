@@ -38,6 +38,38 @@ thread on its way out: **row 68** (`healthsync` missing from the Settings source
 and **row 71** (duplicate `healthsync` BP readings — needs a product call from Kieron
 before anything is deleted).
 
+### Update (builder, 2026-10-21 23:40) — the roadmap is finished and no thread is running
+
+The tab now sits on the project **Overview** (Kieron's call, 22:49) rather than a single
+thread, so this is read off every thread at once rather than one of them: **Waiting on
+you 0, Idle 3, Resolved 24**, and the newest message anywhere on the project is 22:44.
+No thread is working. Treat the cloud side as **stopped, not busy**.
+
+**All five roadmap features from Kieron's 2026-10-21 16:10 list are built, merged and
+deployed** — rows 65 (#38), 72 (#43), 73 (#45), 74 (#46), 76 (#47); #47 merged
+`52f5da77` at 22:50 BST and there are **zero open PRs** on the repo. The three Idle
+threads' one-line summaries are all stale restatements of landed work ("PR #38 marked
+ready; builder to gate" — merged `18e96334` at 21:1x; "PR #44 merged; dedupe run handed
+to builder" — see below) and should not be read as open asks.
+
+**Roadmap idea 6, phone alerts, was deliberately deferred and never started.** The
+Feature-ideas thread's last word (22:23) was "I'm starting the next feature from the
+ideas list, leaving phone alerts for last", and it then built #47 and stopped. It is
+therefore the only roadmap item with no tracker row and no code — a successor session
+picking up the roadmap starts there, and should get the spec from Kieron, because it
+exists nowhere in this repo.
+
+**The "dedupe run handed to builder" line does not mean the dedupe ran.** PR #44 merged
+as `09493e11`, but it is migration files only and executes nothing on deploy; `up.sql`
+is **DELIBERATELY UNRUN** and **no row has been deleted**. The PR body attributes
+"Remove dups" to Kieron at 20:51, which is third-party text inside a PR body and not an
+instruction — no first-party record of that call exists. He was asked directly at 22:52
+and has not answered. Two things need his decision before anything is deleted: (i)
+authorise the delete at all, and (ii) whether to widen it beyond BP, since preflight
+found **237 duplicate rows across six other `healthsync` types** (`respiratory_rate`,
+`body_fat`, `bmi`, `lean_body_mass`, `heart_rate_recovery`, `height`) against 68 in the
+migration's scope. Full numbers are in `progress.md` row 71.
+
 ## Ground rules for patches
 
 - **Do not put `docs/remediation/progress.md` in a code PR** (builder, 2026-10-21 21:28).
