@@ -24,6 +24,7 @@ import { probeProvider } from "./ai_providers/openai_compatible";
 import { setupDb } from "./src/lib/db";
 import { parseEnumParam, parseDateParam, parseDayParam, parseIntParam, checkDateOrder } from "./src/lib/queryParams";
 import { parseLogLevel, parseSourceList, createLogFilter } from "./src/lib/logLevel";
+import { planRefresh, refreshStartMessage, refreshFinishMessage, RefreshModuleResult } from "./src/lib/refreshPlan";
 
 // Increase MaxListeners limit to prevent TLSSocket warnings during concurrent API sync chunks
 EventEmitter.defaultMaxListeners = 50;
@@ -2933,9 +2934,68 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
   // Fetch Data for Frontend
   const CACHE_TTL = 1000 * 30; // 30 seconds
 
-  app.post("/api/data/refresh", requireAuth, (req: any, res) => {
-    clearUserCache(req.user.id);
-    res.json({ success: true });
+  // "Refresh Data" (Dashboard). This used to be clearUserCache + res.json -- no sync and
+  // no log row, so a click re-read the same rows and left no trace. It now syncs the
+  // user's enabled pull modules (see src/lib/refreshPlan.ts for why push-only modules
+  // are skipped) as ONE queued task, so /api/sync/status stays true until all of them
+  // finish, and writes a start and a finish row under source 'refresh'. Each module's
+  // verdict is also logged under its own source, exactly as /api/sync/:moduleId does,
+  // because syncIssues/isIssueResolved read that as the module's success signal.
+  app.post("/api/data/refresh", requireAuth, async (req: any, res) => {
+    const userId = Number(req.user.id);
+    clearUserCache(userId);
+
+    if (activeSyncs.has(userId)) {
+      await logEvent('info', 'Refresh Data: ignored, a sync is already running', 'refresh', userId);
+      return res.status(409).json({ started: false, error: 'A sync is already running' });
+    }
+
+    const user = await db.prepare("SELECT modules_config, timezone FROM users WHERE id = ?").get(userId) as { modules_config: string; timezone?: string };
+    let config: Record<string, any> = {};
+    try {
+      config = user?.modules_config ? JSON.parse(user.modules_config) : {};
+    } catch (e) {
+      config = {};
+    }
+    const plan = planRefresh(modules.map(m => m.id), config);
+    await logEvent('info', refreshStartMessage(plan), 'refresh', userId);
+
+    if (plan.sync.length === 0) {
+      return res.json({ started: false, modules: [], skipped: plan.skipped });
+    }
+
+    activeSyncs.add(userId);
+    syncQueue.enqueue({
+      execute: async () => {
+        const startedAt = Date.now();
+        const results: RefreshModuleResult[] = [];
+        try {
+          for (const moduleId of plan.sync) {
+            const module = modules.find(m => m.id === moduleId)!;
+            try {
+              const userSettings = { ...config[moduleId]?.settings, timezone: user?.timezone };
+              const result = await module.sync(userId, db, (level: any, msg: any, src: any) => logEvent(level, msg, src, userId), userSettings);
+              if (result?.success) {
+                await logEvent('info', result.message || `Synced ${moduleId} successfully`, moduleId, userId);
+                results.push({ id: moduleId, ok: true });
+              } else {
+                await logEvent('error', result?.message || `Sync failed for ${moduleId}`, moduleId, userId);
+                results.push({ id: moduleId, ok: false, message: result?.message });
+              }
+            } catch (e: any) {
+              await logEvent('error', `Sync error for ${moduleId}: ${e?.message || e}`, moduleId, userId);
+              results.push({ id: moduleId, ok: false, message: e?.message || String(e) });
+            }
+          }
+          await logEvent('info', refreshFinishMessage(results, Date.now() - startedAt), 'refresh', userId);
+        } finally {
+          clearUserCache(userId);
+          activeSyncs.delete(userId);
+        }
+      }
+    });
+
+    res.status(202).json({ started: true, modules: plan.sync, skipped: plan.skipped });
   });
 
   await app.get("/api/metrics/aggregated", requireAuth, async (req: any, res) => {

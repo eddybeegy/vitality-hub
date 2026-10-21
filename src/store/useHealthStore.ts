@@ -310,9 +310,28 @@ export const useHealthStore = create<HealthState>((set, get) => ({
     }
   },
   refreshSummary: async () => {
+    // POST /api/data/refresh now starts a real sync of the pull modules (202) and
+    // returns before it finishes, so keep the spinner up and poll /api/sync/status the
+    // same way syncAllModules does, then refetch once. 409 means a sync is already
+    // running: wait for that one instead. Capped so a hung upstream can't spin forever.
     set({ isSyncing: true });
     try {
-      await fetch('/api/data/refresh', { method: 'POST' });
+      const res = await fetch('/api/data/refresh', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 202 || res.status === 409) {
+        const names = Array.isArray(body?.modules) && body.modules.length ? body.modules.join(', ') : 'modules';
+        useUIStore.getState().showToast(res.status === 409 ? 'A sync is already running…' : `Syncing ${names}…`, 'info');
+        const deadline = Date.now() + 5 * 60_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 2000));
+          const statusRes = await fetch('/api/sync/status');
+          if (!statusRes.ok) break;
+          const status = await statusRes.json();
+          if (!status.isSyncing) break;
+        }
+      } else if (!res.ok) {
+        console.error(`Refresh Data failed: HTTP ${res.status}`);
+      }
       await get().fetchSummary();
     } catch (err) {
       console.error("Failed to refresh summary:", err);
