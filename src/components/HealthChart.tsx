@@ -323,6 +323,28 @@ export const HealthChart = ({
     
     if (!processedData || processedData.length === 0) return stats;
 
+    // The one quantity both headlines report for a bucket, so "latest" and "avg" are
+    // always comparable (item 22). For a summed stack (e.g. Sleep Stages) that is the
+    // stack total -- the height of the bar -- otherwise it is the primary dataKey.
+    const headlineValue = (item: any): number | null => {
+      if (stackKeys && stackKeys.length > 0 && sumStackInLatest) {
+        let sum = 0;
+        let seen = false;
+        stackKeys.forEach(s => {
+          const v = Number(item[s.key]);
+          if (item[s.key] != null && !isNaN(v)) { sum += v; seen = true; }
+        });
+        // Also add the primary dataKey if it's not already in stackKeys
+        if (!stackKeys.find(s => s.key === dataKey)) {
+          const v = Number(item[dataKey]);
+          if (item[dataKey] != null && !isNaN(v)) { sum += v; seen = true; }
+        }
+        return seen ? sum : null;
+      }
+      const val = Number(item[dataKey]);
+      return item[dataKey] == null || isNaN(val) ? null : val;
+    };
+
     const lastItem = processedData[processedData.length - 1];
     
     // For latest value, we now favor the aggregated value from processedData
@@ -330,21 +352,8 @@ export const HealthChart = ({
     if (type === 'rangeBar' && Array.isArray(lastItem[dataKey])) {
       stats.latestRange = [Number(lastItem[dataKey][0]), Number(lastItem[dataKey][1])];
       stats.latest = Number(lastItem[dataKey][1]);
-    } else if (stackKeys && stackKeys.length > 0 && sumStackInLatest) {
-      let sum = 0;
-      stackKeys.forEach(s => {
-        const v = Number(lastItem[s.key]);
-        if (!isNaN(v)) sum += v;
-      });
-      // Also add the primary dataKey if it's not already in stackKeys
-      if (!stackKeys.find(s => s.key === dataKey)) {
-        const v = Number(lastItem[dataKey]);
-        if (!isNaN(v)) sum += v;
-      }
-      stats.latest = sum;
     } else {
-      const val = Number(lastItem[dataKey]);
-      stats.latest = isNaN(val) ? null : val;
+      stats.latest = headlineValue(lastItem);
     }
 
     // Fallback to raw data ONLY if latest is still null (rarely happens if processedData exists)
@@ -369,8 +378,8 @@ export const HealthChart = ({
     let sum = 0;
     let count = 0;
     processedData.forEach(item => {
-      const val = type === 'rangeBar' && Array.isArray(item[dataKey]) ? Number(item[dataKey][1]) : Number(item[dataKey]);
-      if (!isNaN(val)) {
+      const val = type === 'rangeBar' && Array.isArray(item[dataKey]) ? Number(item[dataKey][1]) : headlineValue(item);
+      if (val !== null && !isNaN(val)) {
         sum += val;
         count++;
       }
@@ -378,7 +387,7 @@ export const HealthChart = ({
     stats.average = count > 0 ? sum / count : null;
     
     return stats;
-  }, [data, fetchedData, url, processedData, dataKey, type, rangeKeys, stackKeys]);
+  }, [data, fetchedData, url, processedData, dataKey, type, rangeKeys, stackKeys, sumStackInLatest]);
 
   const safeDateFormatter = (str: string) => {
     const d = parseUTCDate(str);
