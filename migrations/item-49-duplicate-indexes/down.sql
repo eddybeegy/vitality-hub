@@ -21,6 +21,12 @@ BEGIN
   END IF;
 END $$;
 
+\echo '== manifest rows whose index exists again (never dropped, or rebuilt by a later boot) - nothing to restore =='
+SELECT table_name, index_name FROM item49_dropped_indexes
+ WHERE to_regclass(format('public.%I', index_name)) IS NOT NULL ORDER BY 1, 2;
+-- (Before the item 49 server.ts change, boot rebuilt every dropped idx_* index, so a
+-- manifest from the 13:27 run lists two such rows. Step 1's IF NOT EXISTS skips them.)
+
 -- An index left INVALID by an interrupted CONCURRENTLY build would satisfy IF NOT
 -- EXISTS below and never be rebuilt, so clear any such leftover first.
 SELECT format('DROP INDEX CONCURRENTLY IF EXISTS public.%I', d.index_name)
@@ -30,8 +36,8 @@ SELECT format('DROP INDEX CONCURRENTLY IF EXISTS public.%I', d.index_name)
  WHERE NOT ix.indisvalid
 \gexec
 
--- 1. Rebuild each index concurrently, from its recorded definition.
-SELECT regexp_replace(d.indexdef, '^CREATE UNIQUE INDEX ', 'CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ')
+-- 1. Rebuild each index concurrently, from its recorded definition (unique or not).
+SELECT regexp_replace(d.indexdef, '^CREATE (UNIQUE )?INDEX ', 'CREATE \1INDEX CONCURRENTLY IF NOT EXISTS ')
   FROM item49_dropped_indexes d
  ORDER BY d.table_name, d.index_name
 \gexec
@@ -64,10 +70,10 @@ BEGIN
 END $$;
 DROP TABLE item49_dropped_indexes;
 
-\echo '== unique indexes now on metrics and meal_items =='
-SELECT c.relname AS table_name, i.relname AS index_name, ix.indisvalid AS valid
+\echo '== indexes now on metrics, meal_items, workouts =='
+SELECT c.relname AS table_name, i.relname AS index_name, ix.indisunique AS uniq, ix.indisvalid AS valid
   FROM pg_index ix
   JOIN pg_class i ON i.oid = ix.indexrelid
   JOIN pg_class c ON c.oid = ix.indrelid
- WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('metrics', 'meal_items') AND ix.indisunique
+ WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('metrics', 'meal_items', 'workouts')
  ORDER BY 1, 2;

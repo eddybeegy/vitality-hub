@@ -962,18 +962,19 @@ async function ensureSchema() {
     }
   }
 
-  // Add indexes
-  const indexes = [
-    { name: 'idx_metrics_unique', table: 'metrics', columns: 'user_id, type, timestamp, source', unique: true },
+  // Add indexes. Never list a shape the per-table block in the CREATE TABLE loop
+  // already creates under its own name: IF NOT EXISTS matches by name only, so a
+  // second name builds a full duplicate index on every boot. Item 49 found five
+  // here (idx_metrics_unique, idx_metrics_user_ts, idx_workouts_user_ts,
+  // idx_meal_items_user_ts, idx_meal_items_unique), ~140 MB on metrics alone, and
+  // they came back at the next restart after being dropped.
+  // server.indexes.test.ts fails if a new one appears.
+  const indexes: { name: string; table: string; columns: string; unique?: boolean }[] = [
     { name: 'idx_metrics_user_type_ts', table: 'metrics', columns: 'user_id, type, timestamp' },
-    { name: 'idx_metrics_user_ts', table: 'metrics', columns: 'user_id, timestamp' },
-    { name: 'idx_workouts_user_ts', table: 'workouts', columns: 'user_id, timestamp' },
     { name: 'idx_workout_exercises_workout_id', table: 'workout_exercises', columns: 'workout_id' },
     { name: 'idx_workout_sets_exercise_id', table: 'workout_sets', columns: 'exercise_id' },
     { name: 'idx_routine_exercises_routine_id', table: 'routine_exercises', columns: 'routine_id' },
     { name: 'idx_logs_timestamp', table: 'logs', columns: 'timestamp' },
-    { name: 'idx_meal_items_user_ts', table: 'meal_items', columns: 'user_id, timestamp' },
-    { name: 'idx_meal_items_unique', table: 'meal_items', columns: 'user_id, timestamp, name, source', unique: true },
     { name: 'idx_chat_history_date', table: 'chat_history', columns: 'date' }
   ];
 
@@ -3689,7 +3690,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
   // Streaming here is keyset pagination, not a pg cursor, because the db
   // wrapper fronts sqlite/postgres/mariadb and a cursor is postgres-only.
   // Ordering is (timestamp, id): timestamp alone is NOT unique in metrics
-  // (idx_metrics_unique is user_id+type+timestamp+source), so a timestamp-only
+  // (metrics_unique_idx is user_id+type+timestamp+source), so a timestamp-only
   // cursor would skip or repeat rows wherever a user has two readings at the
   // same instant -- which is the normal case for a multi-source import.
   // Row-value comparison `(timestamp, id) > (?, ?)` is supported by all three
