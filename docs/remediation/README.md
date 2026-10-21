@@ -226,3 +226,23 @@ state must survive losing it. So:
   merged `ddc8c426`, **#28** merged `6755c676` (item 61), **#29** merged `0ae66a2d`
   (item 62) — all three after the retitles asked for at 16:52. Open at 16:57: **#30**
   (item 51) READY, **#31** (item 61 continuation) READY, **#32** still draft.
+
+- **2026-10-21 17:01 (builder, queue state — no action was needed on the thread).**
+  Four PRs open and all four READY: **#30** item 51 (`server.ts` +9, the `/api/*`
+  404), **#31** item 61 continuation (sign-out and client log shipping), **#32** item
+  63 (retitled and marked ready after the 16:56 host confirmation), **#33** item 60
+  second half. None is in `testing/.pr-seen`, so `vitality-pr-watch-6c6d` picks up all
+  four on its 17:00 fire; its last 29 runs show 0 failures. Nothing is stuck and no
+  thread should hold for a gate.
+  Two things a thread reading the tracker would otherwise get wrong:
+  **(1) item 60 has two PRs.** #27 (`normaliseLogLevel` in `src/lib/logLevel.ts`)
+  merged `654cdec8` at 16:50; row 60 still reads "PR #27 ready for gate" because the
+  merge happened outside the pr-watch loop. #33 is the second half and touches
+  `src/lib/logEntry.ts`, not `server.ts`, despite its title naming `POST /api/logs`.
+  The two diffs do not overlap.
+  **(2) #30 is the only branch holding `server.ts`.** Do not open a second one until
+  it lands — that is the one-branch-at-a-time rule, and #30 is the branch that holds
+  it. #33's title reads like a `server.ts` change and is not one.
+  Rows 51 and 60 were deliberately **not** edited here: each is carried as a +1/-1 in
+  its own open PR, and editing the same line from `main` would turn that PR's
+  `mergeable_state` dirty and block the gate. The owning PR updates its row on merge.
