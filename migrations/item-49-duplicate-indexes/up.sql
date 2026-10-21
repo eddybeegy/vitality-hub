@@ -130,7 +130,7 @@ SELECT format('ALTER TABLE public.%I DROP CONSTRAINT %I', d.table_name, d.constr
                 WHERE c.conname = d.constraint_name AND c.conrelid = ('public.' || d.table_name)::regclass)
    -- Safety: only while ANOTHER valid index of exactly the same shape, not itself
    -- on the drop list, is still there. This is checked against the live catalog at
-   -- the moment each statement is generated, so no re-run, from any half-applied
+   -- the moment each statement is generated, so no re-run, from any partial
    -- state, can leave a table without its copy of the shape.
    AND EXISTS (SELECT 1 FROM pg_index tx JOIN pg_class ti ON ti.oid = tx.indexrelid
                 WHERE tx.indrelid = ('public.' || d.table_name)::regclass
@@ -154,7 +154,7 @@ SELECT format('DROP INDEX CONCURRENTLY IF EXISTS public.%I', d.index_name),
  WHERE d.constraint_name IS NULL AND d.dropped_at IS NULL
    -- Safety: only while ANOTHER valid index of exactly the same shape, not itself
    -- on the drop list, is still there. This is checked against the live catalog at
-   -- the moment each statement is generated, so no re-run, from any half-applied
+   -- the moment each statement is generated, so no re-run, from any partial
    -- state, can leave a table without its copy of the shape.
    AND EXISTS (SELECT 1 FROM pg_index tx JOIN pg_class ti ON ti.oid = tx.indexrelid
                 WHERE tx.indrelid = ('public.' || d.table_name)::regclass

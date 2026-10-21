@@ -132,9 +132,9 @@ echo '== up after down =='
 psql_db -f "$here/up.sql" >/dev/null 2>&1
 [ "$(names meal_items)" = "$MI_AFTER" ] || fail 'up after down'
 
-echo '== half-applied live state (2026-10-21 13:27): first-version manifest, constraints gone, idx_* still there =='
+echo '== live state after the 13:27 run and a restart: first-version manifest, constraints gone, idx_* uniques rebuilt by boot =='
 psql_db -f "$here/down.sql" >/dev/null 2>&1
-[ "$(names metrics)" = "$M_BEFORE" ] || fail 'down before the half-applied scenario'
+[ "$(names metrics)" = "$M_BEFORE" ] || fail 'down before the 13:27 scenario'
 psql_db <<'SQL'
 -- The manifest exactly as PR #16's up.sql wrote it: no dropped_at column.
 CREATE TABLE item49_dropped_indexes (index_name text PRIMARY KEY, table_name text NOT NULL,
@@ -145,11 +145,11 @@ SELECT i.relname, c.relname, con.conname, pg_get_indexdef(i.oid)
   LEFT JOIN pg_constraint con ON con.conindid = i.oid AND con.contype = 'u'
  WHERE i.relname IN ('metrics_user_id_type_timestamp_source_key', 'meal_items_user_id_timestamp_name_source_key',
                      'idx_metrics_unique', 'idx_meal_items_unique');
--- The constraint drops committed; the DROP INDEX CONCURRENTLY step never did.
+-- The 13:27 run dropped all four; a later boot rebuilt the two idx_* uniques.
 ALTER TABLE metrics DROP CONSTRAINT metrics_user_id_type_timestamp_source_key;
 ALTER TABLE meal_items DROP CONSTRAINT meal_items_user_id_timestamp_name_source_key;
 SQL
-psql_db -f "$here/up.sql" >/dev/null 2>&1 || fail 'up.sql failed from the half-applied state'
+psql_db -f "$here/up.sql" >/dev/null 2>&1 || fail 'up.sql failed from the 13:27 state'
 [ "$(names metrics)" = "$M_AFTER" ]     || fail "metrics after finishing: $(names metrics)"
 [ "$(names meal_items)" = "$MI_AFTER" ] || fail "meal_items after finishing: $(names meal_items)"
 [ "$(names workouts)" = "$W_AFTER" ]    || fail "workouts after finishing: $(names workouts)"
@@ -165,7 +165,7 @@ psql_db -f "$here/up.sql" >/dev/null 2>&1 || fail 'up.sql errored on the poisone
 val "DELETE FROM item49_dropped_indexes WHERE index_name = 'metrics_unique_idx'" >/dev/null
 echo '   OK: refused, and reported as not dropped'
 
-echo '== down after the half-applied run =='
+echo '== down after the 13:27 scenario =='
 psql_db -f "$here/down.sql" >/dev/null 2>&1 || fail 'down failed'
 [ "$(names metrics)" = "$M_BEFORE" ] || fail "metrics after down: $(names metrics)"
 psql_db -f "$here/up.sql" >/dev/null 2>&1

@@ -21,11 +21,11 @@ BEGIN
   END IF;
 END $$;
 
-\echo '== manifest rows whose index still exists: recorded, but never actually dropped - nothing to restore =='
+\echo '== manifest rows whose index exists again (never dropped, or rebuilt by a later boot) - nothing to restore =='
 SELECT table_name, index_name FROM item49_dropped_indexes
  WHERE to_regclass(format('public.%I', index_name)) IS NOT NULL ORDER BY 1, 2;
--- (A first-version manifest can list such rows: up.sql recorded them and was
--- interrupted before the drop committed. Step 1's IF NOT EXISTS skips them.)
+-- (Before the item 49 server.ts change, boot rebuilt every dropped idx_* index, so a
+-- manifest from the 13:27 run lists two such rows. Step 1's IF NOT EXISTS skips them.)
 
 -- An index left INVALID by an interrupted CONCURRENTLY build would satisfy IF NOT
 -- EXISTS below and never be rebuilt, so clear any such leftover first.
