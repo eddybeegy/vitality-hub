@@ -11,7 +11,7 @@
  * is reported back in ms; resting HR is close enough to normal to use raw bpm.
  *
  * Days are calendar days in the user's timezone. The aggregated rows the
- * dashboard and buildReadiness() feed in already carry a bare 'YYYY-MM-DD'
+ * dashboard and loadReadinessInputs() feed in already carry a bare 'YYYY-MM-DD'
  * (bucketed per source by aggregateDailyMetrics, which is where the
  * per-source timestamp conventions are handled); a full timestamp is
  * formatted into the user's zone. All day arithmetic is Date.UTC on a pure
@@ -60,7 +60,8 @@ function dayNumber(day: string): number {
   return Date.UTC(y, m - 1, d) / DAY_MS;
 }
 
-function toDay(timestamp: string, formatter: Intl.DateTimeFormat): string | null {
+/** The calendar day of a metric row: a bare YYYY-MM-DD as is, a timestamp formatted into the zone. */
+export function metricDay(timestamp: string, formatter: Intl.DateTimeFormat): string | null {
   if (!timestamp) return null;
   if (DAY_RE.test(timestamp)) return timestamp;
   const hasZone = /(Z|[+-]\d{2}:?\d{2})$/.test(timestamp);
@@ -86,7 +87,7 @@ export function dailySeries(metrics: MetricLike[], type: string, timezone = 'UTC
     if (m.type !== type) continue;
     const value = Number(m.value);
     if (!Number.isFinite(value) || value <= 0) continue;
-    const day = toDay(String(m.timestamp ?? ''), formatter);
+    const day = metricDay(String(m.timestamp ?? ''), formatter);
     if (!day) continue;
     if (!byDay[day]) byDay[day] = { total: 0, count: 0 };
     byDay[day].total += value;

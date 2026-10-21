@@ -34,6 +34,7 @@ import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/l
 import { calculateReadinessScore, type ReadinessResult } from "./src/lib/readiness";
 import { chooseSource, type SourceCounts } from "./src/lib/sourcePriority";
 import { latestBpReadings, BP_TYPES } from "./src/lib/bpLatest";
+import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toSnapshot, historyForAIContext, parseStoredComponents, READINESS_ALGO_VERSION, DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, type ReadinessSnapshot } from "./src/lib/readinessHistory";
 import { validateDayTagInput, normaliseTag, tagsForAIContext, todayIn, addDays, daysBetween, MAX_RANGE_DAYS, type DayTag } from "./src/lib/dayTags";
 
 // Increase MaxListeners limit to prevent TLSSocket warnings during concurrent API sync chunks
@@ -624,6 +625,19 @@ async function ensureSchema() {
       tag: "VARCHAR(32)",
       note: "TEXT",
       created_at: "DATETIME DEFAULT CURRENT_TIMESTAMP"
+    },
+    // Item 76: one readiness snapshot per finished calendar day. `snapshot_date` is
+    // the user's day as a bare YYYY-MM-DD (VARCHAR for the MySQL UNIQUE key, as in
+    // day_tags); `components` is JSON text. A derived cache: every row can be
+    // recomputed from metrics, and rows from another algo_version are recomputed.
+    readiness_snapshots: {
+      id: "INTEGER PRIMARY KEY AUTOINCREMENT",
+      user_id: "INTEGER",
+      snapshot_date: "VARCHAR(10)",
+      score: "INTEGER",
+      components: "TEXT",
+      algo_version: "INTEGER",
+      created_at: "DATETIME DEFAULT CURRENT_TIMESTAMP"
     }
   };
 
@@ -640,6 +654,7 @@ async function ensureSchema() {
     if (tableName === 'routine_exercises') createSql += `, FOREIGN KEY(routine_id) REFERENCES routines(id) ON DELETE CASCADE`;
     if (tableName === 'ai_configs') createSql += `, UNIQUE(user_id, provider)`;
     if (tableName === 'day_tags') createSql += `, UNIQUE(user_id, tag_date, tag)`;
+    if (tableName === 'readiness_snapshots') createSql += `, UNIQUE(user_id, snapshot_date)`;
     createSql += `)`;
     
     try {
@@ -2106,7 +2121,7 @@ async function checkScheduledRegeneration(userId: number) {
    * preferring the highest-ranked source available for that day.
    *
    * 2026-10-18: extracted verbatim out of GET /api/data/summary so that
-   * buildReadiness() below sees exactly the numbers the dashboard sees. A second
+   * loadReadinessInputs() below sees exactly the numbers the dashboard sees. A second
    * implementation of this aggregation would drift, and the Smart Adjustments
    * card renders the readiness score right next to the advice derived from it —
    * a drift would be visible in one glance.
@@ -2310,13 +2325,13 @@ async function checkScheduledRegeneration(userId: number) {
   }
 
   /**
-   * Readiness for a user, computed from the same daily aggregation the dashboard
-   * uses. Returned by GET /api/ai/data (already in coach's service-token
-   * allowlist) so coach can build the Smart Adjustments prompt without
-   * reimplementing the score. The score itself is src/lib/readiness.ts, the same
-   * function the dashboard card calls -- this used to be a hand-kept copy.
+   * The inputs readiness is scored from: the same daily aggregation the dashboard
+   * uses, plus targets and zone. loadReadinessHistory() below scores them with
+   * src/lib/readiness.ts, the same function the dashboard card calls (this used
+   * to be a hand-kept copy), and GET /api/ai/data returns today's score so coach
+   * can build the Smart Adjustments prompt without reimplementing it.
    */
-  async function buildReadiness(userId: number): Promise<ReadinessResult | null> {
+  async function loadReadinessInputs(userId: number): Promise<{ metrics: any[]; targets: any[]; timezone: string }> {
     const user = await db.prepare("SELECT timezone, metric_priorities FROM users WHERE id = ?").get(userId) as any;
     const timezone = user?.timezone || 'UTC';
 
@@ -2343,7 +2358,58 @@ async function checkScheduledRegeneration(userId: number) {
     const metrics = aggregateDailyMetrics(filtered, timezone, summed, []);
 
     const targets = await db.prepare("SELECT * FROM targets WHERE user_id = ?").all(userId) as any[];
-    return calculateReadinessScore(metrics, targets, timezone);
+    return { metrics, targets, timezone };
+  }
+
+  /**
+   * Item 76: readiness for the last `days` calendar days in the user's zone, oldest
+   * first, with today computed live and last. Finished days come from
+   * readiness_snapshots; any finished day missing there (or stored by another
+   * algo_version) is scored as of that day and stored, so a past day's score is
+   * fixed once its day is over. Days with no HRV, resting-HR or sleep reading of
+   * their own are gaps (see readinessHistory.ts).
+   */
+  async function loadReadinessHistory(userId: number, days: number): Promise<{ today: string; live: ReadinessResult | null; history: ReadinessSnapshot[] }> {
+    const { metrics, targets, timezone } = await loadReadinessInputs(userId);
+    const tz = resolveTimeZone(timezone);
+    const today = todayIn(tz);
+    const start = addDays(today, -(days - 1));
+    const live = calculateReadinessScore(metrics, targets, tz);
+    const todaySnap = live ? toSnapshot(today, live) : null;
+
+    let stored: any[] = [];
+    try {
+      stored = await db.prepare(
+        "SELECT snapshot_date, score, components FROM readiness_snapshots WHERE user_id = ? AND algo_version = ? AND snapshot_date >= ? AND snapshot_date < ? ORDER BY snapshot_date ASC"
+      ).all(userId, READINESS_ALGO_VERSION, start, today) as any[];
+    } catch (e: any) {
+      logEvent('warn', `Could not read readiness snapshots: ${e?.message || e}`, 'App', userId);
+    }
+    const byDay = new Map<string, ReadinessSnapshot>(stored.map(r => [String(r.snapshot_date), {
+      date: String(r.snapshot_date), score: Number(r.score), components: parseStoredComponents(r.components)
+    }]));
+
+    const missing = start < today ? dayRange(start, addDays(today, -1)).filter(d => !byDay.has(d)) : [];
+    for (const snap of computeReadinessHistory(metrics, targets, tz, missing)) {
+      byDay.set(snap.date, snap);
+      try {
+        // Update-then-insert, as for day_tags: INSERT OR REPLACE is not portable through translateSql.
+        const json = JSON.stringify(snap.components);
+        const upd = await db.prepare("UPDATE readiness_snapshots SET score = ?, components = ?, algo_version = ? WHERE user_id = ? AND snapshot_date = ?")
+          .run(snap.score, json, READINESS_ALGO_VERSION, userId, snap.date);
+        if (!upd.changes) {
+          await db.prepare("INSERT OR IGNORE INTO readiness_snapshots (user_id, snapshot_date, score, components, algo_version) VALUES (?, ?, ?, ?, ?)")
+            .run(userId, snap.date, snap.score, json, READINESS_ALGO_VERSION);
+        }
+      } catch (e: any) {
+        // Not storing only costs a recompute next time; the response is still right.
+        logEvent('warn', `Could not store readiness snapshot ${snap.date}: ${e?.message || e}`, 'App', userId);
+      }
+    }
+
+    const history = [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
+    if (todaySnap) history.push(todaySnap);
+    return { today, live, history };
   }
 
 
@@ -2477,6 +2543,7 @@ async function checkScheduledRegeneration(userId: number) {
       const previousInsights = await db.prepare("SELECT content, date FROM ai_insights WHERE user_id = ? AND type = 'combined' ORDER BY date DESC, updated_at DESC LIMIT 2").all(userId) as any[];
 
       const dayTags = tagsForAIContext(await loadRecentDayTags(userId, user.timezone));
+      const readinessLast7 = historyForAIContext((await loadReadinessHistory(userId, 7)).history);
 
       // Compact recent-session summary: top working set per exercise as a progression proxy.
       const workoutSummaries = workouts.slice(0, 12).map((w: any) => {
@@ -2511,6 +2578,9 @@ async function checkScheduledRegeneration(userId: number) {
         // Item 74: what the user said happened on a day (ill, travel, alcohol...).
         // Read a dip or spike on a tagged day in that light before calling it a trend.
         day_tags_last_30_days: dayTags,
+        // Item 76: one readiness score per day (today last) with its component scores,
+        // so a change can be traced to HRV, resting HR, sleep or yesterday's burn.
+        readiness_last_7_days: readinessLast7,
         body_weight_history_90_days: bodyWeightTrends,
         daily_metrics: aggregated.map(a => {
           const compact: any = { date: a.date };
@@ -4023,7 +4093,8 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     // Readiness is computed server-side (2026-10-18) so coach can build the
     // Smart Adjustments prompt from this one allowlisted endpoint. null when the
     // user has no metrics at all, same as the client-side version.
-    const readiness = await buildReadiness(userId);
+    // Item 76: the same call also yields the last 7 days of readiness, today last.
+    const { live: readiness, history: readinessHistory } = await loadReadinessHistory(userId, 7);
     const tzRow = await db.prepare("SELECT timezone FROM users WHERE id = ?").get(userId) as any;
     const dayTags = tagsForAIContext(await loadRecentDayTags(userId, tzRow?.timezone));
 
@@ -4037,7 +4108,8 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       sets,
       routines,
       routineExercises,
-      dayTags
+      dayTags,
+      readinessHistory: historyForAIContext(readinessHistory)
     });
   });
 
@@ -4306,6 +4378,26 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
 
   // Item 74: day tags. A tag is (user, calendar day, tag) with an optional note; the
   // day is the user's own YYYY-MM-DD and is stored as given, never converted.
+  // Item 76: readiness per day for the last `days` days (default 30), oldest first,
+  // today live and last, plus what moved today's score against the previous scored day.
+  await app.get("/api/readiness/history", requireAuth, async (req: any, res) => {
+    const daysP = parseIntParam('days', req.query.days, { min: 2, max: MAX_HISTORY_DAYS, fallback: DEFAULT_HISTORY_DAYS });
+    if (daysP.error !== undefined) return res.status(400).json({ error: daysP.error });
+    try {
+      const { today, history } = await loadReadinessHistory(req.user.id, daysP.value);
+      const todaySnap = history.find(s => s.date === today) ?? null;
+      const prev = previousSnapshot(history, today);
+      res.json({
+        today,
+        history,
+        change: todaySnap && prev ? explainChange(todaySnap, prev) : null
+      });
+    } catch (e: any) {
+      logEvent('error', `Failed to build readiness history: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to build readiness history' });
+    }
+  });
+
   await app.get("/api/day-tags", requireAuth, async (req: any, res) => {
     const startP = parseDayParam('start', req.query.start);
     if (startP.error !== undefined) return res.status(400).json({ error: startP.error });

@@ -1,6 +1,12 @@
-import React from 'react';
-import { History, Info } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { History, Info, TrendingDown, TrendingUp, Minus } from 'lucide-react';
+import { Area, AreaChart, ResponsiveContainer, Tooltip, YAxis } from 'recharts';
 import { calculateReadinessScore } from '../lib/readiness';
+import { dayRange, explainChange, previousSnapshot, toSnapshot, type ReadinessSnapshot } from '../lib/readinessHistory';
+import { addDays } from '../lib/dayTags';
+import { fetchJson } from '../lib/apiFetch';
+import { getLocalDateString } from '../lib/utils';
+import { useRefreshOnFocus } from '../lib/useRefreshOnFocus';
 import { StandardizedMetric } from '../services/healthDataService';
 import { cn } from '../lib/utils';
 import { ProgressRing } from './ui/ProgressRing';
@@ -18,8 +24,35 @@ interface ReadinessCardProps {
   timezone?: string;
 }
 
+const HISTORY_DAYS = 30;
+
+// Item 76: the last 30 days of readiness from /api/readiness/history (finished
+// days are stored snapshots, so they do not shift when settings change), and
+// what moved today's live score against the previous scored day.
+function useReadinessHistory(timezone?: string) {
+  const [history, setHistory] = useState<ReadinessSnapshot[] | null>(null);
+  const load = useCallback(async () => {
+    try {
+      const r = await fetchJson<{ history: ReadinessSnapshot[] }>(`/api/readiness/history?days=${HISTORY_DAYS}`);
+      setHistory(r.history);
+    } catch (e) {
+      // The card still shows today's score; only the trend line is missing.
+      console.error('Failed to load readiness history', e);
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load, timezone]);
+  useRefreshOnFocus(() => { void load(); });
+  return history;
+}
+
+const formatDay = (day: string) => {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+};
+
 export const ReadinessCard: React.FC<ReadinessCardProps> = ({ metrics, targets, timezone }) => {
   const result = calculateReadinessScore(metrics, targets, timezone);
+  const history = useReadinessHistory(timezone);
 
   if (!result) {
     return (
@@ -32,6 +65,17 @@ export const ReadinessCard: React.FC<ReadinessCardProps> = ({ metrics, targets, 
   }
 
   const { score, components, recommendation } = result;
+
+  // Today is the live score above; the server's history supplies the past days.
+  const today = getLocalDateString(timezone);
+  const todaySnap = toSnapshot(today, result);
+  const past = (history || []).filter(s => s.date < today);
+  const prev = previousSnapshot(past, today);
+  const change = prev ? explainChange(todaySnap, prev) : null;
+  // One point per calendar day so a day with no readings shows as a gap.
+  const byDay = new Map(past.map(s => [s.date, s.score]));
+  byDay.set(today, todaySnap.score);
+  const trend = dayRange(addDays(today, -(HISTORY_DAYS - 1)), today).map(date => ({ date, score: byDay.get(date) ?? null }));
 
   // Gauge colors
   const getScoreColor = (s: number) => {
@@ -85,6 +129,39 @@ export const ReadinessCard: React.FC<ReadinessCardProps> = ({ metrics, targets, 
             </div>
           ))}
         </div>
+
+        {past.length > 0 && (
+          <div className="pt-2">
+            <div className="h-12 w-full" aria-label={`Readiness over the last ${HISTORY_DAYS} days`}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={trend} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+                  <defs>
+                    <linearGradient id="readinessTrendFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#10b981" stopOpacity={0.25} />
+                      <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <YAxis hide domain={[0, 100]} />
+                  <Tooltip
+                    cursor={false}
+                    contentStyle={{ fontSize: 11, borderRadius: 8, padding: '4px 8px' }}
+                    labelFormatter={(_, p: any) => (p?.[0]?.payload?.date ? formatDay(p[0].payload.date) : '')}
+                    formatter={(v: any) => [`${v}`, 'Readiness']}
+                  />
+                  <Area type="monotone" dataKey="score" stroke="#10b981" strokeWidth={1.5} fill="url(#readinessTrendFill)" isAnimationActive={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+            {change && (
+              <div className="flex items-center gap-1.5 mt-1 text-[11px] font-medium text-zinc-500 dark:text-zinc-400" title={change.components.map(c => `${c.name} ${c.delta > 0 ? '+' : ''}${c.delta}`).join(' · ')}>
+                {change.delta >= 2 ? <TrendingUp size={12} className="text-emerald-500 shrink-0" />
+                  : change.delta <= -2 ? <TrendingDown size={12} className="text-rose-500 shrink-0" />
+                  : <Minus size={12} className="shrink-0" />}
+                <span>{change.summary}</span>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="mt-4 p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-800/50 border border-black/[0.02] dark:border-white/[0.02] flex items-start gap-3">
             <Info size={16} className={cn("shrink-0 mt-0.5", getScoreColor(score))} />
