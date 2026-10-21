@@ -18,7 +18,11 @@
 // instead of over rows, with the source policy unchanged: per (local day, raw type)
 // the winner is the user's `metric_priorities` order, then SOURCE_RANK, then row
 // count, then name -- the same ordering as the summary route's roll-up
-// (aggregateDailyMetrics) and `filterMetricsByPriority`.
+// (aggregateDailyMetrics) and `filterMetricsByPriority`, all three via
+// src/lib/sourcePriority.ts, which also keeps the two halves of a blood-pressure
+// reading on one source (item 66).
+
+import { chooseSource, type SourceCounts, type SourcePolicy } from './sourcePriority';
 
 export const BUCKET_SECONDS = 900;
 const BUCKET_MS = BUCKET_SECONDS * 1000;
@@ -75,6 +79,13 @@ export interface AggregateOptions {
 
 interface Stats { sum: number; count: number; max: number; min: number }
 
+function countsOf(sources: Record<string, Stats> | undefined): SourceCounts | undefined {
+  if (!sources) return undefined;
+  const counts: SourceCounts = {};
+  for (const src in sources) counts[src] = sources[src].count;
+  return counts;
+}
+
 const emptyStats = (): Stats => ({ sum: 0, count: 0, max: -Infinity, min: Infinity });
 
 function addStats(into: Stats, sum: number, count: number, max: number, min: number) {
@@ -97,6 +108,8 @@ export function aggregateMetricBuckets(rows: MetricBucketRow[], opts: AggregateO
       priorities = {};
     }
   }
+
+  const policy: SourcePolicy = { priorities, sourceRank: opts.sourceRank, unknownSourceRank: opts.unknownSourceRank };
 
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: opts.timezone || 'UTC',
@@ -142,21 +155,7 @@ export function aggregateMetricBuckets(rows: MetricBucketRow[], opts: AggregateO
 
     for (const type in byDayType[day]) {
       const sources = byDayType[day][type];
-      const metricPriorities = priorities[type];
-      const userRank = (src: string) => {
-        if (!metricPriorities || metricPriorities.length === 0) return Infinity;
-        const i = metricPriorities.indexOf(src);
-        return i === -1 ? Infinity : i;
-      };
-      const bestSource = Object.keys(sources).sort((a, b) => {
-        const ua = userRank(a), ub = userRank(b);
-        if (ua !== ub) return ua - ub;
-        const ra = opts.sourceRank[a] ?? opts.unknownSourceRank;
-        const rb = opts.sourceRank[b] ?? opts.unknownSourceRank;
-        if (ra !== rb) return ra - rb;
-        if (sources[b].count !== sources[a].count) return sources[b].count - sources[a].count;
-        return a.localeCompare(b);
-      })[0];
+      const bestSource = chooseSource(type, t => countsOf(byDayType[day][t]), policy).winner;
       if (!bestSource) continue;
 
       const canonicalType = Object.prototype.hasOwnProperty.call(opts.mappings, type) ? opts.mappings[type] : type;
