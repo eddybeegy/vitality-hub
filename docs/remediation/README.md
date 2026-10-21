@@ -50,9 +50,10 @@ an extract if an item needs it.
    untouched: distinct rows are distinct lines, so they merge cleanly. builder
    still adds the merge sha and the live-verification result after deploy, and
    still owns the loose-threads section and any row you did not claim.
-   **Both sides: edit from `main`'s blob, never from a whole-file mirror.** Two
-   tracker clobbers today (`49f562c`, `7af035f`) were a stale copy of the file
-   being written over the top of newer rows — including a sibling session's. A
+   **Both sides: edit from `main`'s blob, never from a whole-file mirror.** The tracker clobber today (`b888314`) was a stale copy of the file
+   written over the top of newer rows — including a sibling session's; it
+   reverted items 14/33/35 and dropped the loose-threads section, and
+   `49f562c` / `7af035f` were the restorations, not the damage. A
    whole-file overwrite of `progress.md` is the one edit that is never correct. That still stands — a cloud thread editing the
    tracker inside a feature PR would collide with every other open PR and with
    builder's own mirror. What changed on 2026-10-21 13:25 is **who is late**: the
