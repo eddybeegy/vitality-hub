@@ -34,9 +34,9 @@ an extract if an item needs it.
    **builder released `server.ts` at 2026-10-21 11:49** (item 44 committed and
    merged as `64daba6`, host tree clean) and is not holding it; the three items
    left in that file are being worked by the cloud session in this order, one PR
-   each: **42 (param validation, merged `c143e19`) -> 29 (log level gate, PR #13)
-   -> "Refresh Data" actually triggering a sync.** Ask builder before starting a
-   fourth `server.ts` item — it may have taken the file back by then.
+   each: **42 (param validation, merged `c143e19`) -> 29 (log level gate, merged
+   `b55eee5`) -> "Refresh Data" actually triggering a sync (the one still open).**
+   Ask builder before starting a fourth `server.ts` item — it may have taken the file back by then.
 3. **Only builder edits `progress.md`**, so PRs never conflict in the tracker.
    Put your status in the PR body instead; builder records the result and the
    merge sha when it lands.
