@@ -30,7 +30,8 @@ import {
   Plus,
   Eye,
   EyeOff,
-  Sparkles
+  Sparkles,
+  MoreHorizontal
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -96,6 +97,7 @@ export default function App() {
 
   const lastSynced = lastAppleHealthSync;
 
+  const [isMobileMoreOpen, setIsMobileMoreOpen] = useState(false);
   const [recentSessionsCount, setRecentSessionsCount] = useState(10);
   const [workoutTypeFilter, setWorkoutTypeFilter] = useState<'all' | 'strength' | 'cardio'>('all');
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -461,14 +463,62 @@ export default function App() {
         </div>
       </nav>
 
-      {/* Mobile Bottom Nav */}
-      <nav className="md:hidden fixed bottom-0 left-0 w-full bg-white/80 dark:bg-zinc-900/80 backdrop-blur-lg border-t border-black/5 dark:border-white/5 flex items-center justify-around px-4 py-3 z-50 overflow-x-auto">
-        <NavIcon icon={<LayoutDashboard size={20} />} active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} className="w-10 h-10 rounded-xl" />
-        <NavIcon icon={<Dumbbell size={20} />} active={activeTab === 'workouts'} onClick={() => setActiveTab('workouts')} className="w-10 h-10 rounded-xl" />
-        <NavIcon icon={<Sparkles size={20} />} active={activeTab === 'ai-insights'} onClick={() => setActiveTab('ai-insights')} className="w-10 h-10 rounded-xl" />
-        <NavIcon icon={<Utensils size={20} />} active={activeTab === 'nutrition'} onClick={() => setActiveTab('nutrition')} className="w-10 h-10 rounded-xl" />
-        <NavIcon icon={<Settings size={20} />} active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} className="w-10 h-10 rounded-xl" />
-      </nav>
+      {/* Mobile Bottom Nav: the always-visible destinations, plus a "More" menu for the role/debug-gated ones */}
+      {(() => {
+        type NavTab = Parameters<typeof setActiveTab>[0];
+        const mobileExtras: { tab: NavTab; label: string; icon: React.ReactNode }[] = [
+          ...(user?.role === 'admin' ? [{ tab: 'admin' as const, label: 'Admin', icon: <Users size={18} /> }] : []),
+          ...(settings.show_debug_logs ? [
+            { tab: 'logs' as const, label: 'System Logs', icon: <Terminal size={18} /> },
+            { tab: 'debug' as const, label: 'Debug Tools', icon: <Bug size={18} /> },
+          ] : []),
+        ];
+        const goTo = (tab: NavTab) => { setActiveTab(tab); setIsMobileMoreOpen(false); };
+        const navClass = "w-10 h-10 rounded-xl shrink-0";
+        return (
+          <>
+            {isMobileMoreOpen && mobileExtras.length > 0 && (
+              <>
+                <div className="md:hidden fixed inset-0 z-40" onClick={() => setIsMobileMoreOpen(false)} />
+                <div className="md:hidden fixed right-2 bottom-20 z-50 min-w-44 bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/10 rounded-2xl shadow-xl p-2 flex flex-col">
+                  {mobileExtras.map(item => (
+                    <button
+                      key={item.tab}
+                      onClick={() => goTo(item.tab)}
+                      className={cn(
+                        "flex items-center gap-3 px-3 py-2.5 rounded-xl text-left font-medium transition-colors",
+                        activeTab === item.tab
+                          ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900"
+                          : "text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                      )}
+                    >
+                      {item.icon}
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            <nav className="md:hidden fixed bottom-0 left-0 w-full bg-white/80 dark:bg-zinc-900/80 backdrop-blur-lg border-t border-black/5 dark:border-white/5 flex items-center justify-around px-2 py-3 z-50">
+              <NavIcon icon={<LayoutDashboard size={20} />} active={activeTab === 'dashboard'} onClick={() => goTo('dashboard')} title="Dashboard" className={navClass} />
+              <NavIcon icon={<Activity size={20} />} active={activeTab === 'activity'} onClick={() => goTo('activity')} title="Activity" className={navClass} />
+              <NavIcon icon={<Dumbbell size={20} />} active={activeTab === 'workouts'} onClick={() => goTo('workouts')} title="Workouts" className={navClass} />
+              <NavIcon icon={<Sparkles size={20} />} active={activeTab === 'ai-insights'} onClick={() => goTo('ai-insights')} title="AI Insights" className={navClass} />
+              <NavIcon icon={<Utensils size={20} />} active={activeTab === 'nutrition'} onClick={() => goTo('nutrition')} title="Nutrition" className={navClass} />
+              <NavIcon icon={<Settings size={20} />} active={activeTab === 'settings'} onClick={() => goTo('settings')} title="Settings" className={navClass} />
+              {mobileExtras.length > 0 && (
+                <NavIcon
+                  icon={<MoreHorizontal size={20} />}
+                  active={isMobileMoreOpen || mobileExtras.some(item => item.tab === activeTab)}
+                  onClick={() => setIsMobileMoreOpen(open => !open)}
+                  title="More"
+                  className={navClass}
+                />
+              )}
+            </nav>
+          </>
+        );
+      })()}
 
       {/* Main Content */}
       <main className="md:pl-20 pb-24 md:pb-0 min-h-screen">
