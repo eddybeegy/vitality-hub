@@ -16,8 +16,21 @@ export type LogLevel = (typeof LOG_LEVELS)[number];
 
 export const DEFAULT_LOG_LEVEL: LogLevel = 'info';
 
+/**
+ * The canonical level for any case/whitespace spelling of one of the four levels, or
+ * null for anything else (including non-strings). Item 60: the filter used to compare
+ * the level verbatim, so "DEBUG" or "debug " ranked as unknown (= info) and bypassed
+ * the item-29 gate. Exported so the POST /api/logs route can reject what this rejects
+ * and store the canonical spelling.
+ */
+export function normaliseLogLevel(raw: unknown): LogLevel | null {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim().toLowerCase();
+  return (LOG_LEVELS as readonly string[]).includes(v) ? (v as LogLevel) : null;
+}
+
 const rank = (level: string): number => {
-  const i = (LOG_LEVELS as readonly string[]).indexOf(level);
+  const i = (LOG_LEVELS as readonly string[]).indexOf(normaliseLogLevel(level) ?? level);
   // An unrecognised level (POST /api/logs takes the level from the request body) ranks
   // as info: never silently dropped at the default, never mistaken for an error.
   return i === -1 ? 1 : i;
@@ -60,6 +73,6 @@ export function createLogFilter({
   const threshold = rank(level);
   return (messageLevel, source) => {
     if (rank(messageLevel) >= threshold) return true;
-    return messageLevel === 'debug' && debugSources.has(String(source ?? '').toLowerCase());
+    return normaliseLogLevel(messageLevel) === 'debug' && debugSources.has(String(source ?? '').toLowerCase());
   };
 }
