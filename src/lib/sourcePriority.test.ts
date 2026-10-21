@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chooseSource, type SourceCounts, type SourcePolicy } from './sourcePriority';
+import { chooseSource, listFor, type SourceCounts, type SourcePolicy } from './sourcePriority';
 
 // Same table as server.ts's SOURCE_RANK.
 const SOURCE_RANK: Record<string, number> = {
@@ -109,5 +109,44 @@ describe('chooseSource, blood pressure resolves as one reading (item 66)', () =>
     const one = day({ blood_pressure_systolic: { healthsync: 2 }, blood_pressure_diastolic: { healthsync: 2 } });
     expect(chooseSource('blood_pressure_systolic', one, policy()).winner).toBe('healthsync');
     expect(chooseSource('blood_pressure_diastolic', one, policy()).winner).toBe('healthsync');
+  });
+});
+
+describe('the blood_pressure priority key (item 67)', () => {
+  // What Settings > Metric Source Priority writes for the "Blood Pressure" card.
+  const ui = { blood_pressure: ['withings', 'apple_health'] };
+  const both = day({
+    blood_pressure_systolic: { withings: 1, apple_health: 1 },
+    blood_pressure_diastolic: { withings: 1, apple_health: 1 },
+  });
+
+  it('used to be dead config: by SOURCE_RANK alone apple_health wins', () => {
+    expect(chooseSource('blood_pressure_systolic', both, policy()).winner).toBe('apple_health');
+  });
+
+  it('now decides both halves', () => {
+    expect(chooseSource('blood_pressure_systolic', both, policy(ui)).winner).toBe('withings');
+    expect(chooseSource('blood_pressure_diastolic', both, policy(ui)).winner).toBe('withings');
+  });
+
+  it('still prefers a device with the whole reading over a listed device with half of it', () => {
+    const half = day({
+      blood_pressure_systolic: { apple_health: 1 },
+      blood_pressure_diastolic: { withings: 1, apple_health: 1 },
+    });
+    expect(chooseSource('blood_pressure_diastolic', half, policy(ui)).winner).toBe('apple_health');
+  });
+
+  it('listFor: the group key first, then either half, and an exact lookup for anything else', () => {
+    expect(listFor('blood_pressure_diastolic', ui)).toEqual(['withings', 'apple_health']);
+    expect(listFor('blood_pressure_systolic', { blood_pressure: [], blood_pressure_diastolic: ['healthsync'] })).toEqual(['healthsync']);
+    expect(listFor('blood_pressure_systolic', { ...ui, blood_pressure_systolic: ['healthsync'] })).toEqual(['withings', 'apple_health']);
+    expect(listFor('weight', ui)).toBeUndefined();
+    expect(listFor('weight', null)).toBeUndefined();
+  });
+
+  it('does not leak onto other types', () => {
+    const w = day({ weight: { withings: 1, apple_health: 1 } });
+    expect(chooseSource('weight', w, policy(ui)).winner).toBe('apple_health');
   });
 });
