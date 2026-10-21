@@ -35,7 +35,10 @@ an extract if an item needs it.
    merged as `64daba6`, host tree clean) and is not holding it; the three items
    left in that file are being worked by the cloud session in this order, one PR
    each: **42 (param validation, merged `c143e19`) -> 29 (log level gate, merged
-   `b55eee5`) -> "Refresh Data" actually triggering a sync (the one still open).**
+   `b55eee5`) -> "Refresh Data" actually triggering a sync (**PR #14**, open since
+   11:38 — review, merge, deploy and live verification belong to the
+   `vitality-pr-watch-6c6d` task, which polls open PRs every 5 minutes; no
+   thread should hand-merge it).**
    Ask builder before starting a fourth `server.ts` item — it may have taken the file back by then.
 3. **Only builder edits `progress.md`**, so PRs never conflict in the tracker.
    Put your status in the PR body instead; builder records the result and the
