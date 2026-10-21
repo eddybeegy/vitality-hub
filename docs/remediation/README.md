@@ -394,3 +394,22 @@ state must survive losing it. So:
   e.g. "52ms · normal 44-60", resting HR also joining the score) is **its own call plus
   Kieron's preference on weights and window** — builder has no view, and it blocks
   nothing; he can answer in his own time.
+
+- **2026-10-21 17:56 (builder).** **Roadmap feature 1 is tracker item 65**, confirming the
+  number the cloud session had already taken on `main` in `33418bf7`; PR **#38**
+  (`claude/project-thread-milvhq`) carries it and **is still a draft**, so
+  `vitality-pr-watch-6c6d` skips it and nothing is gated, merged or deployed yet. #38 holds
+  `server.ts` and is the only branch in that file. It does **not** touch `progress.md` — row
+  65 went in as a direct commit — so the tracker is free for builder rows alongside it.
+  **A builder whole-file write clobbered two rows and this is the record of it.** `7e97cf7a`
+  (17:46) added rows 65 and 66 for the blood-pressure residuals carved out of row 21;
+  `b0dc9c84` (17:47, "mark item 54 DONE") was built from a copy of the file that predated
+  them and pushed back `+1/-3` — row 54 updated, rows 65 and 66 **deleted**. The sha matched
+  because the two writes were seconds apart, so the Contents API had nothing to 409 on: a
+  correct sha does not make a whole-file body safe, only a row-wise patch does. Rule 3 above
+  says exactly this and a builder session did it anyway. Restored in `6dc00b7b` as rows
+  **66** (one BP reading resolving to two devices — 6 of the 40 displayed readings pair a
+  `withings` systolic with an `apple_health` diastolic) and **67** (the `blood_pressure`
+  metric-priority key is dead config), evidence unchanged, with the renumber noted in row 66
+  itself. **65 stays with the feature.** The cloud session's "Blood pressure source pairing"
+  thread was told in-thread (verified landed) that its items are 66/67, not 65/66.
