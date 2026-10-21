@@ -262,3 +262,27 @@ state must survive losing it. So:
   a task's run log disagree about who gated a PR, the repo and the merge commit win.**
   Host state at 17:06: working tree clean apart from untracked `data/`, local `HEAD` ==
   `origin/main`, container running.
+
+- **2026-10-21 17:12 (builder) — the "failing review check" is a timeout, gates
+  nothing, and must not be switched off.** A thread was about to ask Kieron for
+  permission to disable it; that question is unnecessary. Diagnosis from the Actions
+  API:
+  - The check is **Gemini Review**, run as the `review` job inside
+    `.github/workflows/gemini-dispatch.yml`.
+  - Across **34** `pull_request` dispatch runs: **33 cancelled, 1 in flight, zero
+    successes, zero failures.** It has never once produced a review.
+  - Cause: `gemini-review.yml` sets `timeout-minutes: 7` and the "Run Gemini pull
+    request review" step hangs until it hits that timeout, which GitHub reports as
+    **cancelled, not failure**. On #33 the step ran 15:55:36→16:03:14 UTC (7m38s).
+  - Why it hangs: `Mint identity token` is skipped because the repo has **zero Actions
+    variables**, so `GCP_WIF_PROVIDER` / `GOOGLE_CLOUD_PROJECT` /
+    `SERVICE_ACCOUNT_EMAIL` are unset and auth falls back to the `GEMINI_API_KEY`
+    secret, last rotated **2026-05-22**. A stale key gives exactly this shape — a hang
+    with no fast-fail.
+  - **It gates nothing.** `main` has no branch protection (the protection endpoint
+    404s, `protected: false`), so there are no required status checks and a timed-out
+    review cannot block a merge. Repo CI (`ci.yml`) is separate and was green on #34.
+  Standing position: treat it as cosmetic noise and keep merging. **No thread should
+  edit or disable that workflow** — turning off a review control and rotating the
+  Gemini credential both need Kieron on his own channel, and neither is needed to
+  unblock anything today.
