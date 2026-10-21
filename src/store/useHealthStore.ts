@@ -20,7 +20,8 @@ interface SummaryData {
   // tables. Optional because a cached payload from before this shipped will not have it.
   dataFreshness?: {
     bySource: Record<string, string>;
-    byModule: Record<string, { lastReading: string | null; sources: string[] }>;
+    byTable?: Record<string, Record<string, string>>;
+    byModule: Record<string, { lastReading: string | null; sources: string[]; tables?: string[] }>;
   };
 }
 
