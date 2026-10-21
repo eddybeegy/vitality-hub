@@ -73,7 +73,7 @@ import { useSettingsStore } from './store/useSettingsStore';
 import { useHealthStore } from './store/useHealthStore';
 import { useAIStore } from './store/useAIStore';
 import { useUIStore } from './store/useUIStore';
-import { fetchJson } from './lib/apiFetch';
+import { fetchJson, signOut } from './lib/apiFetch';
 import { getLocalDateString, formatDateWithTimezone, parseUTCDate, cn } from './lib/utils';
 import { isTargetSet } from './lib/targets';
 import { useRefreshOnFocus } from './lib/useRefreshOnFocus';
@@ -457,10 +457,8 @@ export default function App() {
           <h1 className="text-2xl font-bold mb-2 text-zinc-900 dark:text-zinc-100">Account Pending</h1>
           <p className="text-zinc-500 dark:text-zinc-400 mb-8">Your account has been created but is currently pending approval from an administrator.</p>
           <button 
-            onClick={async () => {
-              await fetch('/api/auth/logout', { method: 'POST' });
-              window.location.reload();
-            }}
+            // No toast host on this screen, so a failure is an alert.
+            onClick={() => signOut(message => window.alert(message))}
             className="w-full py-3 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-zinc-100 font-semibold rounded-xl transition-all"
           >
             Sign Out

@@ -8,11 +8,12 @@ export function cn(...inputs: ClassValue[]) {
 
 export async function logToServer(level: 'debug' | 'info' | 'warn' | 'error', message: string, source: string) {
   try {
-    await fetch('/api/logs', {
+    const res = await fetch('/api/logs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ level, message, source }),
     });
+    if (!res.ok) console.error(`Failed to send log to server: HTTP ${res.status}`);
   } catch (e) {
     console.error("Failed to send log to server:", e);
   }
