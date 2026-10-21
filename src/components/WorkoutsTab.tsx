@@ -6,6 +6,7 @@ import { SyncStatus } from './SyncStatus';
 import { EmptyState } from './ui/EmptyState';
 import { HealthChart } from './HealthChart';
 import { formatWorkoutWeight, formatWeight, convertWeight, getWeightUnit, convertDistance, getDistanceUnit, formatPaceAndSpeed, formatDateWithTimezone } from '../lib/utils';
+import { analyseStrength, estimate1RM, isWeightedExercise, isWorkingSet, prKindLabel, REP_RANGES } from '../lib/strength';
 
 interface WorkoutsTabProps {
   summaryData: any;
@@ -91,34 +92,18 @@ export const WorkoutsTab = React.memo(({
     URL.revokeObjectURL(url);
   };
 
-  const prData = React.useMemo(() => {
-    // Walk workouts oldest-first so we can detect the set where each exercise's
-    // all-time-best weight was first reached (a "new PR" at the time it happened).
-    const sorted = [...summaryData.workouts].sort(
-      (a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
-    const bestByExercise: Record<string, number> = {};
-    const prSets: Record<string, boolean> = {};
-    const recentPRs: Array<{ title: string; weight: number; reps: number; date: string }> = [];
+  const strength = React.useMemo(() => {
+    // Sessions are bucketed by calendar day in the user's zone (workout
+    // timestamps are UTC instants for every source).
+    const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: settings?.timezone || undefined, year: 'numeric', month: '2-digit', day: '2-digit' });
+    return analyseStrength(summaryData.workouts, (ts) => dayFormat.format(new Date(ts)));
+  }, [summaryData.workouts, settings?.timezone]);
 
-    sorted.forEach((workout: any) => {
-      workout.exercises.forEach((ex: any, exIdx: number) => {
-        if (ex.type === 'cardio' || ex.type === 'bodyweight') return;
-        ex.sets.forEach((set: any, setIdx: number) => {
-          const weight = set.weight || 0;
-          if (weight <= 0) return;
-          const prevBest = bestByExercise[ex.title] || 0;
-          if (weight > prevBest) {
-            bestByExercise[ex.title] = weight;
-            prSets[`${workout.id}-${exIdx}-${setIdx}`] = true;
-            recentPRs.push({ title: ex.title, weight, reps: set.reps || 0, date: workout.timestamp });
-          }
-        });
-      });
-    });
+  const [progressExercise, setProgressExercise] = React.useState('');
+  const selectedStrength = strength.exercises.find(e => e.title === progressExercise) ?? strength.exercises[0];
 
-    return { prSets, recentPRs: recentPRs.reverse().slice(0, 5) };
-  }, [summaryData.workouts]);
+  // Chart values follow the volume chart: kg for metric, lbs otherwise.
+  const toChartWeight = (kg: number) => settings?.preferred_units === 'metric' ? kg : kg * 2.20462;
 
   const weekVolumeComparison = React.useMemo(() => {
     // Strength-set volume (weight x reps) summed over two trailing 7-day
@@ -294,6 +279,14 @@ export const WorkoutsTab = React.memo(({
                               <Dumbbell size={10} /> Hevy
                             </span>
                           )}
+                          {(strength.prCountByWorkout[String(workout.id)] || 0) > 0 && (
+                            <span
+                              title="Sets in this session that beat an earlier best (estimated 1RM, or heaviest weight for 1, 3, 5 or 10+ reps)"
+                              className="text-[10px] bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded-full uppercase font-bold flex items-center gap-1"
+                            >
+                              <Trophy size={10} /> {strength.prCountByWorkout[String(workout.id)]} {strength.prCountByWorkout[String(workout.id)] === 1 ? 'PR' : 'PRs'}
+                            </span>
+                          )}
                           {workout.routine_folder && (
                             <span className="text-[10px] bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 px-2 py-0.5 rounded-full uppercase font-bold">
                               {workout.routine_folder}
@@ -358,8 +351,8 @@ export const WorkoutsTab = React.memo(({
                                             ) : (
                                               <span>{formatWorkoutWeight(set.weight, settings?.preferred_units)} x {set.reps}</span>
                                             )}
-                                            {prData.prSets[`${workout.id}-${idx}-${sIdx}`] && (
-                                              <span className="text-amber-500" title="New personal record">
+                                            {strength.prSets[`${workout.id}-${idx}-${sIdx}`] && (
+                                              <span className="text-amber-500" title={`New personal record: ${strength.prSets[`${workout.id}-${idx}-${sIdx}`].map(prKindLabel).join(', ')}`}>
                                                 <Trophy size={11} />
                                               </span>
                                             )}
@@ -557,6 +550,86 @@ export const WorkoutsTab = React.memo(({
           </div>
         </div>
 
+        {/* Strength Progress: estimated 1RM over time and rep-range bests */}
+        <div className="space-y-6 mt-8">
+          <div className="flex flex-wrap justify-between items-center gap-4">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Strength Progress</h3>
+            {strength.exercises.length > 0 && (
+              <select
+                value={selectedStrength?.title ?? ''}
+                onChange={(e) => setProgressExercise(e.target.value)}
+                className="text-xs font-bold text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-800 border border-black/5 dark:border-white/5 rounded-lg px-2 py-1 outline-none max-w-[16rem]"
+              >
+                {strength.exercises.map(e => (
+                  <option key={e.title} value={e.title}>{e.title} ({e.sessions.length})</option>
+                ))}
+              </select>
+            )}
+          </div>
+          {!selectedStrength ? (
+            <div className="w-full text-center py-8 border-2 border-dashed border-zinc-100 dark:border-zinc-800 rounded-2xl">
+              <p className="text-zinc-400 dark:text-zinc-500 text-sm italic">No weighted sets yet to estimate a 1RM from</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4">
+              {(() => {
+                const chartData = selectedStrength.sessions
+                  .filter(s => s.e1rm != null)
+                  .map(s => ({ date: s.day, e1rm: Number(toChartWeight(s.e1rm as number).toFixed(1)) }));
+                if (chartData.length < 2) {
+                  return (
+                    <div className="w-full text-center py-8 border-2 border-dashed border-zinc-100 dark:border-zinc-800 rounded-2xl">
+                      <p className="text-zinc-400 dark:text-zinc-500 text-sm italic">Log {selectedStrength.title} with 1-12 reps in two sessions to see a trend</p>
+                    </div>
+                  );
+                }
+                return (
+                  <HealthChart
+                    key={selectedStrength.title}
+                    timezone={settings?.timezone}
+                    data={chartData}
+                    title={`${selectedStrength.title}: Estimated 1RM`}
+                    dataKey="e1rm"
+                    name="Est. 1RM"
+                    color="#f59e0b"
+                    type="line"
+                    aggregation="max"
+                    unit={settings?.preferred_units === 'metric' ? 'kg' : 'lbs'}
+                    preferredUnits={settings?.preferred_units === 'metric' ? 'metric' : 'imperial'}
+                    defaultGranularity="day"
+                    defaultPeriod="1y"
+                  />
+                );
+              })()}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                {[
+                  { label: 'Est. 1RM', record: selectedStrength.bestE1rm, value: selectedStrength.bestE1rm?.e1rm ?? null, hint: 'Best Epley estimate from a working set of 1-12 reps' },
+                  ...REP_RANGES.map(k => ({
+                    label: `${k}RM`,
+                    record: selectedStrength.repMaxes[k],
+                    value: selectedStrength.repMaxes[k]?.weight ?? null,
+                    hint: k === 1 ? 'Heaviest working set' : `Heaviest weight lifted for ${k} or more reps`,
+                  })),
+                ].map(({ label, record, value, hint }) => (
+                  <div key={label} title={hint} className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">{label}</p>
+                    {record && value != null ? (
+                      <>
+                        <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{formatWorkoutWeight(value, settings?.preferred_units)}</p>
+                        <p className="text-[10px] text-zinc-400 dark:text-zinc-500">
+                          {formatWorkoutWeight(record.weight, settings?.preferred_units)} x {record.reps} · {formatDateWithTimezone(record.timestamp, settings?.timezone).split(',')[0]}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-sm font-bold text-zinc-300 dark:text-zinc-600">-</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Top Exercises View */}
         <div className="space-y-6 mt-8">
           <div className="flex justify-between items-center">
@@ -580,12 +653,11 @@ export const WorkoutsTab = React.memo(({
                     if ((set.reps || 0) > exerciseStats[title].bestReps) {
                       exerciseStats[title].bestReps = set.reps;
                     }
-                    // Epley formula: estimates the 1-rep max implied by a weight x reps set,
-                    // so sets at different rep ranges can be compared on the same scale
+                    // Estimated 1RM puts sets at different rep ranges on one scale
                     // (a plain "best weight" alone favours low-rep sets).
-                    if ((set.weight || 0) > 0 && (set.reps || 0) > 1) {
-                      const estimated1RM = set.weight * (1 + set.reps / 30);
-                      if (estimated1RM > exerciseStats[title].best1RM) {
+                    if (isWeightedExercise(ex) && isWorkingSet(set)) {
+                      const estimated1RM = estimate1RM(set.weight, set.reps);
+                      if (estimated1RM != null && estimated1RM > exerciseStats[title].best1RM) {
                         exerciseStats[title].best1RM = estimated1RM;
                       }
                     }
@@ -648,12 +720,12 @@ export const WorkoutsTab = React.memo(({
             <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Recent Personal Records</h3>
           </div>
           <div className="grid grid-cols-1 gap-3">
-            {prData.recentPRs.length === 0 ? (
+            {strength.prs.length === 0 ? (
               <div className="text-center py-8 border-2 border-dashed border-zinc-100 dark:border-zinc-800 rounded-2xl">
                 <p className="text-zinc-400 dark:text-zinc-500 text-sm italic">No personal records tracked yet</p>
               </div>
             ) : (
-              prData.recentPRs.map((pr, idx) => (
+              strength.prs.slice(0, 5).map((pr, idx) => (
                 <div key={idx} className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 bg-amber-100 dark:bg-amber-900/30 rounded-lg flex items-center justify-center text-amber-500">
@@ -661,10 +733,15 @@ export const WorkoutsTab = React.memo(({
                     </div>
                     <div>
                       <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100">{pr.title}</h4>
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400">{formatDateWithTimezone(pr.date, settings?.timezone).split(',')[0]}</p>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400">{formatDateWithTimezone(pr.timestamp, settings?.timezone).split(',')[0]} · {pr.kinds.map(prKindLabel).join(', ')}</p>
                     </div>
                   </div>
-                  <p className="text-sm font-bold text-amber-500">{formatWorkoutWeight(pr.weight, settings?.preferred_units)}{pr.reps > 0 ? ` x ${pr.reps}` : ''}</p>
+                  <div className="text-right">
+                    <p className="text-sm font-bold text-amber-500">{formatWorkoutWeight(pr.weight, settings?.preferred_units)} x {pr.reps}</p>
+                    {pr.e1rm != null && (
+                      <p className="text-[10px] text-zinc-400 dark:text-zinc-500">Est. 1RM {formatWorkoutWeight(pr.e1rm, settings?.preferred_units)}</p>
+                    )}
+                  </div>
                 </div>
               ))
             )}

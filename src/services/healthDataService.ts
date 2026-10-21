@@ -54,6 +54,8 @@ export interface StandardizedSet {
   time?: number;
   calories?: number;
   heartRate?: number;
+  /** Hevy set type: 'normal', 'warmup', 'dropset' or 'failure'. */
+  type?: string;
 }
 
 /**
@@ -154,7 +156,8 @@ export const standardizeWorkout = (w: any, exercises: any[] = [], sets: any[] = 
           distance: s.distance,
           time: s.time,
           calories: s.calories,
-          heartRate: s.avg_hr
+          heartRate: s.avg_hr,
+          type: s.type ?? undefined
         }))
     }));
 
