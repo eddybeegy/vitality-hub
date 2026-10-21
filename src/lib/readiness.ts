@@ -1,11 +1,13 @@
-import { StandardizedMetric } from '../services/healthDataService';
-import { parseUTCDate, getLocalDateString } from './utils';
+import type { StandardizedMetric } from '../services/healthDataService';
+import { scoreAgainstBaseline, type Baseline } from './baselines';
 
 export interface ReadinessComponent {
   name: string;
   score: number;
   label: string;
   weight: number;
+  /** The user's normal range, for the components scored against one. */
+  baseline?: Baseline | null;
 }
 
 export interface ReadinessResult {
@@ -14,18 +16,26 @@ export interface ReadinessResult {
   recommendation: string;
 }
 
+// Weights with and without a resting-HR reading. Without one, the score is
+// exactly the original HRV/Sleep/Burn mix, so a user with no resting-HR source
+// sees no change from adding the component.
+const WEIGHTS_WITH_RHR = { hrv: 0.3, rhr: 0.15, sleep: 0.35, burn: 0.2 };
+const WEIGHTS_WITHOUT_RHR = { hrv: 0.4, rhr: 0, sleep: 0.4, burn: 0.2 };
+
 /**
- * Calculates current readiness score (0-100) based on HRV, Sleep, and Yesterday's Strain.
+ * Calculates current readiness score (0-100) based on HRV and resting HR against
+ * the user's own baselines (see baselines.ts), Sleep, and Yesterday's Strain.
+ *
+ * The one implementation: the dashboard, Smart Adjustments and the server's
+ * buildReadiness() (which serves coach) all call this, so they cannot drift.
  */
 export function calculateReadinessScore(
-  metrics: StandardizedMetric[], 
-  targets: any[] = [], 
+  metrics: Pick<StandardizedMetric, 'type' | 'value' | 'timestamp'>[],
+  targets: any[] = [],
   timezone: string = 'UTC'
 ): ReadinessResult | null {
   if (!metrics || metrics.length === 0) return null;
 
-  const today = getLocalDateString(timezone);
-  
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
     year: 'numeric',
@@ -56,28 +66,11 @@ export function calculateReadinessScore(
   const [tzY, tzM, tzD] = todayInTz.split('-').map(Number);
   const yesterday = new Date(Date.UTC(tzY, tzM - 1, tzD) - 86400000).toISOString().slice(0, 10);
 
-  // 1. HRV Score (Relative to 7-day baseline)
-  const hrvMetrics = metrics
-    .filter(m => m.type === 'hrv')
-    .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-  
-  let hrvScore = 70; // Baseline default
-  let hrvLabel = "No data";
-  
-  if (hrvMetrics.length > 0) {
-    const latestHrv = hrvMetrics[0].value;
-    const baselineHrvs = hrvMetrics.slice(1, 8); // Last 7 days baseline
-    if (baselineHrvs.length > 0) {
-      const avgBaseline = baselineHrvs.reduce((acc, m) => acc + m.value, 0) / baselineHrvs.length;
-      const ratio = latestHrv / avgBaseline;
-      // 1.0 ratio = 85 points. Above 1.0 = bonus. Below 0.7 = crash.
-      hrvScore = Math.min(100, Math.max(0, ratio * 85));
-      hrvLabel = `${latestHrv.toFixed(0)}ms (${ratio > 1 ? '+' : ''}${((ratio - 1) * 100).toFixed(0)}%)`;
-    } else {
-      hrvScore = 80; // Not enough data for baseline, assume good if measurement exists
-      hrvLabel = `${latestHrv.toFixed(0)}ms (No baseline)`;
-    }
-  }
+  // 1. HRV and resting HR, each against the user's own 28-day normal range.
+  const hrv = scoreAgainstBaseline(metrics, 'hrv', { direction: 'higher', unit: 'ms', log: true, timezone });
+  const hrvScore = hrv?.score ?? 70; // Baseline default
+  const hrvLabel = hrv?.label ?? "No data";
+  const rhr = scoreAgainstBaseline(metrics, 'resting_heart_rate', { direction: 'lower', unit: 'bpm', timezone });
 
   // 2. Sleep Score (Relative to Target or 8h)
   const sleepTarget = targets.find(t => t.type === 'sleep')?.value || 8;
@@ -165,10 +158,12 @@ export function calculateReadinessScore(
   }
 
   // Calculate weighted average
+  const w = rhr ? WEIGHTS_WITH_RHR : WEIGHTS_WITHOUT_RHR;
   const components: ReadinessComponent[] = [
-    { name: 'HRV', score: hrvScore, label: hrvLabel, weight: 0.4 },
-    { name: 'Sleep', score: sleepScore, label: sleepLabel, weight: 0.4 },
-    { name: 'Activity Burn', score: strainScore, label: strainLabel, weight: 0.2 }
+    { name: 'HRV', score: hrvScore, label: hrvLabel, weight: w.hrv, baseline: hrv?.baseline ?? null },
+    ...(rhr ? [{ name: 'Resting HR', score: rhr.score, label: rhr.label, weight: w.rhr, baseline: rhr.baseline }] : []),
+    { name: 'Sleep', score: sleepScore, label: sleepLabel, weight: w.sleep },
+    { name: 'Activity Burn', score: strainScore, label: strainLabel, weight: w.burn }
   ];
 
   const totalScore = components.reduce((acc, c) => acc + (c.score * c.weight), 0);

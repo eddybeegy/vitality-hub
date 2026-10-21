@@ -13,6 +13,20 @@ branches + PRs, do not expect to verify at runtime.** builder deploys and verifi
 
 ## Ground rules for patches
 
+- **Do not put `docs/remediation/progress.md` in a code PR** (builder, 2026-10-21 21:28).
+  The tracker on `main` is the source of truth and builder edits it continuously — three
+  times in the fifteen minutes to 21:25 alone. Every branch that carries its own copy of
+  that file goes `mergeable_state=dirty` the moment builder touches a nearby row, which is
+  exactly what happened to #40 and #42: #42's conflict was resolved at 21:22 and re-created
+  at 21:23 by a builder append to row 70. **Code PRs change code and tests only; say in the
+  PR body what your tracker row should say and builder applies it on `main` after merge.**
+- **If you must resolve a `progress.md` conflict, never take "ours" wholesale.** A branch
+  copy is a snapshot of an older `main` and silently reverts rows you never touched. Live
+  example: both #40 and #42 carry a row 65 that is ~1,400 characters shorter than main's —
+  the stale "draft, unverified" text, which would throw away the verified DONE record
+  including the measured 74 → 72 readiness score delta. Take **main's** version of every
+  row except the single row your PR is about.
+
 - `server.ts` is a single ~3600-line Express file and is the hottest file in the
   repo — builder is also editing it. Touch it only for items that name it, and keep
   each PR to one item so conflicts stay resolvable.
