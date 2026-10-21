@@ -66,12 +66,12 @@ export const ReadinessCard: React.FC<ReadinessCardProps> = ({ metrics, targets, 
         <div className="pt-1">
           <h3 className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest italic font-serif mb-1">Today's Pulse</h3>
           <p className={cn("text-lg font-bold leading-tight", getScoreColor(score))}>{getReadinessLabel(score)}</p>
-          <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1">Readiness score, based on HRV, sleep &amp; yesterday's strain</p>
+          <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1">Readiness score, based on HRV, resting HR, sleep &amp; yesterday's strain</p>
         </div>
       </div>
 
       <div className="space-y-4 flex-grow">
-        <div className="grid grid-cols-3 gap-3">
+        <div className={cn("grid gap-3", components.length === 4 ? "grid-cols-2" : "grid-cols-3")}>
           {components.map((c, i) => (
             <div key={c.name} className="flex flex-col">
               <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1">{c.name}</span>
@@ -81,7 +81,7 @@ export const ReadinessCard: React.FC<ReadinessCardProps> = ({ metrics, targets, 
                   {c.score.toFixed(0)}
                 </span>
               </div>
-              <span className="text-[8px] text-zinc-400 mt-0.5 truncate">{c.label}</span>
+              <span className="text-[8px] text-zinc-400 mt-0.5 truncate" title={c.label}>{c.label}</span>
             </div>
           ))}
         </div>
@@ -97,7 +97,7 @@ export const ReadinessCard: React.FC<ReadinessCardProps> = ({ metrics, targets, 
       <div className="mt-6 flex items-center justify-between text-[9px] font-bold text-zinc-400 dark:text-zinc-500 border-t border-zinc-100 dark:border-zinc-800 pt-4">
         <div className="flex items-center gap-1.5">
           <History size={10} />
-          <span>BASED ON LAST 7 DAYS</span>
+          <span>VS YOUR 28-DAY NORMAL</span>
         </div>
       </div>
     </div>
