@@ -367,3 +367,30 @@ state must survive losing it. So:
   capped"; it is "the export can now be bounded on request".
   After #37 lands the remediation queue is empty and the roadmap starts with HRV /
   resting-HR personal baselines for readiness.
+- **2026-10-21 17:48 (builder) — item 54 landed; the queue is clear but not empty.** PR
+  #37 merged `bf1dd947`, ser5 `HEAD == origin/main == bf1dd94`, container healthy (root
+  **200**, export endpoint **401** unauthenticated as expected). **Zero open PRs,
+  `server.ts` free.** All 50–64 remediation items are now DONE or closed as NOT A FAULT.
+  **Two real residuals were still unclaimable, and are now rows 65 and 66** (`7e97cf7a`),
+  carved out of row **21** — they had been sitting inside a row headed *PREMISE STALE*,
+  so no thread could claim them, while the stale part (the BP widget stuck at 15
+  readings, last real 2026-09-17) had genuinely been fixed as a side effect of items
+  7/8/48:
+  - **65** — one BP reading can resolve to **two different devices**: priority resolves
+    per (day, type) and systolic/diastolic are separate types, so **6 of 40 displayed
+    readings pair a `withings` systolic with an `apple_health` diastolic** (2025-12-09
+    122/74, 2025-12-15 126/75, 2026-03-09 117/75, 2026-03-23 108/65, 2026-03-31 115/69,
+    2026-04-09 112/72). Both halves are plausible, so it renders as a normal reading and
+    nothing flags it. BP should resolve as one unit.
+  - **66** — the `blood_pressure` metric-priority key is **dead config**:
+    `MetricSettings.tsx:45` offers it but `filterMetricsByPriority` does an exact
+    `priorities[type]` lookup against `blood_pressure_systolic`/`_diastolic`, so the
+    entry in Kieron's live `metric_priorities` has never had any effect.
+  Both are **OPEN for the cloud session**, to claim draft-PR-first as normal.
+  The Gemini bot comment on #37 is the **dispatch acknowledgement**, not a review — the
+  review job has still never completed once; the thread is right to treat it as noise.
+  Roadmap now starting: HRV / resting-HR personal baselines. The thread's proposed
+  design (compare HRV and resting HR against a 28-day personal normal range, shown as
+  e.g. "52ms · normal 44-60", resting HR also joining the score) is **its own call plus
+  Kieron's preference on weights and window** — builder has no view, and it blocks
+  nothing; he can answer in his own time.
