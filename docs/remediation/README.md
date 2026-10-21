@@ -394,3 +394,95 @@ state must survive losing it. So:
   e.g. "52ms · normal 44-60", resting HR also joining the score) is **its own call plus
   Kieron's preference on weights and window** — builder has no view, and it blocks
   nothing; he can answer in his own time.
+
+- **2026-10-21 17:56 (builder).** **Roadmap feature 1 is tracker item 65**, confirming the
+  number the cloud session had already taken on `main` in `33418bf7`; PR **#38**
+  (`claude/project-thread-milvhq`) carries it and **is still a draft**, so
+  `vitality-pr-watch-6c6d` skips it and nothing is gated, merged or deployed yet. #38 holds
+  `server.ts` and is the only branch in that file. It does **not** touch `progress.md` — row
+  65 went in as a direct commit — so the tracker is free for builder rows alongside it.
+  **A builder whole-file write clobbered two rows and this is the record of it.** `7e97cf7a`
+  (17:46) added rows 65 and 66 for the blood-pressure residuals carved out of row 21;
+  `b0dc9c84` (17:47, "mark item 54 DONE") was built from a copy of the file that predated
+  them and pushed back `+1/-3` — row 54 updated, rows 65 and 66 **deleted**. The sha matched
+  because the two writes were seconds apart, so the Contents API had nothing to 409 on: a
+  correct sha does not make a whole-file body safe, only a row-wise patch does. Rule 3 above
+  says exactly this and a builder session did it anyway. Restored in `6dc00b7b` as rows
+  **66** (one BP reading resolving to two devices — 6 of the 40 displayed readings pair a
+  `withings` systolic with an `apple_health` diastolic) and **67** (the `blood_pressure`
+  metric-priority key is dead config), evidence unchanged, with the renumber noted in row 66
+  itself. **65 stays with the feature.** The cloud session's "Blood pressure source pairing"
+  thread was told in-thread (verified landed) that its items are 66/67, not 65/66.
+
+- **2026-10-21 17:58 (builder).** The BP thread picked the renumber up within a minute and
+  re-claimed correctly: **PR #40** `fix/item-66-bp-one-source` is the live claim on item 66,
+  rebased on `6dc00b7` and editing **only row 66's status cell**. **PR #39** is the same work
+  under the old number and is superseded — builder asked on the PR for it to be closed, and
+  it must be: its `progress.md` patch is `+1/-0` adding a *new* row 65, which on `main` is now
+  roadmap feature 1, so if #39 ever went ready it would duplicate 65 and fail the scope gate.
+  Both #39 and #40 are drafts, so `vitality-pr-watch-6c6d` skips them and builder has gated
+  nothing. #40 deliberately holds its `server.ts` half until **#38** merges, keeping one open
+  branch in that file — that sequencing is correct and builder is not overriding it. Item
+  **67** (the dead `blood_pressure` priority key) is still unclaimed.
+
+- **2026-10-21 18:04 (builder).** **PR #39 is closed** and the BP work is now #40 (item 66) and
+  **#41 (item 67)**, both drafts. **#41's base is `fix/item-66-bp-one-source`, not `main`** —
+  it is a stacked PR and the thread plans to retarget it after #40 merges. Any builder session
+  or `vitality-pr-watch-6c6d` pass that sees #41 go ready **must check the base before
+  merging**; gating on PR state alone would merge it into another feature branch. Both are
+  waiting on **#38**, which holds `server.ts`; that sequencing is the thread's and is correct.
+  **Item 67 changes no displayed blood-pressure value — host ground truth, and the thread's PR
+  body overstated it.** `users.metric_priorities` for user 1 has
+  `blood_pressure: [withings, apple_health, cronometer, hevy, manual]`, so `healthsync` is
+  genuinely unlisted — but it only matters where healthsync competes with a listed source, and
+  there is **exactly one such day in the table: 2026-09-17**. The thread's "24 Aug to 17 Sep
+  2026" window is wrong: healthsync is the *sole* BP source on all 16 of its days in that
+  window and on the 16 days after it, and an absent priority entry cannot displace anything
+  when there is no alternative. On 2026-09-17 all three sources carry an identical **99/65**
+  (apple_health twice, 01:00 and 21:32; withings 21:32:34; healthsync 21:39:19), so the winning
+  source label changes from healthsync to withings and the number on screen does not move.
+  Row counts for `blood_pressure_%`: healthsync 132 (2026-08-24..2026-10-19), withings 20 and
+  apple_health 14 (both 2025-12-08..2026-09-17). Told in-thread, verified landed. **No Kieron
+  decision needed** — there is no visible delta to warn him about.
+  DB access note for the next session: it is `docker exec postgres psql -U vitality -d health`,
+  there is no `settings` table (metric priorities live in `users.metric_priorities`), and
+  `metrics` has no `date` column — use `timestamp::date`.
+
+- **2026-10-21 18:08 (builder) — CORRECTION to the 18:04 entry above (`b95ce558`).** **"Item 67
+  changes no displayed blood-pressure value" is wrong. Two displayed readings change.** The
+  cloud session caught it on #41 and it was right; the host check below is builder's own and
+  confirms its figures exactly:
+  - **2025-12-08: 117/73 → 125/74.** apple_health has one reading (117/73, stamped 00:00:00);
+    withings has two (133/75 at 13:51:09 and 117/73 at 19:51:56), mean **125/74**.
+  - **2026-05-10: 103/69 → 103/68.** apple_health 102.5/69, withings 103/68 — today's display
+    is itself split-source (withings systolic, apple_health diastolic), so only the diastolic
+    moves.
+  **Where the 18:04 entry went wrong:** it tested only *healthsync* contention and then
+  generalised from it. Item 67 makes the `blood_pressure` priority key live, and that key
+  orders **withings above apple_health** — a second mechanism, independent of healthsync, on
+  days where both of those sources have readings. The healthsync half of the 18:04 entry still
+  stands: one contested day (2026-09-17), all sources identical 99/65, label-only change. On
+  the other six overlap days (2025-12-09, 12-15, 2026-03-09, 03-23, 03-31, 04-09) apple_health
+  carries only the diastolic and its value equals withings', so nothing visible changes there.
+  **So: item 67 changes the source label on 2026-09-17 and the displayed numbers on exactly two
+  days, 2025-12-08 and 2026-05-10.** That is the sentence to carry forward. The `125/74` is a
+  mean of two real readings that was never itself measured — that is **row 69**, logged by a
+  sibling builder session, and it needs Kieron's call (daily average, latest reading, or every
+  reading). Item 67 does not depend on that answer.
+
+- **2026-10-21 18:44 (builder).** **Row 69 is answered: latest reading, blood pressure only.**
+  Kieron typed "On bp - latest reading" into the claude.ai thread at **18:06** from his own
+  session and the thread started work on it. Recorded on row 69 (`aff15c0d`) with the scope
+  noted — he said "on bp", so weight and body fat keep today's daily average until he says
+  otherwise. **How to read this if you are a later session:** builder treats the claude.ai page
+  as Tier 3, so this is an *observed thread message*, not an instruction that arrived on a Tier 1
+  channel. builder asked him to confirm on Telegram at 18:42; the confirmation lands on row 69
+  when it arrives. It is a reversible display choice and the answer is unsurprising, so it is
+  not a reason to stall — but do not cite a claude.ai thread as the authority for anything
+  irreversible.
+  Row 69 is still **unclaimed** and needs the usual draft PR from the cloud session.
+  **PR state unchanged since 17:07 UTC and all three are drafts**, so `vitality-pr-watch-6c6d`
+  has correctly done nothing: **#38** item 65 (`server.ts +6/-167`), **#40** item 66 (**no
+  `server.ts` change** — the thread is honouring the one-branch-in-`server.ts` hold and will
+  push that half after #38 merges), **#41** item 67 (base is still #40's branch). Row 69 is
+  independent of items 66 and 67; nothing is blocked on it.
