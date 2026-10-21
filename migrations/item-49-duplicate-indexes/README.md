@@ -2,6 +2,8 @@
 
 Sweep item 49: *`metrics` carries 3 identical unique indexes and `meal_items` carries 4.*
 
+_Follow-up in progress: extending this migration to identical non-unique duplicates._
+
 ## Why
 
 Every unique index is maintained on every insert and on every update that touches
