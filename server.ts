@@ -25,6 +25,7 @@ import { setupDb } from "./src/lib/db";
 import { parseEnumParam, parseDateParam, parseDayParam, parseIntParam, checkDateOrder } from "./src/lib/queryParams";
 import { parseLogLevel, parseSourceList, createLogFilter } from "./src/lib/logLevel";
 import { planRefresh, refreshStartMessage, refreshFinishMessage, RefreshModuleResult } from "./src/lib/refreshPlan";
+import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/lib/aggregatedMetrics";
 
 // Increase MaxListeners limit to prevent TLSSocket warnings during concurrent API sync chunks
 EventEmitter.defaultMaxListeners = 50;
@@ -172,9 +173,10 @@ function filterMetricsByPriority(metrics: any[], prioritiesJson: string | null, 
   // `metric_priorities`, and to fall back to `candidates[0].source` -- whichever row
   // the DB happened to return first -- for any type the list did not name. The
   // summary route's roll-up was given a deterministic policy (sweep item 7); this
-  // path, which serves the charts (`/api/metrics/aggregated`), readiness and the
-  // coach context, kept the arbitrary one, so the same day could resolve to a
-  // different source on different surfaces. Same policy both sides now: the user's
+  // path, which serves readiness and the coach context (and served the charts'
+  // `/api/metrics/aggregated` until item 48 moved that to src/lib/aggregatedMetrics.ts),
+  // kept the arbitrary one, so the same day could resolve to a different source
+  // on different surfaces. Same policy both sides now: the user's
   // own priority list first, then SOURCE_RANK, then row count (a more complete day
   // wins), then name. That is also what keeps apple_health nutrition out of sight
   // on days cronometer covers now that it is no longer deleted.
@@ -3115,125 +3117,52 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
 
     const typePlaceholders = allQueryTypes.map(() => '?').join(',');
 
-    const metrics = await db.prepare(`
-      SELECT value, timestamp, source, type
-      FROM metrics 
-      WHERE user_id = ? AND type IN (${typePlaceholders})
-      AND ${ db.type === 'sqlite' ? `CASE 
+    // Item 48: grouped in SQL, no row limit. This used to fetch every raw reading
+    // (`ORDER BY timestamp ASC LIMIT 1000000`) and group in JS -- the item-8 shape, one
+    // busy type away from silently truncating the chart. The database now reduces the
+    // window to (15-minute UTC bucket, type, source) -> sum/count/max/min, and
+    // `aggregateMetricBuckets` maps buckets to the user's local day, picks the source
+    // per (day, type) with the same policy as before, and folds to the granularity.
+    // See src/lib/aggregatedMetrics.ts for why the bucket and not the day.
+    //   - no DISTINCT: `filterMetricsByPriority` deduped `${timestamp}_${value}` within a
+    //     (day, type, source), but metrics is UNIQUE(user_id, type, timestamp, source),
+    //     so there is never anything to dedupe. On a 1.1M-row local table the DISTINCT
+    //     took this query from 1.6 s to 3.4 s for nothing.
+    //   - postgres sums `value` (real/float4) via its text form so each addend is the
+    //     same double the old JS parse produced, not the widened float4.
+    const tsCmp = db.type === 'sqlite' ? `CASE 
         WHEN timestamp LIKE '____-__-__ __:__:__%' THEN replace(substr(timestamp, 1, 19), ' ', 'T') || substr(timestamp, 20)
         ELSE timestamp 
-      END` : 'timestamp' } >= ? 
-      AND ${ db.type === 'sqlite' ? `CASE 
-        WHEN timestamp LIKE '____-__-__ __:__:__%' THEN replace(substr(timestamp, 1, 19), ' ', 'T') || substr(timestamp, 20)
-        ELSE timestamp 
-      END` : 'timestamp' } <= ?
-      ORDER BY timestamp ASC
-      LIMIT 1000000
-    `).all(userId, ...allQueryTypes, cutoffStr, endStr) as any[];
+      END` : 'timestamp';
+    const bucketExpr = bucketIndexSql(db.type, db.type === 'postgres' ? readingInstant('metrics') : 'timestamp');
+    const valueExpr = db.type === 'postgres' ? 'CAST(CAST(value AS TEXT) AS DOUBLE PRECISION)' : 'value';
+    const buckets = await db.prepare(`
+      SELECT bucket, type, source,
+        SUM(${valueExpr}) AS total,
+        COUNT(*) AS cnt,
+        MAX(value) AS max_value,
+        MIN(value) AS min_value
+      FROM (
+        SELECT type, source, value, ${bucketExpr} AS bucket
+        FROM metrics
+        WHERE user_id = ? AND type IN (${typePlaceholders})
+        AND ${tsCmp} >= ?
+        AND ${tsCmp} <= ?
+      ) d
+      WHERE bucket IS NOT NULL
+      GROUP BY bucket, type, source
+    `).all(userId, ...allQueryTypes, cutoffStr, endStr) as MetricBucketRow[];
 
     const userData = await db.prepare("SELECT timezone, metric_priorities FROM users WHERE id = ?").get(userId) as any;
-    const userTimezone = userData?.timezone || undefined;
-    const prioritiesJson = userData?.metric_priorities || null;
-    const filteredMetrics = filterMetricsByPriority(metrics, prioritiesJson, userTimezone);
-
-    const groupedByDate: Record<string, Record<string, { sum: number, count: number, max: number, min: number }>> = {};
-    
-    const formatter = new Intl.DateTimeFormat('en-CA', {
-      timeZone: userTimezone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
+    const result = aggregateMetricBuckets(buckets, {
+      granularity,
+      aggregation,
+      timezone: userData?.timezone || undefined,
+      prioritiesJson: userData?.metric_priorities || null,
+      mappings,
+      sourceRank: SOURCE_RANK,
+      unknownSourceRank: UNKNOWN_SOURCE_RANK,
     });
-
-    for (const m of filteredMetrics) {
-      let adjustedTimestamp = m.timestamp;
-      // Canonicalize type
-      let canonicalType = m.type;
-      for (const [raw, clean] of Object.entries(mappings)) {
-        if (raw === m.type) {
-          canonicalType = clean;
-          break;
-        }
-      }
-
-      const isSleep = m.type.startsWith('sleep') || canonicalType.startsWith('sleep');
-      
-      // Smart ISO parsing for mixed formats
-      let d: Date;
-      if (adjustedTimestamp.includes(' ') && adjustedTimestamp.length >= 19) {
-          // Format like "2026-01-27 19:39:00 +0000"
-          const isoLike = adjustedTimestamp.replace(' ', 'T').replace(/ ([+-])/, '$1');
-          d = new Date(isoLike);
-      } else {
-          d = new Date(adjustedTimestamp);
-      }
-
-      if (isNaN(d.getTime()) && adjustedTimestamp.length > 10) {
-           d = new Date(adjustedTimestamp.replace(' ', 'T'));
-      }
-
-      if (isSleep && !isNaN(d.getTime())) {
-         d.setHours(d.getHours() - 12);
-         adjustedTimestamp = d.toISOString();
-      }
-
-      let localDayStr: string;
-      if (isNaN(d.getTime())) {
-          localDayStr = adjustedTimestamp.substring(0, 10);
-      } else {
-          try {
-            localDayStr = formatter.format(d);
-          } catch (e) {
-            localDayStr = d.toISOString().split('T')[0];
-          }
-      }
-
-      let key = "";
-      if (granularity === 'day') {
-        key = localDayStr;
-      } else if (granularity === 'week') {
-        const localDay = new Date(localDayStr + 'T00:00:00Z');
-        localDay.setUTCDate(localDay.getUTCDate() - localDay.getUTCDay());
-        key = localDay.toISOString().split('T')[0];
-      } else { // month
-        key = `${localDayStr.substring(0, 7)}-01`;
-      }
-
-      if (!groupedByDate[key]) groupedByDate[key] = {};
-      if (!groupedByDate[key][canonicalType]) {
-        groupedByDate[key][canonicalType] = { sum: 0, count: 0, max: -Infinity, min: Infinity };
-      }
-      
-      groupedByDate[key][canonicalType].sum += m.value;
-      groupedByDate[key][canonicalType].count += 1;
-      if (m.value > groupedByDate[key][canonicalType].max) groupedByDate[key][canonicalType].max = m.value;
-      if (m.value < groupedByDate[key][canonicalType].min) groupedByDate[key][canonicalType].min = m.value;
-    }
-
-    const result = Object.entries(groupedByDate).map(([date, typeGroups]) => {
-      const entry: any = { date };
-      Object.entries(typeGroups).forEach(([t, data]) => {
-        let val: number;
-        if (aggregation === 'sum') val = data.sum;
-        else if (aggregation === 'max') val = data.max !== -Infinity ? data.max : 0;
-        else if (aggregation === 'min') val = data.min !== Infinity ? data.min : 0;
-        else val = data.sum / data.count;
-        
-        entry[t] = Number(val.toFixed(2));
-      });
-
-      // Calculate Fat Mass (kg) if weight and body_fat (%) are available
-      if (entry.weight && entry.body_fat && !entry.fat_mass) {
-        entry.fat_mass = Number((entry.weight * (entry.body_fat / 100)).toFixed(2));
-      }
-
-      // Calculate Lean Body Mass (kg) if weight and body_fat (%) are available
-      if (entry.weight && entry.body_fat && !entry.lean_body_mass) {
-        entry.lean_body_mass = Number((entry.weight * (1 - entry.body_fat / 100)).toFixed(2));
-      }
-      
-      return entry;
-    }).sort((a, b) => a.date.localeCompare(b.date));
 
     metricsCache.set(cacheKey, result);
     res.json(result);
