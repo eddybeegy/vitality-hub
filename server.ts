@@ -144,18 +144,38 @@ function getDateTimeInTimezone(timezone: string, dateStr: string, timeStr: strin
  * Filters metrics based on user priorities.
  * For each day and metric type, it selects the source with the highest priority (lowest rank).
  */
-function filterMetricsByPriority(metrics: any[], prioritiesJson: string | null, timezone: string = 'UTC') {
-  if (!prioritiesJson) return metrics;
-  
-  let priorities: Record<string, string[]> = {};
-  try {
-    priorities = JSON.parse(prioritiesJson);
-  } catch (e) {
-    return metrics;
-  }
+const SOURCE_RANK: Record<string, number> = {
+  cronometer: 1,
+  // The Nutracheck module tags its rows `nutrachek` (one 'c'); `nutracheck` was in
+  // the original chain and never matched a real row. Both spellings, same rank.
+  nutracheck: 2,
+  nutrachek: 2,
+  hevy: 2,
+  apple_health: 3,
+  withings: 4,
+  healthsync: 4,
+};
+const UNKNOWN_SOURCE_RANK = 4;
 
-  // If no priorities are defined, return all
-  if (Object.keys(priorities).length === 0) return metrics;
+function filterMetricsByPriority(metrics: any[], prioritiesJson: string | null, timezone: string = 'UTC') {
+  // 2026-10-21: this used to return `metrics` untouched whenever the user had no
+  // `metric_priorities`, and to fall back to `candidates[0].source` -- whichever row
+  // the DB happened to return first -- for any type the list did not name. The
+  // summary route's roll-up was given a deterministic policy (sweep item 7); this
+  // path, which serves the charts (`/api/metrics/aggregated`), readiness and the
+  // coach context, kept the arbitrary one, so the same day could resolve to a
+  // different source on different surfaces. Same policy both sides now: the user's
+  // own priority list first, then SOURCE_RANK, then row count (a more complete day
+  // wins), then name. That is also what keeps apple_health nutrition out of sight
+  // on days cronometer covers now that it is no longer deleted.
+  let priorities: Record<string, string[]> = {};
+  if (prioritiesJson) {
+    try {
+      priorities = JSON.parse(prioritiesJson) || {};
+    } catch (e) {
+      priorities = {};
+    }
+  }
 
   const groupedByDayAndType: Record<string, Record<string, any[]>> = {};
   
@@ -196,26 +216,24 @@ function filterMetricsByPriority(metrics: any[], prioritiesJson: string | null, 
       const candidates = groupedByDayAndType[day][type];
       const metricPriorities = priorities[type];
 
-      // Find best source for this day/type
-      let bestSource = null;
-      let highestRank = Infinity;
-
-      if (!metricPriorities || metricPriorities.length === 0) {
-        // Fallback: pick the first source encountered and keep all its records for that day
-        bestSource = candidates[0].source;
-      } else {
-        for (const c of candidates) {
-          const rank = metricPriorities.indexOf(c.source);
-          if (rank !== -1 && rank < highestRank) {
-            highestRank = rank;
-            bestSource = c.source;
-          }
-        }
-        // If none of the candidates match priorities, use first available source
-        if (bestSource === null) {
-          bestSource = candidates[0].source;
-        }
-      }
+      // Deterministic winner for this (day, type): user priority, then SOURCE_RANK,
+      // then row count, then name. Identical ordering to the summary route's roll-up.
+      const counts: Record<string, number> = {};
+      for (const c of candidates) counts[c.source] = (counts[c.source] ?? 0) + 1;
+      const userRank = (src: string) => {
+        if (!metricPriorities || metricPriorities.length === 0) return Infinity;
+        const i = metricPriorities.indexOf(src);
+        return i === -1 ? Infinity : i;
+      };
+      const bestSource = Object.keys(counts).sort((a, b) => {
+        const ua = userRank(a), ub = userRank(b);
+        if (ua !== ub) return ua - ub;
+        const ra = SOURCE_RANK[a] ?? UNKNOWN_SOURCE_RANK;
+        const rb = SOURCE_RANK[b] ?? UNKNOWN_SOURCE_RANK;
+        if (ra !== rb) return ra - rb;
+        if (counts[b] !== counts[a]) return counts[b] - counts[a];
+        return a.localeCompare(b);
+      })[0] ?? null;
 
       // Keep records from the selected best source for this day, 
       // but deduplicate exact same timestamp/source/value entries 
@@ -845,57 +863,22 @@ async function ensureSchema() {
       logEvent('error', `ai_insights uniqueness migration failed: ${e.message}`, 'cleanup');
     }
 
-    // 4. Cross-source cleanup for nutrition: on a day where the user logged
-    //    cronometer/nutracheck, drop that user's apple_health nutrition rows for
-    //    the same day.
-    //
-    //    2026-10-21: the day subquery was NOT correlated on user_id. It asked
-    //    "did ANY user log cronometer on this date" and then deleted apple_health
-    //    nutrition for EVERY user on that date. Measured impact on the current
-    //    data is nil -- user 3 (the orphaned deleted account, item 14) holds
-    //    11,945 cronometer rows over 90 days, but user 1 has cronometer on every
-    //    one of those days too, so the same rows would have gone under correct
-    //    semantics. The fault is latent, not realised: any second account without
-    //    full cronometer coverage loses nutrition because of someone else's log.
-    //    Proven with a rolled-back transaction: a user-3 cronometer row on a date
-    //    where user 1 has none makes the old predicate delete user 1's
-    //    apple_health row (1) and the new one delete nothing (0).
-    //
-    //    NOTE: a separate block further down (search "skewing graphs") still
-    //    deletes ALL apple_health nutrition for ALL users unconditionally on every
-    //    boot, which makes this step unreachable in practice. That blanket purge
-    //    is a data-retention policy question, not a bug fix -- removing it would
-    //    start surfacing apple_health nutrition on days with no cronometer, which
-    //    changes displayed numbers -- so it is flagged for Kieron alongside the
-    //    summed-metric merge policy rather than changed here.
-    //
-    //    Also: this used to SELECT every matching row into node, build a debug
-    //    log line containing the whole table, and then DELETE by an inlined id
-    //    list -- which on Postgres is both a parameter/statement-size risk and a
-    //    large share of the self-inflicted log volume. It is one set-based
-    //    statement now, and the log is a count.
-    const nutritionTypes = [
-      'calories_in', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'sodium', 
-      'iron', 'calcium', 'vitamin_c', 'vitamin_a', 'vitamin_d', 'vitamin_e', 
-      'vitamin_k', 'vitamin_b12', 'vitamin_b6', 'magnesium', 'potassium', 'zinc', 'water'
-    ];
-    const nutPlaceholders = nutritionTypes.map(() => '?').join(',');
-    const dayExpr = db.type === 'sqlite' ? 'substr(timestamp, 1, 10)' : 'CAST(timestamp AS DATE)';
-    const crossRemoved: any = await db.prepare(`
-      DELETE FROM metrics
-      WHERE source = 'apple_health'
-        AND type IN (${nutPlaceholders})
-        AND EXISTS (
-          SELECT 1 FROM metrics c
-          WHERE c.user_id = metrics.user_id
-            AND c.source IN ('cronometer', 'nutracheck')
-            AND c.type IN (${nutPlaceholders})
-            AND ${dayExpr.replace('timestamp', 'c.timestamp')} = ${dayExpr.replace('timestamp', 'metrics.timestamp')}
-        )
-    `).run(...nutritionTypes, ...nutritionTypes);
-    if ((crossRemoved?.changes ?? 0) > 0) {
-      logEvent('debug', `Removed ${crossRemoved.changes} apple_health nutrition rows on days the same user logged cronometer/nutracheck`, 'cleanup');
-    }
+    // 4. Nutrition source precedence is a READ-time concern, not a cleanup.
+    //    This step used to DELETE a user's apple_health nutrition rows for any day
+    //    they had also logged cronometer/nutracheck (and, before 2026-10-21, every
+    //    *other* user's rows for that date too -- the day subquery was not
+    //    correlated on user_id). Kieron's call, 2026-10-21: keep the Apple Health
+    //    nutrition, just don't surface it when cronometer (or a future nutrition
+    //    source) covers that day. So the deletion is gone and the precedence is
+    //    applied where the data is read: SOURCE_RANK puts cronometer (1) and
+    //    nutracheck/nutrachek (2) above apple_health (3), per user, per type, per
+    //    day, in both aggregation paths (`filterMetricsByPriority` and the summary
+    //    route's SQL roll-up). Apple Health now fills the gaps on days no food
+    //    log exists instead of being erased.
+    //    Note: the blanket purge further down (which deleted ALL apple_health
+    //    nutrition for ALL users on every boot, making this step unreachable) is
+    //    removed too. Rows deleted before this change are not recoverable without
+    //    re-importing an export.
   } catch (e) {
     console.error("Error during aggressive cleanup:", e);
   }
@@ -997,21 +980,14 @@ try {
   await db.prepare("UPDATE metrics SET type = 'basal_energy' WHERE type = 'calories_out_resting'").run();
 } catch (e) {}
 
-// Cleanup Apple Health nutrition data that might be skewing graphs
-try {
-  const nutritionTypes = [
-    'calories_in', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'sodium', 
-    'iron', 'calcium', 'vitamin_c', 'vitamin_a', 'vitamin_d', 'vitamin_e', 
-    'vitamin_k', 'vitamin_b12', 'vitamin_b6', 'magnesium', 'potassium', 'zinc', 'water',
-    'biotin', 'caffeine', 'cholesterol', 'copper', 'folate', 'niacin', 'iodine',
-    'fat_monounsaturated', 'fat_polyunsaturated', 'fat_saturated', 'riboflavin',
-    'phosphorus', 'manganese', 'thiamin', 'selenium', 'pantothenic_acid'
-  ];
-  const placeholders = nutritionTypes.map(() => '?').join(',');
-  await db.prepare(`DELETE FROM metrics WHERE source = 'apple_health' AND type IN (${placeholders})`).run(...nutritionTypes);
-} catch (e) {
-  console.error("Failed to cleanup Apple Health nutrition data", e);
-}
+// Apple Health nutrition is KEPT (Kieron, 2026-10-21). This block used to run
+// `DELETE FROM metrics WHERE source = 'apple_health' AND type IN (<36 nutrition
+// types>)` -- no user filter, no date filter -- on every single boot, so the feed
+// was permanently empty and the correlated cleanup above could never fire. The
+// requirement is that apple_health nutrition is not *surfaced* when a food log
+// covers the day, which SOURCE_RANK already enforces at read time (cronometer 1,
+// nutracheck 2, apple_health 3) per user/type/day. Deleting it also threw away
+// the days cronometer does not cover, which is the opposite of what's wanted.
 // One-time cleanup for sleep records that were incorrectly double-counted
 try {
   // We'll rename all 'sleep' type records that are clearly aggregates or duplicates
@@ -2058,18 +2034,8 @@ async function checkScheduledRegeneration(userId: number) {
     // deliberate and worth stating: prefer apple_health's direct Health Auto Export push,
     // and fall back to healthsync, which is the same Apple Health data taking the longer
     // road through HealthSync -> Home Assistant.
-    const SOURCE_RANK: Record<string, number> = {
-      cronometer: 1,
-      // The Nutracheck module tags its rows `nutrachek` (one 'c'); `nutracheck` was in
-      // the original chain and never matched a real row. Both spellings, same rank.
-      nutracheck: 2,
-      nutrachek: 2,
-      hevy: 2,
-      apple_health: 3,
-      withings: 4,
-      healthsync: 4,
-    };
-    const UNKNOWN_SOURCE_RANK = 4;
+    // SOURCE_RANK / UNKNOWN_SOURCE_RANK are module-level (see above the priority
+    // filter) so the two aggregation paths cannot drift apart.
 
     // Cache for date strings to avoid repeated formatter calls
     const dateCache = new Map<string, string>();
