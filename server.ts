@@ -3204,13 +3204,26 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     //     1668607), so this is belt-and-braces rather than load-bearing today.
     //   - the sleep -12h shift is applied in SQL, matching the JS it replaces, so
     //     overnight sessions still land on the day they started.
-    //   - day bucketing reinterprets the naive column in Europe/London (the zone its
-    //     WRITERS used) and then renders it in the user's zone. For a Europe/London user
-    //     that is the identity, and it is the first time this bucketing has been correct:
-    //     the JS it replaces let node-pg parse the naive value in the container's zone
-    //     (UTC) and then formatted it in Europe/London, shifting every reading between
-    //     23:00 and midnight into the following day under BST. Expect late-night readings
-    //     to move by one day relative to the previous output; that is the bug going away.
+    //   - day bucketing reinterprets the naive column **per source** and then renders it
+    //     in the user's zone. `metrics.timestamp` is `timestamp without time zone` and
+    //     the convention is NOT uniform: every in-app ingest module (apple_health,
+    //     cronometer, withings, nutracheck, hevy) normalises with
+    //     `new Date(...).toISOString()` before the INSERT, so those rows hold UTC and
+    //     Postgres drops the trailing `Z`. `healthsync` has no module in this codebase
+    //     at all (sweep item 19 -- it writes to Postgres directly from outside) and it
+    //     stamps Europe/London WALL-CLOCK: measured 2026-10-21, max healthsync row
+    //     10:40:08 at 10:41:41 London, which read as UTC would be 59 minutes in the
+    //     future, while max apple_health 08:48 was written two minutes before the 09:50
+    //     London sync that fetched it. Hence the CASE. `logs.timestamp` is
+    //     the opposite -- it has no explicit value, so it takes the column DEFAULT
+    //     `CURRENT_TIMESTAMP`, evaluated in the server's session zone (Europe/London) --
+    //     and that is the table the 2026-10-21 07:58 freshness regression was really
+    //     about. The two tables genuinely disagree; do not unify them by assumption.
+    //     Reinterpreting metrics in Europe/London was the identity for a Europe/London
+    //     user, i.e. UTC day buckets: measured 2026-10-21 HRV avg 47.82 over 70 rows
+    //     (UTC day) where the charts, which parse the instant correctly, had 48.22 over
+    //     83 rows (London day) -- the 13 readings between 23:00 and midnight London.
+    //     That one-hour skew was the residual HRV divergence in sweep item 20.
     //     The proper fix for the underlying column type is sweep item 13.
     const safeTz = /^[A-Za-z0-9_+\-\/]+$/.test(String(userTimezone || '')) ? String(userTimezone) : 'Europe/London';
     const bucketRows = await db.prepare(`
@@ -3224,7 +3237,9 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         ${ endStr ? 'AND timestamp <= ?' : '' }
       )
       SELECT
-        to_char(((adj_ts AT TIME ZONE 'Europe/London') AT TIME ZONE '${safeTz}')::date, 'YYYY-MM-DD') AS day,
+        to_char(((CASE WHEN source = 'healthsync' THEN adj_ts AT TIME ZONE 'Europe/London'
+                     ELSE adj_ts AT TIME ZONE 'UTC' END)
+                AT TIME ZONE '${safeTz}')::date, 'YYYY-MM-DD') AS day,
         type, source,
         SUM(value::float8) AS total,
         COUNT(*)::int AS cnt
@@ -3448,11 +3463,31 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         }
       }
     };
+    // The naive `timestamp` column does not hold one zone, it holds one PER SOURCE, so
+    // the conversion has to be per source too:
+    //   - every in-app ingest module normalises with `toISOString()` -> the row holds
+    //     UTC. Reading those as London wall-clock reported them exactly one hour OLDER
+    //     than reality under BST (apple_health's newest reading 08:48 was served as
+    //     08:48Z, rendering 08:48 London, when the real instant was 09:48 London -- two
+    //     minutes before the 09:50 sync that wrote it).
+    //   - `healthsync` is written straight into Postgres by something outside this
+    //     codebase (sweep item 19) and stamps Europe/London wall-clock. Reading those as
+    //     UTC puts the freshest feed in the app an hour in the FUTURE -- which is the
+    //     symptom behind the 2026-10-21 07:58 regression, reverted at 08:27. That revert
+    //     was right for healthsync and for `logs`, and wrong for the other five sources;
+    //     the blanket 'Europe/London' is what this CASE replaces.
+    // The `logs`-based queries above keep 'Europe/London' and are untouched: that column
+    // has no explicit value and takes the DEFAULT CURRENT_TIMESTAMP in the server's
+    // session zone (Europe/London).
+    // Proper fix is sweep item 13 (migrate the columns to timestamptz) plus item 19
+    // (make the healthsync writer send UTC); until then this is the honest mapping.
+    const naiveToInstant = (col: string) =>
+      `(CASE WHEN source = 'healthsync' THEN ${col} AT TIME ZONE 'Europe/London' ELSE ${col} AT TIME ZONE 'UTC' END)`;
     noteFreshness(await db.prepare(
-      "SELECT source, MAX(timestamp AT TIME ZONE 'Europe/London') AS timestamp FROM metrics WHERE user_id = ? GROUP BY source"
+      `SELECT source, MAX(${naiveToInstant('timestamp')}) AS timestamp FROM metrics WHERE user_id = ? GROUP BY source`
     ).all(userId) as any[]);
     noteFreshness(await db.prepare(
-      "SELECT source, MAX(timestamp AT TIME ZONE 'Europe/London') AS timestamp FROM workouts WHERE user_id = ? GROUP BY source"
+      `SELECT source, MAX(${naiveToInstant('timestamp')}) AS timestamp FROM workouts WHERE user_id = ? GROUP BY source`
     ).all(userId) as any[]);
 
     // A module id is not always its metrics `source`:
