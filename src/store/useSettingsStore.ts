@@ -42,6 +42,7 @@ interface Settings {
   metric_priorities?: string;
   font_size: string;
   dashboard_widgets: string[];
+  readiness_recovery_days?: number;
 }
 
 interface Target {

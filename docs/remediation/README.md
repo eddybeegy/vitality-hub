@@ -44,8 +44,8 @@ owns:
   reported as complete is worse than an honest gap.
 
 Everything else in this file (draft-claim protocol, one PR per item, the five
-gates, the channel-of-record rule) is unchanged. **PR #22 fixes the two known
-`tsc` errors, so the gate baseline becomes 0 errors once it lands.**
+gates, the channel-of-record rule) is unchanged. **PR #22 has landed (`d7050ed6`, 16:34), so the
+`tsc` gate baseline is now 0 errors — see gate 5 in the Protocol below.**
 
 ## Files
 
@@ -108,9 +108,12 @@ an extract if an item needs it.
 4. **PR body states** what changed, what a reviewer should see on screen or in the
    response body, and what you could not check.
 5. builder runs five gates before merging: the diff stays in scope for the named
-   item; `npx tsc --noEmit` adds no error beyond the two known pre-existing ones
-   (**zero** once PR #22 lands);
-   `npx vitest run` is green (baseline re-measured 2026-10-21 16:21: **16 files, 212 tests, 4.0 s**;
+   item; `npx tsc --noEmit` is **completely clean, zero errors** — the old
+   allowance for the two known pre-existing errors is **revoked** as of PR #22
+   (`d7050ed6`, merged 16:34), which fixed both; builder verified `tsc --noEmit`
+   exit 0 on that tip at 16:36, and `vitality-pr-watch`'s gate prompt was updated
+   to match, so any `tsc` error at all now fails the gate;
+   `npx vitest run` is green (baseline re-measured on `d7050ed6` 2026-10-21 16:36: **18 files, 266 tests, 3.9 s**;
    the earlier "5 files, 60 tests, 1.3 s" figure is stale — the suite has grown — pass
    no `--reporter=basic`, it was removed in vitest 4); no DELETE of `apple_health`
    nutrition rows is reintroduced; no blanket `AT TIME ZONE` is applied to
@@ -158,3 +161,18 @@ state must survive losing it. So:
   PRs **#20** (item 55), **#21** (item 50) and **#22** (cleanup) were all still
   *drafts* at 16:18, so the watcher had recorded them only as item claims — a
   draft is never gated, merged or deployed.
+
+- **2026-10-21 16:36 (builder, host-verified).** Clearing of the merge backlog
+  confirmed on `main` at `d7050ed6`: items **50** (`b6306e33`, PR #21), **55**
+  (`e009c1fc`, PR #20) and **58** (`d98b07e4`, PR #23) merged, and cleanup **PR
+  #22** merged as `d7050ed6`. On that tip, measured on the deploy host:
+  **`npx tsc --noEmit` exit 0, zero errors** and **`npx vitest run` 18 files /
+  266 tests, all passing, 3.9 s**. Both figures are the new gate baseline and
+  `vitality-pr-watch`'s prompt now enforces zero `tsc` errors rather than the
+  two-error allowance — a stale allowance would have let two fresh errors through
+  unnoticed. Item 58 landed on its own branch (`fix/item-58-chart-non-2xx`) rather
+  than being folded into PR #20, which is what kept #20 inside its scope gate.
+  Still open at that moment: **#24** `fix/item-56-admin-one-way-door` and **#25**
+  `fix/item-57-ai-insights-overflow`. Items **51, 52, 53, 54, 59, 60** remain
+  unclaimed, with **59** (forgeable system log entries) the only security row
+  among them.
