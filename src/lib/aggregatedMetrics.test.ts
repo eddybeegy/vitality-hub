@@ -173,6 +173,20 @@ describe('aggregateMetricBuckets reproduces the pre-item-48 route exactly', () =
     // same rank, same count: name.
     expect(aggregateMetricBuckets([row('withings', 2, 7), row('healthsync', 2, 3)], base)[0].heart_rate).toBe(3);
   });
+
+  it('takes both halves of a blood-pressure reading from one device (item 66)', () => {
+    const b = Math.floor(Date.UTC(2025, 11, 9, 8) / 1000 / BUCKET_SECONDS);
+    const row = (type: string, source: string, v: number): MetricBucketRow => ({ bucket: b, type, source, total: v, cnt: 1, max_value: v, min_value: v });
+    const base = { granularity: 'day' as const, aggregation: 'avg' as const, timezone: 'Europe/London', mappings: MAPPINGS, sourceRank: SOURCE_RANK, unknownSourceRank: 4 };
+    // withings has the whole reading, apple_health only a diastolic: per-type resolution
+    // used to show 122/74 (withings systolic, apple_health diastolic).
+    const out = aggregateMetricBuckets([
+      row('blood_pressure_systolic', 'withings', 122),
+      row('blood_pressure_diastolic', 'withings', 78),
+      row('blood_pressure_diastolic', 'apple_health', 74),
+    ], base);
+    expect(out).toEqual([{ date: '2025-12-09', blood_pressure_systolic: 122, blood_pressure_diastolic: 78 }]);
+  });
 });
 
 describe('bucketIndexSql on sqlite', () => {
