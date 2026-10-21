@@ -5315,6 +5315,15 @@ Answer in Markdown. Be specific and cite actual values from the data. Keep it co
     res.json({ success: true });
   });
 
+  // Item 51: an /api path no route above handled must 404 as JSON, not fall through to
+  // the SPA (index.html with a 200 here in production, Vite's SPA fallback in dev) — a
+  // typo'd or dropped endpoint otherwise looks like a success and every res.json() caller
+  // fails with a parse error that points at the wrong layer. Same shape as item 37's
+  // /assets 404 below; mounted ahead of both branches so dev behaves the same.
+  app.use("/api", (req, res) => {
+    res.status(404).json({ error: `Not found: ${req.method} /api${req.path}` });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
