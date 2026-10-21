@@ -5,6 +5,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { HealthChart } from './HealthChart';
 import { SyncButton } from './SyncButton';
 import { FrequentMealsModal } from './FrequentMealsModal';
+import { AdaptiveTdeeCard } from './AdaptiveTdeeCard';
 
 interface NutritionTabProps {
   settings: any;
@@ -184,6 +185,8 @@ export const NutritionTab = React.memo(({
           {weeklyAvgLabel(weeklyAverages.fat, getTargetValue('fat'), ' g')}
         </div>
       </div>
+
+      <AdaptiveTdeeCard timezone={settings?.timezone} preferredUnits={settings?.preferred_units} />
 
       {macroSplit && (
         <div className="bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 rounded-3xl p-6 shadow-sm">
