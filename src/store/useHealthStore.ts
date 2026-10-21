@@ -33,6 +33,10 @@ interface HealthState {
   debugMetrics: any[];
   lastMetrics: any[];
   expandedWorkouts: Record<number, boolean>;
+  // Bumped when a long-lived tab regains focus (item 26). Components that fetch
+  // their own data (url-backed charts, the insights freshness badge) watch it.
+  focusRefreshNonce: number;
+  bumpFocusRefresh: () => void;
   setSummaryData: (data: Partial<SummaryData> | ((prev: SummaryData) => SummaryData)) => void;
   setIsSyncing: (isSyncing: boolean) => void;
   setLastAppleHealthSync: (sync: string | null) => void;
@@ -67,6 +71,8 @@ export const useHealthStore = create<HealthState>((set, get) => ({
   debugMetrics: [],
   lastMetrics: [],
   expandedWorkouts: {},
+  focusRefreshNonce: 0,
+  bumpFocusRefresh: () => set((state) => ({ focusRefreshNonce: state.focusRefreshNonce + 1 })),
   modules: [],
   setSummaryData: (updater) => set((state) => ({
     summaryData: typeof updater === 'function' ? updater(state.summaryData) : { ...state.summaryData, ...updater }

@@ -6,6 +6,7 @@ import { ChatMessage } from '../services/geminiService';
 import { InsightSkeleton } from './ui/Skeleton';
 import { getLocalDateString, formatDateWithTimezone, normalizeAIMarkdown } from '../lib/utils';
 import { useAIStore } from '../store/useAIStore';
+import { useHealthStore } from '../store/useHealthStore';
 
 interface ApplyProgressionButtonProps {
   data: string;
@@ -128,6 +129,7 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
   const today = getLocalDateString(timezone);
   const [selectedDate, setSelectedDate] = useState<string>(today);
   const { requestRegeneration, regenPending, regenNotice } = useAIStore();
+  const focusRefreshNonce = useHealthStore(state => state.focusRefreshNonce);
 
   // Sweep item 36: coach is the sole author of this review, and nothing used to
   // notice if it stopped writing — a days-old review rendered exactly like today's.
@@ -152,7 +154,9 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
     load();
     const t = setInterval(load, 10 * 60 * 1000);
     return () => { cancelled = true; clearInterval(t); };
-  }, []);
+    // focusRefreshNonce: also re-check when a long-lived tab regains focus (item 26);
+    // a backgrounded tab's interval is throttled by the browser.
+  }, [focusRefreshNonce]);
 
   const onSubmit = async () => {
     if (!chatInput.trim()) return;

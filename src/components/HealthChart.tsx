@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   BarChart, Bar, Legend, AreaChart, Area, ReferenceLine 
@@ -6,6 +6,7 @@ import {
 import { ChartSkeleton } from './ui/Skeleton';
 import { SyncStatus } from './SyncStatus';
 import { cn, parseUTCDate } from '../lib/utils';
+import { useHealthStore } from '../store/useHealthStore';
 
 interface ReferenceLineProps {
   value: number;
@@ -61,11 +62,22 @@ export const HealthChart = ({
     }
   }, [defaultGranularity, defaultPeriod, hasInitializedFromProps]);
 
+  // Item 26: refetch when a long-lived tab regains focus. That refresh is silent --
+  // the chart keeps its current data on screen until the new rows arrive, instead of
+  // flashing a skeleton. A change of url/aggregation/period still clears as before.
+  const focusRefreshNonce = useHealthStore(state => state.focusRefreshNonce);
+  const lastFetchKey = useRef<string | null>(null);
+
   useEffect(() => {
     if (url) {
+      const fetchKey = `${url}|${aggregation}|${period}`;
+      const isFocusRefresh = lastFetchKey.current === fetchKey;
+      lastFetchKey.current = fetchKey;
       const fetchData = async () => {
-        setFetchedData([]); // Clear old data to show loading state and avoid stale data
-        setInternalLoading(true);
+        if (!isFocusRefresh) {
+          setFetchedData([]); // Clear old data to show loading state and avoid stale data
+          setInternalLoading(true);
+        }
         try {
           // Calculate startDate based on period
           const now = new Date();
@@ -99,7 +111,7 @@ export const HealthChart = ({
     // `granularity` is deliberately NOT a dependency any more: the request is always
     // day-granularity, so toggling DAY/WEEK/MONTH re-buckets the data we already have
     // instead of refetching identical rows.
-  }, [url, aggregation, period]);
+  }, [url, aggregation, period, focusRefreshNonce]);
 
   const isMini = variant === 'mini';
   const isWeightBased = dataKey === 'weight' || dataKey === 'muscle_mass' || dataKey === 'bone_mass' || dataKey === 'lean_body_mass' || dataKey === 'fat_mass';

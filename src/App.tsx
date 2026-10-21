@@ -75,6 +75,7 @@ import { useAIStore } from './store/useAIStore';
 import { useUIStore } from './store/useUIStore';
 import { getLocalDateString, formatDateWithTimezone, parseUTCDate, cn } from './lib/utils';
 import { isTargetSet } from './lib/targets';
+import { useRefreshOnFocus } from './lib/useRefreshOnFocus';
 
 export default function App() {
   const { user, isAuthChecking, setUser, setIsAuthChecking } = useAuthStore();
@@ -86,7 +87,8 @@ export default function App() {
   const { 
     summaryData, isSyncing, lastAppleHealthSync, logs, logFilter, debugMetrics, lastMetrics, expandedWorkouts,
     modules, setSummaryData, setIsSyncing, setLastAppleHealthSync, setLogs, setLogFilter, setDebugMetrics, setLastMetrics, setExpandedWorkouts,
-    fetchSummary, fetchLogs, fetchLastAppleHealthSync, syncModule, fetchModules, toggleModule, updateModuleSettings, purgeModuleData, syncAllModules, refreshSummary
+    fetchSummary, fetchLogs, fetchLastAppleHealthSync, syncModule, fetchModules, toggleModule, updateModuleSettings, purgeModuleData, syncAllModules, refreshSummary,
+    bumpFocusRefresh
   } = useHealthStore();
   const {
     combinedReview, insightsLastUpdated, isReviewLoading,
@@ -186,6 +188,15 @@ export default function App() {
       fetchSummary();
     }
   }, [activeTab, user]);
+
+  // Item 26: a tab left open (overnight, or across a sync) used to keep its mount-time
+  // data forever. Refetch when the tab is shown again; charts that fetch their own
+  // data follow via the store's focusRefreshNonce.
+  useRefreshOnFocus(() => {
+    fetchSummary();
+    fetchAIInsights();
+    bumpFocusRefresh();
+  }, !!user);
 
   const groupedMetrics = useMemo(() => {
     const map: Record<string, any[]> = {};
