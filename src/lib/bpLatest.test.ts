@@ -68,4 +68,35 @@ describe('latestBpReadings (item 69)', () => {
       blood_pressure_diastolic: { '2026-05-10': { withings: 85 } },
     });
   });
+
+  it('pairs halves stamped a few ms apart, as healthsync writes them', () => {
+    const out = latestBpReadings([
+      { type: 'blood_pressure_systolic', source: 'healthsync', value: 103, timestamp: '2026-08-24T07:10:00.001Z' },
+      { type: 'blood_pressure_diastolic', source: 'healthsync', value: 68, timestamp: '2026-08-24T07:10:00.009Z' },
+      { type: 'blood_pressure_diastolic', source: 'healthsync', value: 66, timestamp: '2026-08-24T19:00:00.003Z' },
+      { type: 'blood_pressure_systolic', source: 'healthsync', value: 101, timestamp: '2026-08-24T19:00:00.000Z' },
+    ], london);
+    expect(out.blood_pressure_systolic['2026-08-24'].healthsync).toBe(101);
+    expect(out.blood_pressure_diastolic['2026-08-24'].healthsync).toBe(66);
+  });
+
+  it('halves more than 2 s apart are different readings', () => {
+    const out = latestBpReadings([
+      ...reading('withings', '2026-05-10T08:00:00Z', 130, 85),
+      { type: 'blood_pressure_systolic', source: 'withings', value: 140, timestamp: '2026-05-10T09:00:00Z' },
+      { type: 'blood_pressure_diastolic', source: 'withings', value: 90, timestamp: '2026-05-10T09:00:03Z' },
+    ], london);
+    expect(out.blood_pressure_systolic['2026-05-10'].withings).toBe(130);
+    expect(out.blood_pressure_diastolic['2026-05-10'].withings).toBe(85);
+  });
+
+  it('two systolics inside the window are two readings, not one', () => {
+    const out = latestBpReadings([
+      { type: 'blood_pressure_systolic', source: 'withings', value: 120, timestamp: '2026-05-10T08:00:00.000Z' },
+      { type: 'blood_pressure_systolic', source: 'withings', value: 125, timestamp: '2026-05-10T08:00:00.500Z' },
+      { type: 'blood_pressure_diastolic', source: 'withings', value: 80, timestamp: '2026-05-10T08:00:00.600Z' },
+    ], london);
+    expect(out.blood_pressure_systolic['2026-05-10'].withings).toBe(125);
+    expect(out.blood_pressure_diastolic['2026-05-10'].withings).toBe(80);
+  });
 });
