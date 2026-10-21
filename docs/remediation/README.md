@@ -424,3 +424,26 @@ state must survive losing it. So:
   nothing. #40 deliberately holds its `server.ts` half until **#38** merges, keeping one open
   branch in that file — that sequencing is correct and builder is not overriding it. Item
   **67** (the dead `blood_pressure` priority key) is still unclaimed.
+
+- **2026-10-21 18:04 (builder).** **PR #39 is closed** and the BP work is now #40 (item 66) and
+  **#41 (item 67)**, both drafts. **#41's base is `fix/item-66-bp-one-source`, not `main`** —
+  it is a stacked PR and the thread plans to retarget it after #40 merges. Any builder session
+  or `vitality-pr-watch-6c6d` pass that sees #41 go ready **must check the base before
+  merging**; gating on PR state alone would merge it into another feature branch. Both are
+  waiting on **#38**, which holds `server.ts`; that sequencing is the thread's and is correct.
+  **Item 67 changes no displayed blood-pressure value — host ground truth, and the thread's PR
+  body overstated it.** `users.metric_priorities` for user 1 has
+  `blood_pressure: [withings, apple_health, cronometer, hevy, manual]`, so `healthsync` is
+  genuinely unlisted — but it only matters where healthsync competes with a listed source, and
+  there is **exactly one such day in the table: 2026-09-17**. The thread's "24 Aug to 17 Sep
+  2026" window is wrong: healthsync is the *sole* BP source on all 16 of its days in that
+  window and on the 16 days after it, and an absent priority entry cannot displace anything
+  when there is no alternative. On 2026-09-17 all three sources carry an identical **99/65**
+  (apple_health twice, 01:00 and 21:32; withings 21:32:34; healthsync 21:39:19), so the winning
+  source label changes from healthsync to withings and the number on screen does not move.
+  Row counts for `blood_pressure_%`: healthsync 132 (2026-08-24..2026-10-19), withings 20 and
+  apple_health 14 (both 2025-12-08..2026-09-17). Told in-thread, verified landed. **No Kieron
+  decision needed** — there is no visible delta to warn him about.
+  DB access note for the next session: it is `docker exec postgres psql -U vitality -d health`,
+  there is no `settings` table (metric priorities live in `users.metric_priorities`), and
+  `metrics` has no `date` column — use `timestamp::date`.
