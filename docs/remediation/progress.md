@@ -90,6 +90,8 @@ under "sweep pass 16".
 | 53 | **`GET /api/logs` ignores every query param and re-reads the whole day file per request** — `server.ts:4373` accepts no `limit`/`level`/`source`/`date`; it `fs.readFileSync`s the entire current-day log file, `split('\n').reverse()`, regex-parses each line and breaks at 500, with the indexed `logs` table only as a fallback. Measured live on a 582 KB file: 77/30/31 ms, fully synchronous — blocks the event loop for the whole read and grows with the day. LogsTab's level/source filtering is therefore pure client-side work over whichever 500 lines are newest, so a "Debug Only" or per-source filter can look empty while matching rows exist earlier the same day. Fix: accept the params and query the table. | todo (found 13:30, sweep pass 21) |
 | 54 | **`/api/export/metrics.csv` is an unbounded 109.7 MB response** — no date range, no row cap; streams all 1.69M rows and grows. Not a correctness bug (streaming + `no-store` both verified; the item-38 `writeChunk` listener fix held with **no MaxListeners warning across a full 110 MB export**, the strongest available check on it). Wants optional `startDate`/`endDate` and probably a default window. | IMPROVE, todo (found 13:30, sweep pass 21) |
 | 55 | **nav-rail icons have no accessible names** — 8 of 9 desktop nav-rail items expose no `aria-label`/`title`, so a screen reader reads them as "?". The mobile `More` menu items do carry text labels. | IMPROVE, todo (re-confirmed 13:30, sweep pass 21) |
+| 56 | **the Admin route is a one-way door — leaving it blanks the entire page.** Open Admin (nav-rail `users` icon, or mobile More -> Admin) then click any other nav item: the rail highlight moves, the new route's `/api/data/summary` fetch fires, and the content area renders **nothing** — header and rail only, white below, permanently (12 s and 8 s waits both stayed blank, every later click stays blank). Only a full reload recovers. Root cause `src/App.tsx:589-600`: the tab switch sits in `<AnimatePresence mode="wait">` and **`admin` is the only one of the 14 branches rendered as a keyed `motion.div`** (`key="admin"`, `initial`/`animate`/`exit`); the other 13 are plain unkeyed elements. `mode="wait"` holds the outgoing keyed child until its exit resolves and only then admits the incoming one, so with no keyed incoming child the swap never completes — the admin wrapper stays mounted parked on its **`initial`** style (`opacity: 0; transform: translateY(20px)`, read off the live node) and the real route never mounts (`#dashboard-container` absent). Note `document.body.innerText` still returns "Admin Console", so an innerText check reads this as "stuck on Admin" rather than "blank" — check computed opacity or screenshot. **Not a regression**: `git log -L 589,600:src/App.tsx` dates the block to `0923055` *Initial Upload, 2026-05-22*. Admin-role-gated so Kieron-only in practice, but it is the worst UI failure in the sweep — the app looks dead until the user thinks to reload. Fix: make the branches consistent — drop the `motion.div`/`exit` from the admin branch (simplest, matches the other 13, costs one fade) or key every branch. Removing `mode="wait"` alone is not enough. `src/App.tsx` only, no collision with the `server.ts` items. | todo (found 14:25, sweep pass 22) |
+| 57 | **AI Insights scrolls the whole page sideways at desktop width** — `scrollWidth - innerWidth = 97px` on that route at 1199px (every other route is negative). The date strip `DIV.flex gap-2 flex-nowrap min-w-max px-2` extends to **2309px** and its ancestor does not clip it, so the leak reaches the document and the header and nav rail scroll with it instead of just the strip; two date tiles sit past the viewport edge (`right` 1213 and 1281). Wants `overflow-x-auto` + `min-w-0` on the strip's container. Desktop-specific — pass 21 found no overflow on any route at 390x844. | IMPROVE, todo (found 14:30, sweep pass 22) |
 
 ## Loose threads (2026-10-21 13:15)
 
@@ -153,3 +155,31 @@ Open items after this pass: **50** (settings full-row overwrite — highest
 severity), 51, 52, 53, 54, 55 new; 18, 19, 21 and the item-44 residue (raw
 selects in `/api/data/summary`, the debug `SELECT * … LIMIT 50`) still untouched;
 48 with cloud PR #17.
+
+## Independent re-verification, sweep pass 22 (2026-10-21 14:35)
+
+Post-deploy regression sweep on the item-49 build (`92e90d5`/`b8e408d`, container
+up 14:06 BST, `RestartCount 0`, clean log), driven through Kieron's authenticated
+desktop Chrome.
+
+- **Pass 16's "read API silently substitutes defaults" is CLOSED.**
+  `granularity=parsec&aggregation=bogus` now returns **400** `Invalid granularity
+  'parsec': expected one of day, week, month`, and `startDate=notadate` returns
+  **400** with the expected-format message.
+- **51 confirmed still live**: `GET /api/does-not-exist` → 200 `text/html`, a
+  785-byte `index.html` body.
+- **53 confirmed still live**: `GET /api/logs?limit=1&level=debug` ignores both
+  params and returns the full **83,769-byte** payload of `info` rows.
+- **55 confirmed still live**, with a detail worth having: the **mobile** bottom
+  nav carries `aria-label` on all seven items, so the labels exist in the codebase
+  and only the desktop rail was missed.
+- All 9 desktop routes render on the new build with **zero console errors, zero
+  non-2xx fetches, no `NaN`/`undefined`/`--` leaf text**, and no horizontal
+  overflow bar item 57. Chart counts: Dashboard 27, Activity 25, Workouts 2,
+  Nutrition 17, AI Insights/Logs/Debug/Settings 0.
+- `/api/data/summary` warm: **309/349/341/340 ms** over four back-to-back
+  `no-store` fetches. The 3.7-3.9 s readings in the first minutes after the
+  restart were cold cost, not a cache regression.
+- `/api/admin/users` and `/api/admin/config` both 200 in 34 ms.
+
+New this pass: **56** (admin one-way door, worst UI failure found) and **57**.
