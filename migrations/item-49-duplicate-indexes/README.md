@@ -36,8 +36,9 @@ Two indexes match only when `pg_get_indexdef()` is the same once the name is tak
 out: same uniqueness, columns in the same order, method, opclass, collation, sort
 order, no partial predicate. The keepers are the only names written into the SQL.
 The duplicates are found by comparison, so the drop list is whatever the database
-actually holds, and preflight section 4 prints it. Going by builder's survey, it
-should come out as:
+actually holds, and preflight section 4 prints it. On a database in the state builder
+surveyed (before any run), it comes out as the table below. The live database has
+since lost the two `*_key` rows; see "Live state".
 
 | table | dropped | kind | how |
 |---|---|---|---|
@@ -62,17 +63,56 @@ They all use column-inference `ON CONFLICT (cols)`, or none at all, so any one
 non-partial unique index on exactly those columns satisfies them. The keepers are
 exactly those column lists.
 
-### The alternative, and what it would need
+Settled by Kieron on 2026-10-21, from the boot code and the live catalog: the
+`*_idx` family is the server's own set and stays; the `idx_*` family are strays from
+an older sweep that nothing recreates, and they go.
 
-builder's survey proposed the other way round: keep the `*_key` constraints and the
-`idx_*` copies, and drop the app-named ones. That only works if a `server.ts`
-change, merged and deployed **before** this migration runs, stops boot from
-recreating `metrics_unique_idx`, `meal_items_unique_idx`,
-`metrics_user_timestamp_idx`, `meal_items_user_ts_idx` and `workouts_user_ts_idx`.
-Otherwise the next restart quietly undoes it. Fresh installs would then also need
-an equivalent index from somewhere. It frees the same space, so this PR keeps the
-app's names and stays migration-only. Swapping is a one-line change to the
-`keepers` list in `preflight.sql` and `up.sql`, plus that app change.
+## Live state: half applied on 2026-10-21 13:27, and how to finish
+
+The first version of `up.sql` (PR #16) ran on the host and stopped part way:
+
+- The manifest `item49_dropped_indexes` recorded 4 rows at 13:27:00: the two `*_key`
+  constraints, plus `idx_metrics_unique` and `idx_meal_items_unique`.
+- Both constraints **really are gone**.
+- `idx_metrics_unique` and `idx_meal_items_unique` **still exist** (`indisvalid=t`).
+  The `DROP INDEX CONCURRENTLY` step did not finish, and nothing was still running
+  afterwards. The most likely cause is the session being cut off while the drop was
+  waiting for older transactions on the table (see Locking). A concurrent drop
+  cancelled in that wait leaves the index fully valid.
+- Uniqueness was never at risk: `metrics_unique_idx` and `meal_items_unique_idx` are
+  valid. But the first-version manifest **overstated** what happened. It had no
+  way to say "recorded but not dropped".
+
+This version fixes that and finishes the job on a plain re-run:
+
+- The manifest gains a `dropped_at` column, stamped by the statement **after** each
+  drop, so an interrupted drop is never stamped. On first contact with an old
+  manifest, `up.sql` backfills `dropped_at` from the catalog. A row whose index is
+  gone is marked dropped, and one whose index still exists is left to do.
+- Every drop is generated only while **another valid index of exactly the same
+  shape, not itself on the drop list,** is still there. That is checked against the
+  live catalog at the moment of generation, so no re-run, from any half-applied
+  state and whatever the manifest says, can leave `metrics` without a unique index
+  on `(user_id, type, timestamp, source)`. The self-test feeds it a manifest that
+  lists `metrics_unique_idx` itself, and checks that it refuses.
+- `up.sql` ends by listing manifest rows that are still not dropped. Expect 0.
+- `down.sql` lists manifest rows whose index still exists (recorded, never
+  dropped, so nothing to restore), then restores only what is really missing.
+
+From the 13:27 state, re-running `up.sql` should:
+
+1. Backfill `dropped_at` on the two `*_key` rows.
+2. Add `idx_metrics_user_ts`, `idx_meal_items_user_ts`, `idx_workouts_user_ts` (and
+   `metrics_user_ts` if it exists) to the manifest.
+3. Skip step 3, because the constraints are already gone.
+4. `DROP INDEX CONCURRENTLY` five indexes: `idx_metrics_unique` (105 MB),
+   `idx_metrics_user_ts` (35 MB), `idx_meal_items_unique`, `idx_meal_items_user_ts`
+   and `idx_workouts_user_ts`. That frees about 141 MB on top of the constraint
+   indexes already dropped.
+
+`idx_meal_items_user_ts` (244 scans) and `idx_workouts_user_ts` (125) are the
+copies the planner happened to use, with their twins on 0 scans. That is fine:
+the definitions are identical, so the planner simply moves to the twin.
 
 ## Do NOT drop the prefix indexes
 
@@ -101,6 +141,12 @@ $PSQL -f - < preflight.sql   # READ IT first
 $PSQL -f - < up.sql
 ```
 
+Run `up.sql` **without a client-side timeout** around the `docker exec`.
+`DROP INDEX CONCURRENTLY` waits for every transaction already open on the table,
+so it can legitimately sit for a while. Cutting the session off in that wait is what
+left the 13:27 run half done. If it does get cut off, the fix is to re-run, nothing
+else.
+
 What to check in the preflight before going on:
 
 1. **Section 2** lists every index shape held more than once.
@@ -121,7 +167,8 @@ should return 0 rows.
 `item49_dropped_indexes` **before** dropping anything. That is what `down.sql`
 replays, so leave the table in place until you are sure you will not roll back.
 Then drop it by hand (`DROP TABLE item49_dropped_indexes;`), or let a successful
-`down.sql` drop it.
+`down.sql` drop it. `dropped_at` is set only after a drop commits, so a row with it
+empty was not dropped.
 
 `down.sql` rebuilds each dropped index concurrently, unique or not, under its
 original name, and re-attaches the constraint ones with `ADD CONSTRAINT ... UNIQUE
@@ -176,7 +223,13 @@ It then checks, in order:
 6. `down.sql` restores every name, uniqueness flag and both constraints, and drops
    the manifest.
 7. `up.sql` works again after a down.
-8. `up.sql` refuses to run without its unique keeper.
+8. **The 13:27 half-applied state**: a first-version manifest with no `dropped_at`,
+   both constraints gone and the `idx_*` uniques still present. A plain re-run
+   finishes the job and leaves all 9 manifest rows stamped.
+9. A manifest that lists `metrics_unique_idx` itself is refused: the last unique
+   index is never dropped, and the row stays unstamped.
+10. `down.sql` works after the half-applied run.
+11. `up.sql` refuses to run without its unique keeper.
 
 It needs a role that can `CREATE DATABASE` and never touches an existing database.
 

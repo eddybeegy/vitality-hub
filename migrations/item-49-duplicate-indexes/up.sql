@@ -59,6 +59,16 @@ CREATE TABLE IF NOT EXISTS item49_dropped_indexes (
   recorded_at     timestamptz NOT NULL DEFAULT now()
 );
 
+-- dropped_at is set only once a drop has really committed, so the manifest never
+-- claims more than happened. A manifest written by the first version of this file
+-- (PR #16) has no such column: backfill it from the catalog - an index that no longer
+-- exists was dropped (dropping a constraint drops its index too), one that still
+-- exists was not, whatever the manifest says.
+ALTER TABLE item49_dropped_indexes ADD COLUMN IF NOT EXISTS dropped_at timestamptz;
+UPDATE item49_dropped_indexes d SET dropped_at = d.recorded_at
+ WHERE d.dropped_at IS NULL
+   AND to_regclass(format('public.%I', d.index_name)) IS NULL;
+
 INSERT INTO item49_dropped_indexes (index_name, table_name, constraint_name, indexdef)
 -- BEGIN drop-selection (identical text in preflight.sql and up.sql; selftest.sh checks)
 WITH keepers (table_name, index_name) AS (
@@ -97,9 +107,14 @@ WITH keepers (table_name, index_name) AS (
 SELECT index_name, table_name, constraint_name, indexdef FROM drops
 ON CONFLICT (index_name) DO NOTHING;
 
-\echo '== recorded for dropping =='
-SELECT table_name, index_name, coalesce(constraint_name, '-') AS constraint_name FROM item49_dropped_indexes ORDER BY 1, 2;
+\echo '== manifest before dropping (dropped_at empty = still to do) =='
+SELECT table_name, index_name, coalesce(constraint_name, '-') AS constraint_name, dropped_at
+  FROM item49_dropped_indexes ORDER BY 1, 2;
 
+-- Steps 3 and 4 hand each row to \gexec as two statements: the drop, then the
+-- UPDATE that stamps dropped_at. With ON_ERROR_STOP an interrupted or failed drop
+-- never gets its stamp, so the manifest stays true.
+--
 -- 3. Constraint-backed duplicates. A constraint's index cannot be dropped with
 --    DROP INDEX, and there is no DROP CONSTRAINT CONCURRENTLY: this takes ACCESS
 --    EXCLUSIVE on the table. The drop itself is catalog-only and instant, but the
@@ -107,11 +122,22 @@ SELECT table_name, index_name, coalesce(constraint_name, '-') AS constraint_name
 --    later reader/writer while it waits. lock_timeout caps that wait at 5 s; if it
 --    trips, nothing has changed - re-run this file.
 SET lock_timeout = '5s';
-SELECT format('ALTER TABLE public.%I DROP CONSTRAINT %I', d.table_name, d.constraint_name)
+SELECT format('ALTER TABLE public.%I DROP CONSTRAINT %I', d.table_name, d.constraint_name),
+       format('UPDATE item49_dropped_indexes SET dropped_at = now() WHERE index_name = %L', d.index_name)
   FROM item49_dropped_indexes d
- WHERE d.constraint_name IS NOT NULL
+ WHERE d.constraint_name IS NOT NULL AND d.dropped_at IS NULL
    AND EXISTS (SELECT 1 FROM pg_constraint c
                 WHERE c.conname = d.constraint_name AND c.conrelid = ('public.' || d.table_name)::regclass)
+   -- Safety: only while ANOTHER valid index of exactly the same shape, not itself
+   -- on the drop list, is still there. This is checked against the live catalog at
+   -- the moment each statement is generated, so no re-run, from any half-applied
+   -- state, can leave a table without its copy of the shape.
+   AND EXISTS (SELECT 1 FROM pg_index tx JOIN pg_class ti ON ti.oid = tx.indexrelid
+                WHERE tx.indrelid = ('public.' || d.table_name)::regclass
+                  AND tx.indisvalid AND tx.indisready
+                  AND ti.relname NOT IN (SELECT index_name FROM item49_dropped_indexes)
+                  AND regexp_replace(pg_get_indexdef(tx.indexrelid), '^(CREATE (UNIQUE )?INDEX )("[^"]+"|\S+) ON ', '\1ON ')
+                    = regexp_replace(d.indexdef, '^(CREATE (UNIQUE )?INDEX )("[^"]+"|\S+) ON ', '\1ON '))
  ORDER BY d.table_name, d.index_name
 \gexec
 RESET lock_timeout;
@@ -122,9 +148,20 @@ RESET lock_timeout;
 --    one makes this slow, not blocking. lock_timeout is deliberately NOT set here:
 --    a concurrent drop interrupted part way can leave the index INVALID (still
 --    present, no longer used) - harmless, and a re-run of this file drops it.
-SELECT format('DROP INDEX CONCURRENTLY IF EXISTS public.%I', d.index_name)
+SELECT format('DROP INDEX CONCURRENTLY IF EXISTS public.%I', d.index_name),
+       format('UPDATE item49_dropped_indexes SET dropped_at = now() WHERE index_name = %L', d.index_name)
   FROM item49_dropped_indexes d
- WHERE d.constraint_name IS NULL
+ WHERE d.constraint_name IS NULL AND d.dropped_at IS NULL
+   -- Safety: only while ANOTHER valid index of exactly the same shape, not itself
+   -- on the drop list, is still there. This is checked against the live catalog at
+   -- the moment each statement is generated, so no re-run, from any half-applied
+   -- state, can leave a table without its copy of the shape.
+   AND EXISTS (SELECT 1 FROM pg_index tx JOIN pg_class ti ON ti.oid = tx.indexrelid
+                WHERE tx.indrelid = ('public.' || d.table_name)::regclass
+                  AND tx.indisvalid AND tx.indisready
+                  AND ti.relname NOT IN (SELECT index_name FROM item49_dropped_indexes)
+                  AND regexp_replace(pg_get_indexdef(tx.indexrelid), '^(CREATE (UNIQUE )?INDEX )("[^"]+"|\S+) ON ', '\1ON ')
+                    = regexp_replace(d.indexdef, '^(CREATE (UNIQUE )?INDEX )("[^"]+"|\S+) ON ', '\1ON '))
  ORDER BY d.table_name, d.index_name
 \gexec
 
@@ -137,3 +174,8 @@ SELECT c.relname AS table_name, string_agg(i.relname, ', ' ORDER BY i.relname) A
  WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('metrics', 'meal_items', 'workouts')
  GROUP BY c.relname, regexp_replace(pg_get_indexdef(ix.indexrelid), '^(CREATE (UNIQUE )?INDEX )("[^"]+"|\S+) ON ', '\1ON ')
 HAVING count(*) > 1;
+
+\echo '== manifest rows NOT dropped (expect 0 rows; anything here was skipped or interrupted - re-run) =='
+SELECT table_name, index_name, coalesce(constraint_name, '-') AS constraint_name,
+       to_regclass(format('public.%I', index_name)) IS NOT NULL AS still_exists
+  FROM item49_dropped_indexes WHERE dropped_at IS NULL ORDER BY 1, 2;

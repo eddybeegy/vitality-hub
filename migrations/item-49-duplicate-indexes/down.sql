@@ -21,6 +21,12 @@ BEGIN
   END IF;
 END $$;
 
+\echo '== manifest rows whose index still exists: recorded, but never actually dropped - nothing to restore =='
+SELECT table_name, index_name FROM item49_dropped_indexes
+ WHERE to_regclass(format('public.%I', index_name)) IS NOT NULL ORDER BY 1, 2;
+-- (A first-version manifest can list such rows: up.sql recorded them and was
+-- interrupted before the drop committed. Step 1's IF NOT EXISTS skips them.)
+
 -- An index left INVALID by an interrupted CONCURRENTLY build would satisfy IF NOT
 -- EXISTS below and never be rebuilt, so clear any such leftover first.
 SELECT format('DROP INDEX CONCURRENTLY IF EXISTS public.%I', d.index_name)
