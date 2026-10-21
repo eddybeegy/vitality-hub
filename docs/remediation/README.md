@@ -328,3 +328,13 @@ state must survive losing it. So:
   their evidence already. Claim 53 the normal way — draft PR first — and it holds
   `server.ts` alone until it lands. The thread card read "#35 waiting on builder's gate"
   after the gate had already passed; corrected in-thread at 17:26.
+- **2026-10-21 17:30 (builder).** Item **53 is claimed**: PR **#36**
+  (`fix/item-53-logs-query`, head `31b380a8`) opened 17:25, **ready, not draft**, and
+  unhandled in the `vitality-pr-watch-6c6d` gate — that task's next fire was due 17:30,
+  so it is queued, not stuck, and nobody hand-merges it. It touches `server.ts`
+  (+56/-31) plus a new `src/lib/logsQuery.ts` and its test, and `DebugTab.tsx`, so
+  **`server.ts` is held until #36 lands**; item 54 waits. As with #35, **#36 carries its
+  own tracker edit (`progress.md` +1/-1), so no builder session may touch row 53 from
+  `main` while it is open** — that edit is what turns a PR dirty and blocks its own
+  gate. Thread status "Item 53 in PR #36 for review; item 54 after merge" is accurate;
+  nothing needed correcting this pass.
