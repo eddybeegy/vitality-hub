@@ -99,8 +99,6 @@ export default function App() {
   } = useAIStore();
   const { activeTab, selectedRoutine, toast, setActiveTab, setSelectedRoutine, hideToast, showToast } = useUIStore();
 
-  const lastSynced = lastAppleHealthSync;
-
   const [isMobileMoreOpen, setIsMobileMoreOpen] = useState(false);
   const [recentSessionsCount, setRecentSessionsCount] = useState(10);
   const [workoutTypeFilter, setWorkoutTypeFilter] = useState<'all' | 'strength' | 'cardio'>('all');
@@ -187,6 +185,13 @@ export default function App() {
     if (user && (activeTab === 'dashboard' || activeTab === 'activity' || activeTab === 'workouts')) {
       fetchSummary();
     }
+    // Item 25: the Logs tab rendered "0 / 0" until you pressed Refresh Logs -- nothing
+    // ever called fetchLogs on entry. The same is true of the Apple Health sync summary
+    // the tab's lower table shows (item 47).
+    if (user && activeTab === 'logs') {
+      fetchLogs();
+      fetchLastAppleHealthSync();
+    }
   }, [activeTab, user]);
 
   // Item 26: a tab left open (overnight, or across a sync) used to keep its mount-time
@@ -196,6 +201,11 @@ export default function App() {
     fetchSummary();
     fetchAIInsights();
     bumpFocusRefresh();
+    // Logs are the one surface where staleness is the whole point of looking.
+    if (activeTab === 'logs') {
+      fetchLogs();
+      fetchLastAppleHealthSync();
+    }
   }, !!user);
 
   const groupedMetrics = useMemo(() => {

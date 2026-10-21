@@ -1,5 +1,28 @@
+import fs from 'fs';
+import path from 'path';
 import { DataSourceModule } from "./types";
 import { METRIC_MAP, NUTRITION_METRICS, BODY_METRICS } from '../src/constants';
+
+// Sweep item 47: the Logs tab's "Raw Metrics Received" table reads
+// `last_apple_health_sync_<userId>.json`, and nothing in the repo had ever written
+// it, so the table was permanently empty. Written here at the end of every sync.
+// `/app/data` is the only persistent mount, so the file lives there (the reader
+// still falls back to the old cwd path). A diagnostic must never fail a sync, so
+// every failure is swallowed with a warn.
+export type AppleSyncNameStat = {
+  raw: string;
+  mappedTo: string | null;
+  points: number;
+  noValue: boolean;
+};
+export type AppleSyncSummary = {
+  lastSync: string;
+  count: number;
+  rawNames: string[];
+  names: AppleSyncNameStat[];
+};
+export const appleSyncSummaryPath = (userId: number | string) =>
+  path.join(process.cwd(), 'data', `last_apple_health_sync_${userId}.json`);
 
 export const AppleHealthModule: DataSourceModule = {
   id: "apple_health",
@@ -74,6 +97,19 @@ export const AppleHealthModule: DataSourceModule = {
     // record them and surface one warn per sync.
     const skippedNames = new Set<string>();
     const noValueNames = new Set<string>();
+    // Item 47: per-raw-name resolution for the Logs tab. The view used to re-derive
+    // "Mapped To"/"Status" from METRIC_MAP itself, which only tried two of the five
+    // name candidates this module tries -- a second copy of the mapping logic that
+    // was already wrong. The truth is recorded here instead.
+    const nameStats = new Map<string, AppleSyncNameStat>();
+    const statFor = (raw: string): AppleSyncNameStat => {
+      let st = nameStats.get(raw);
+      if (!st) {
+        st = { raw, mappedTo: null, points: 0, noValue: false };
+        nameStats.set(raw, st);
+      }
+      return st;
+    };
     
     for (const metric of metrics) {
       let dataPoints = metric.data || metric.metrics || metric.values || metric.samples || (metric.qty !== undefined || metric.value !== undefined ? [metric] : []);
@@ -95,7 +131,9 @@ export const AppleHealthModule: DataSourceModule = {
         }
         const normalizedName = rawName.toLowerCase().replace(/\s+/g, '_');
         const cleanName = METRIC_MAP[normalizedName] || METRIC_MAP[rawName] || METRIC_MAP[metric.type] || METRIC_MAP[metric.identifier] || METRIC_MAP[metric.id];
-        
+        const stat = rawName ? statFor(rawName) : null;
+        if (stat) stat.mappedTo = cleanName || null;
+
         if (!cleanName) {
           if (rawName) skippedNames.add(rawName);
           continue;
@@ -114,6 +152,7 @@ export const AppleHealthModule: DataSourceModule = {
               await insertStmt.run(userId, 'blood_pressure_systolic', Number(dp.systolic), unit, ts);
               await insertStmt.run(userId, 'blood_pressure_diastolic', Number(dp.diastolic), unit, ts);
               count += 2;
+              if (stat) stat.points += 2;
             }
             continue;
           }
@@ -128,6 +167,7 @@ export const AppleHealthModule: DataSourceModule = {
           if (val === undefined || val === null) {
             const keys = dp && typeof dp === 'object' ? Object.keys(dp).sort().join('|') : typeof dp;
             noValueNames.add(`${cleanName} (keys: ${keys})`);
+            if (stat) stat.noValue = true;
           }
           if (val !== undefined && val !== null) {
             let numericVal = typeof val === 'number' ? val : parseFloat(String(val));
@@ -156,6 +196,7 @@ export const AppleHealthModule: DataSourceModule = {
             }
             
             count++;
+            if (stat) stat.points++;
             
             // If this is a main sleep metric, try to extract stages if they are embedded
             if (cleanName === 'sleep' || cleanName === 'sleep_total' || cleanName === 'sleep_analysis') {
@@ -188,6 +229,22 @@ export const AppleHealthModule: DataSourceModule = {
     }
     if (noValueNames.size > 0) {
       logEvent('warn', `Mapped metrics with no recognised value key: ${[...noValueNames].sort().join(', ')}`, 'apple_health');
+    }
+
+    // Item 47: record what this payload contained so the Logs tab can show it.
+    try {
+      const names = [...nameStats.values()].sort((a, b) => a.raw.localeCompare(b.raw));
+      const summary: AppleSyncSummary = {
+        lastSync: new Date().toISOString(),
+        count,
+        rawNames: names.map(n => n.raw),
+        names,
+      };
+      const file = appleSyncSummaryPath(userId);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(summary, null, 2));
+    } catch (e: any) {
+      logEvent('warn', `Could not record the Apple Health sync summary: ${e?.message || e}`, 'apple_health');
     }
 
     return { success: true, message: `Synced ${count} metrics from Apple Health`, count };

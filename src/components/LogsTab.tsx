@@ -4,14 +4,19 @@ import { Terminal, RefreshCw, FileSearch, Search } from 'lucide-react';
 import { cn, formatDateWithTimezone } from '../lib/utils';
 import { EmptyState } from './ui/EmptyState';
 import { METRIC_MAP, NUTRITION_METRICS } from '../constants';
+import type { AppleHealthSyncSummary } from '../store/useHealthStore';
 
+export type LogLevelFilter = 'all' | 'debug' | 'info' | 'warn' | 'error';
+
+// The level <select> below has always offered "Debug Only", so 'debug' belongs in
+// the union; it was only absent because setLogFilter is called through an `as any`.
 interface LogsTabProps {
-  logFilter: 'all' | 'info' | 'warn' | 'error';
-  setLogFilter: (filter: 'all' | 'info' | 'warn' | 'error') => void;
+  logFilter: LogLevelFilter;
+  setLogFilter: (filter: LogLevelFilter) => void;
   logs: any[];
   fetchLogs: () => Promise<void>;
   settings: any;
-  lastAppleHealthSync: any;
+  lastAppleHealthSync: AppleHealthSyncSummary | null;
 }
 
 export const LogsTab = React.memo(({
@@ -23,6 +28,42 @@ export const LogsTab = React.memo(({
   lastAppleHealthSync
 }: LogsTabProps) => {
   const [logSearch, setLogSearch] = React.useState('');
+
+  // Item 47: prefer the per-name resolution the sync itself recorded. Re-deriving it
+  // here (the old behaviour) duplicated the module's mapping logic and only tried two
+  // of its five name candidates, so a mapped name could be labelled "Unmapped".
+  const rawNameRows = React.useMemo(() => {
+    const recorded = lastAppleHealthSync?.names;
+    if (recorded?.length) {
+      return recorded.map(n => ({
+        raw: n.raw,
+        mappedTo: n.mappedTo,
+        // apple_health nutrition is stored but deliberately not surfaced on a day a
+        // food log covers (Kieron, 2026-10-21), so it is neither "Recorded" nor dropped.
+        status: !n.mappedTo
+          ? 'Unmapped'
+          : n.noValue && n.points === 0
+            ? 'No value key'
+            : n.points === 0
+              ? 'Nothing stored'
+              : NUTRITION_METRICS.includes(n.mappedTo)
+                ? 'Stored (not surfaced)'
+                : 'Recorded',
+        points: n.points,
+      }));
+    }
+    // Fallback for a summary written before item 47 (rawNames only).
+    return (lastAppleHealthSync?.rawNames || []).map((name: string) => {
+      const normalizedName = name.toLowerCase().replace(/\s+/g, '_');
+      const cleanName = METRIC_MAP[normalizedName] || METRIC_MAP[name];
+      return {
+        raw: name,
+        mappedTo: cleanName || null,
+        status: !cleanName ? 'Unmapped' : NUTRITION_METRICS.includes(cleanName) ? 'Stored (not surfaced)' : 'Recorded',
+        points: null as number | null,
+      };
+    });
+  }, [lastAppleHealthSync]);
 
   const levelFilteredLogs = React.useMemo(
     () => logs.filter(l => logFilter === 'all' || l.level === logFilter),
@@ -73,7 +114,7 @@ export const LogsTab = React.memo(({
             </span>
             <select
               value={logFilter}
-              onChange={(e) => setLogFilter(e.target.value as any)}
+              onChange={(e) => setLogFilter(e.target.value as LogLevelFilter)}
               className="text-xs font-bold text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 border border-black/5 dark:border-white/5 rounded-xl px-3 py-2 outline-none"
             >
               <option value="all">All Levels</option>
@@ -128,33 +169,49 @@ export const LogsTab = React.memo(({
         </div>
 
         <div className="mt-8 pt-8 border-t border-black/5 dark:border-white/5">
-          <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 mb-4">Raw Metrics Received</h3>
+          <div className="flex items-baseline justify-between gap-4 mb-4 flex-wrap">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Raw Metrics Received</h3>
+            {lastAppleHealthSync?.lastSync && (
+              <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-medium">
+                Last Apple Health push: {formatDateWithTimezone(lastAppleHealthSync.lastSync, settings?.timezone)}
+                {typeof lastAppleHealthSync.count === 'number' ? ` \u00b7 ${lastAppleHealthSync.count} values stored` : ''}
+              </span>
+            )}
+          </div>
           <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-2xl p-4 overflow-x-auto">
+            {rawNameRows.length === 0 ? (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                No Apple Health push has been recorded yet. This table fills in after the next
+                Health Auto Export delivery.
+              </p>
+            ) : (
             <table className="w-full text-left text-[10px] font-mono">
               <thead>
                 <tr className="text-zinc-400 dark:text-zinc-500 border-b border-black/5 dark:border-white/5">
                   <th className="pb-2">Raw Name</th>
                   <th className="pb-2">Mapped To</th>
                   <th className="pb-2">Status</th>
+                  <th className="pb-2">Values</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-black/5 dark:divide-white/5">
-                {lastAppleHealthSync?.rawNames?.map((name: string, i: number) => {
-                  const normalizedName = name.toLowerCase().replace(/\s+/g, '_');
-                  const cleanName = METRIC_MAP[normalizedName] || METRIC_MAP[name];
-                  const isRecorded = cleanName && !NUTRITION_METRICS.includes(cleanName);
-                  return (
-                    <tr key={i} className="text-zinc-600 dark:text-zinc-400">
-                      <td className="py-1 font-bold">{name}</td>
-                      <td className="py-1">{cleanName || 'Unmapped'}</td>
-                      <td className={cn("py-1", isRecorded ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400")}>
-                        {isRecorded ? 'Recorded' : 'Ignored'}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {rawNameRows.map((row, i) => (
+                  <tr key={i} className="text-zinc-600 dark:text-zinc-400">
+                    <td className="py-1 font-bold">{row.raw}</td>
+                    <td className="py-1">{row.mappedTo || '\u2014'}</td>
+                    <td className={cn("py-1", row.status === 'Recorded'
+                      ? "text-emerald-600 dark:text-emerald-400"
+                      : row.status === 'Unmapped' || row.status === 'No value key'
+                        ? "text-amber-600 dark:text-amber-400"
+                        : "text-zinc-500 dark:text-zinc-400")}>
+                      {row.status}
+                    </td>
+                    <td className="py-1">{row.points === null ? '\u2014' : row.points}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
+            )}
           </div>
         </div>
       </div>

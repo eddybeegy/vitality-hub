@@ -24,12 +24,23 @@ interface SummaryData {
   };
 }
 
+export interface AppleHealthSyncSummary {
+  lastSync?: string;
+  count?: number;
+  rawNames?: string[];
+  names?: { raw: string; mappedTo: string | null; points: number; noValue: boolean }[];
+  message?: string;
+}
+
 interface HealthState {
   summaryData: SummaryData;
   isSyncing: boolean;
-  lastAppleHealthSync: string | null;
+  // Item 47: this used to be `string | null` and was set to `data.lastSync`, while
+  // the only consumer (LogsTab's "Raw Metrics Received") read `.rawNames` off it --
+  // a string never has that. The whole summary object is kept now.
+  lastAppleHealthSync: AppleHealthSyncSummary | null;
   logs: any[];
-  logFilter: 'all' | 'info' | 'warn' | 'error';
+  logFilter: 'all' | 'debug' | 'info' | 'warn' | 'error';
   debugMetrics: any[];
   lastMetrics: any[];
   expandedWorkouts: Record<number, boolean>;
@@ -39,9 +50,9 @@ interface HealthState {
   bumpFocusRefresh: () => void;
   setSummaryData: (data: Partial<SummaryData> | ((prev: SummaryData) => SummaryData)) => void;
   setIsSyncing: (isSyncing: boolean) => void;
-  setLastAppleHealthSync: (sync: string | null) => void;
+  setLastAppleHealthSync: (sync: AppleHealthSyncSummary | null) => void;
   setLogs: (logs: any[] | ((prev: any[]) => any[])) => void;
-  setLogFilter: (filter: 'all' | 'info' | 'warn' | 'error') => void;
+  setLogFilter: (filter: 'all' | 'debug' | 'info' | 'warn' | 'error') => void;
   setDebugMetrics: (metrics: any[]) => void;
   setLastMetrics: (metrics: any[]) => void;
   setExpandedWorkouts: (expanded: Record<number, boolean> | ((prev: Record<number, boolean>) => Record<number, boolean>)) => void;
@@ -137,7 +148,7 @@ export const useHealthStore = create<HealthState>((set, get) => ({
       const res = await fetch('/api/debug/apple-health-last-sync');
       if (res.ok) {
         const data = await res.json();
-        set({ lastAppleHealthSync: data.lastSync });
+        set({ lastAppleHealthSync: data });
       }
     } catch (e) {
       console.error("Fetch last sync failed", e);

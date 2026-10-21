@@ -1688,8 +1688,15 @@ try {
   await app.get('/api/debug/apple-health-last-sync', requireAuth, (req: any, res) => {
     const userId = req.user.id;
     try {
-      const filePath = path.join(process.cwd(), `last_apple_health_sync_${userId}.json`);
-      if (fs.existsSync(filePath)) {
+      // Item 47: the writer (modules/apple_health.ts) puts this under `data/`, the
+      // only persistent mount. The bare-cwd path is the pre-item-47 location and is
+      // kept as a fallback so an older file is still read.
+      const candidates = [
+        path.join(process.cwd(), 'data', `last_apple_health_sync_${userId}.json`),
+        path.join(process.cwd(), `last_apple_health_sync_${userId}.json`),
+      ];
+      const filePath = candidates.find(f => fs.existsSync(f));
+      if (filePath) {
         const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
         res.json(data);
       } else {
