@@ -7,6 +7,7 @@
 // apple_workouts are fed by Health Auto Export POSTing to /health-export, and
 // myfitnesspal/nutracheck need an uploaded file, so calling their sync() with no body
 // only logs "No data provided" errors (which then sit in syncIssues for 24 h).
+// strava's sync() is still a placeholder, so it is left out too.
 //
 // Pure functions, unit-tested directly.
 
@@ -15,7 +16,7 @@ export const PULL_MODULE_IDS = ['withings', 'cronometer', 'hevy'] as const;
 
 export interface RefreshPlan {
   sync: string[];
-  skipped: { id: string; reason: 'disabled' | 'push-only' }[];
+  skipped: { id: string; reason: 'disabled' | 'not-pull' }[];
 }
 
 /**
@@ -26,7 +27,7 @@ export function planRefresh(moduleIds: readonly string[], modulesConfig: Record<
   const plan: RefreshPlan = { sync: [], skipped: [] };
   for (const id of moduleIds) {
     if (modulesConfig?.[id]?.enabled === false) plan.skipped.push({ id, reason: 'disabled' });
-    else if (!(PULL_MODULE_IDS as readonly string[]).includes(id)) plan.skipped.push({ id, reason: 'push-only' });
+    else if (!(PULL_MODULE_IDS as readonly string[]).includes(id)) plan.skipped.push({ id, reason: 'not-pull' });
     else plan.sync.push(id);
   }
   return plan;
