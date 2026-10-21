@@ -42,15 +42,16 @@ export const DebugTab = ({ settings }: DebugTabProps) => {
       const [typesRes, lastRes, logsRes] = await Promise.all([
         fetch('/api/debug/metrics'),
         fetch('/api/debug/last-metrics'),
-        fetch('/api/logs'),
+        fetch('/api/logs?source=apple_health&limit=200'),
       ]);
       if (typesRes.ok) {
         const types = await typesRes.json();
         setDebugMetrics([...types].sort((a: any, b: any) => String(a.type).localeCompare(String(b.type))));
       }
       if (lastRes.ok) setLastMetrics(await lastRes.json());
-      // /api/logs is newest first and capped at 500 lines, so on a noisy day the last
-      // import can fall outside the window; that is shown as "not in recent logs".
+      // Asked for apple_health rows only (item 53), newest first, so other sources' chatter
+      // can no longer push the last import out of the window. Older than the newest 200
+      // apple_health entries is still shown as "not in recent logs".
       if (logsRes.ok) setLastImport(findLastAppleHealthImport(await logsRes.json()));
       if (!typesRes.ok || !lastRes.ok || !logsRes.ok) setError('Some debug endpoints failed to respond');
     } catch (e) {
