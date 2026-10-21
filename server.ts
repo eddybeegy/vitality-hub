@@ -32,6 +32,7 @@ import { parseLogLevel, parseSourceList, createLogFilter } from "./src/lib/logLe
 import { planRefresh, refreshStartMessage, refreshFinishMessage, RefreshModuleResult } from "./src/lib/refreshPlan";
 import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/lib/aggregatedMetrics";
 import { calculateReadinessScore, type ReadinessResult } from "./src/lib/readiness";
+import { chooseSource, type SourceCounts } from "./src/lib/sourcePriority";
 
 // Increase MaxListeners limit to prevent TLSSocket warnings during concurrent API sync chunks
 EventEmitter.defaultMaxListeners = 50;
@@ -167,6 +168,13 @@ const SOURCE_RANK: Record<string, number> = {
 };
 const UNKNOWN_SOURCE_RANK = 4;
 
+function sourceCounts(rows: any[] | undefined): SourceCounts | undefined {
+  if (!rows) return undefined;
+  const counts: SourceCounts = {};
+  for (const r of rows) counts[r.source] = (counts[r.source] ?? 0) + 1;
+  return counts;
+}
+
 // `meal_items` is cronometer-only (3852 rows, no other source has ever written it)
 // and the module ends in `.toISOString()`, so it is UTC like every non-healthsync
 // writer. It is NOT one of the three tables item 13 migrates, so it stays naive and
@@ -232,26 +240,13 @@ function filterMetricsByPriority(metrics: any[], prioritiesJson: string | null, 
   for (const day in groupedByDayAndType) {
     for (const type in groupedByDayAndType[day]) {
       const candidates = groupedByDayAndType[day][type];
-      const metricPriorities = priorities[type];
 
       // Deterministic winner for this (day, type): user priority, then SOURCE_RANK,
-      // then row count, then name. Identical ordering to the summary route's roll-up.
-      const counts: Record<string, number> = {};
-      for (const c of candidates) counts[c.source] = (counts[c.source] ?? 0) + 1;
-      const userRank = (src: string) => {
-        if (!metricPriorities || metricPriorities.length === 0) return Infinity;
-        const i = metricPriorities.indexOf(src);
-        return i === -1 ? Infinity : i;
-      };
-      const bestSource = Object.keys(counts).sort((a, b) => {
-        const ua = userRank(a), ub = userRank(b);
-        if (ua !== ub) return ua - ub;
-        const ra = SOURCE_RANK[a] ?? UNKNOWN_SOURCE_RANK;
-        const rb = SOURCE_RANK[b] ?? UNKNOWN_SOURCE_RANK;
-        if (ra !== rb) return ra - rb;
-        if (counts[b] !== counts[a]) return counts[b] - counts[a];
-        return a.localeCompare(b);
-      })[0] ?? null;
+      // then row count, then name, with the two halves of a blood-pressure reading
+      // kept on one source (item 65). Shared with the summary roll-up and the charts.
+      const bestSource = chooseSource(type, t => sourceCounts(groupedByDayAndType[day][t]), {
+        priorities, sourceRank: SOURCE_RANK, unknownSourceRank: UNKNOWN_SOURCE_RANK,
+      }).winner;
 
       // Keep records from the selected best source for this day, 
       // but deduplicate exact same timestamp/source/value entries 
@@ -2251,23 +2246,16 @@ async function checkScheduledRegeneration(userId: number) {
           // deliberately-deterministic sort below never saw more than one contender and
           // `otherSources` was never populated. Folding the policy in here makes the
           // whole selection deterministic and keeps the provenance (sweep items 7 + 8).
-          const userPriority = (type: string, src: string) => {
-            const list = priorities?.[type];
-            if (!list || list.length === 0) return Infinity;
-            const i = list.indexOf(src);
-            return i === -1 ? Infinity : i;
-          };
-          const contenders = Object.keys(sources).sort((a, b) => {
-            const pa = userPriority(type, a);
-            const pb = userPriority(type, b);
-            if (pa !== pb) return pa - pb;
-            const ra = SOURCE_RANK[a] ?? UNKNOWN_SOURCE_RANK;
-            const rb = SOURCE_RANK[b] ?? UNKNOWN_SOURCE_RANK;
-            if (ra !== rb) return ra - rb;
-            if (sources[b].count !== sources[a].count) return sources[b].count - sources[a].count;
-            return a.localeCompare(b);
-          });
-          const bestSource = contenders.length > 0 ? contenders[0] : null;
+          // Item 65: the order itself lives in src/lib/sourcePriority.ts, shared with
+          // `filterMetricsByPriority` and the charts, and keeps the two halves of a
+          // blood-pressure reading on one source for the day.
+          const { winner: bestSource, contenders } = chooseSource(type, t => {
+            const daySources = dailySourceMetrics[t]?.[day];
+            if (!daySources) return undefined;
+            const counts: SourceCounts = {};
+            for (const src in daySources) counts[src] = daySources[src].count;
+            return counts;
+          }, { priorities, sourceRank: SOURCE_RANK, unknownSourceRank: UNKNOWN_SOURCE_RANK });
 
           if (bestSource) {
             const s = sources[bestSource];
