@@ -477,24 +477,24 @@ export default function App() {
         </div>
         
         <div className="flex flex-col gap-4">
-          <NavIcon icon={<LayoutDashboard size={20} />} active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
-          <NavIcon icon={<Activity size={20} />} active={activeTab === 'activity'} onClick={() => setActiveTab('activity')} />
-          <NavIcon icon={<Dumbbell size={20} />} active={activeTab === 'workouts'} onClick={() => setActiveTab('workouts')} />
+          <NavIcon icon={<LayoutDashboard size={20} />} active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} title="Dashboard" />
+          <NavIcon icon={<Activity size={20} />} active={activeTab === 'activity'} onClick={() => setActiveTab('activity')} title="Activity" />
+          <NavIcon icon={<Dumbbell size={20} />} active={activeTab === 'workouts'} onClick={() => setActiveTab('workouts')} title="Workouts" />
           <NavIcon icon={<Sparkles size={20} />} active={activeTab === 'ai-insights'} onClick={() => setActiveTab('ai-insights')} title="AI Insights" />
-          <NavIcon icon={<Utensils size={20} />} active={activeTab === 'nutrition'} onClick={() => setActiveTab('nutrition')} />
+          <NavIcon icon={<Utensils size={20} />} active={activeTab === 'nutrition'} onClick={() => setActiveTab('nutrition')} title="Nutrition" />
           {user?.role === 'admin' && (
-            <NavIcon icon={<Users size={20} />} active={activeTab === 'admin'} onClick={() => setActiveTab('admin')} />
+            <NavIcon icon={<Users size={20} />} active={activeTab === 'admin'} onClick={() => setActiveTab('admin')} title="Admin" />
           )}
           {settings.show_debug_logs && (
             <>
-              <NavIcon icon={<Terminal size={20} />} active={activeTab === 'logs'} onClick={() => setActiveTab('logs')} />
-              <NavIcon icon={<Bug size={20} />} active={activeTab === 'debug'} onClick={() => setActiveTab('debug')} />
+              <NavIcon icon={<Terminal size={20} />} active={activeTab === 'logs'} onClick={() => setActiveTab('logs')} title="System Logs" />
+              <NavIcon icon={<Bug size={20} />} active={activeTab === 'debug'} onClick={() => setActiveTab('debug')} title="Debug Tools" />
             </>
           )}
         </div>
 
         <div className="mt-auto flex flex-col gap-4 items-center">
-          <NavIcon icon={<Settings size={20} />} active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
+          <NavIcon icon={<Settings size={20} />} active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} title="Settings" />
         </div>
       </nav>
 

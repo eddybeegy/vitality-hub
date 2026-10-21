@@ -7,7 +7,8 @@ interface NavIconProps {
   active: boolean;
   onClick: () => void;
   className?: string;
-  title?: string;
+  // Required: the button is icon-only, so this is its only accessible name (item 55)
+  title: string;
 }
 
 export function NavIcon({ icon, active, onClick, className, title }: NavIconProps) {
