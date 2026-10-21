@@ -17,6 +17,7 @@ export function NavIcon({ icon, active, onClick, className, title }: NavIconProp
       whileHover={{ scale: 1.05 }}
       whileTap={{ scale: 0.95 }}
       title={title}
+      aria-label={title}
       className={cn(
         "w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-200",
         active 
