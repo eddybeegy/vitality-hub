@@ -26,6 +26,7 @@ import { parseEnumParam, parseDateParam, parseDayParam, parseIntParam, checkDate
 import { buildSettingsUpdate, hasSettingsField } from "./src/lib/settingsUpdate";
 import { validateClientLog, formatLogLine, escapeLogFields } from "./src/lib/logEntry";
 import { jsonParseErrorResponse } from "./src/lib/bodyParseError";
+import { parseLogsQuery, zonedDayBounds, resolveTimeZone, logTimestampToIso, toSqliteTimestamp } from "./src/lib/logsQuery";
 import { parseLogLevel, parseSourceList, createLogFilter } from "./src/lib/logLevel";
 import { planRefresh, refreshStartMessage, refreshFinishMessage, RefreshModuleResult } from "./src/lib/refreshPlan";
 import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/lib/aggregatedMetrics";
@@ -4313,40 +4314,64 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
   });
 
   await app.get("/api/logs", requireAuth, async (req: any, res) => {
+    // Item 53: query the indexed `logs` table with validated filters instead of
+    // readFileSync-ing the whole current-day file per request (synchronous, growing with
+    // the day, capped at its newest 500 lines whatever the client wanted). Every logEvent
+    // writes both sinks with the same escaped text (item 64), so the table holds the same
+    // entries the file does, plus history across days.
+    //   ?limit=1-2000 (default 500)  ?level=debug|info|warn|error
+    //   ?source=<id>                 ?date=YYYY-MM-DD (a calendar day in the user's zone)
     const userId = req.user.id;
+    const q = parseLogsQuery(req.query);
+    if (q.error !== undefined) return res.status(400).json({ error: q.error });
+    const { limit, level, source, date } = q.value;
+
+    // The instant each row was written: logs.timestamp is London wall-clock until item 13
+    // has run (logInstant), UTC text under SQLite's CURRENT_TIMESTAMP.
+    const instant = db.type === 'sqlite' ? 'timestamp' : logInstant();
+    const where = ['(user_id = ? OR user_id IS NULL)'];
+    const params: any[] = [userId];
+    if (level) {
+      // LOWER: rows written before item 60 may carry a non-canonical spelling.
+      where.push('LOWER(level) = ?');
+      params.push(level);
+    }
+    if (source) {
+      where.push('source = ?');
+      params.push(source);
+    }
+
     try {
-      const logFile = getLogFilePath();
-      if (fs.existsSync(logFile)) {
-        const content = fs.readFileSync(logFile, 'utf8');
-        const lines = content.trim().split('\n').reverse();
-        
-        const parsedLogs = [];
-        for (const line of lines) {
-          const match = line.match(/^\[(.*?)\] \[(.*?)\] (?:\[User (\d+)\] )?(.*?): (.*)/);
-          if (match) {
-            const logUserId = match[3];
-            // Only show logs for this user or system logs (no user ID)
-            if (!logUserId || parseInt(logUserId) === userId) {
-              parsedLogs.push({
-                id: parsedLogs.length,
-                timestamp: match[1],
-                source: match[2],
-                level: match[4].toLowerCase(),
-                message: match[5]
-              });
-            }
-          }
-          if (parsedLogs.length >= 500) break;
-        }
-        res.json(parsedLogs);
-      } else {
-        const logs = await db.prepare("SELECT * FROM logs WHERE user_id = ? OR user_id IS NULL ORDER BY timestamp DESC LIMIT 200").all(userId);
-        res.json(logs);
+      if (date) {
+        const user = await db.prepare("SELECT timezone FROM users WHERE id = ?").get(userId) as any;
+        const { start, end } = zonedDayBounds(date, resolveTimeZone(user?.timezone));
+        where.push(`${instant} >= ? AND ${instant} < ?`);
+        params.push(
+          db.type === 'sqlite' ? toSqliteTimestamp(start) : start.toISOString(),
+          db.type === 'sqlite' ? toSqliteTimestamp(end) : end.toISOString(),
+        );
       }
-    } catch (e) {
-      console.error("Failed to fetch logs from file:", e);
-      const logs = await db.prepare("SELECT * FROM logs WHERE user_id = ? OR user_id IS NULL ORDER BY timestamp DESC LIMIT 200").all(userId);
-      res.json(logs);
+      params.push(limit);
+
+      // Newest first by id: insertion order, and the primary key, so this walks the
+      // index backwards and stops at `limit` rather than sorting the table.
+      const rows = await db.prepare(`
+        SELECT id, level, source, message, ${instant} AS timestamp
+        FROM logs
+        WHERE ${where.join(' AND ')}
+        ORDER BY id DESC
+        LIMIT ?
+      `).all(...params) as any[];
+      res.json(rows.map(r => ({
+        id: r.id,
+        timestamp: logTimestampToIso(r.timestamp),
+        source: r.source,
+        level: String(r.level ?? '').toLowerCase(),
+        message: r.message,
+      })));
+    } catch (e: any) {
+      console.error("Failed to fetch logs:", e);
+      res.status(500).json({ error: 'Failed to fetch logs' });
     }
   });
 
