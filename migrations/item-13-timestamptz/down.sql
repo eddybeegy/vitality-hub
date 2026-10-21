@@ -1,6 +1,6 @@
 -- item 13 rollback: timestamptz -> timestamp without time zone, restoring the
--- per-source conventions the pre-item-13 code expects (UTC for in-app sources,
--- Europe/London wall-clock for healthsync and logs).
+-- conventions the writers used before it: UTC for in-app sources and for every
+-- workout, Europe/London wall-clock for healthsync metrics and for logs.
 --
 -- Roll back the APP first (deploy the pre-item-13 build), then run this. Rows written
 -- after up.sql are true instants, so they come back in the right convention too.
@@ -32,8 +32,7 @@ ALTER TABLE metrics
 
 ALTER TABLE workouts
   ALTER COLUMN timestamp TYPE timestamp
-  USING CASE WHEN source = 'healthsync' THEN timestamp AT TIME ZONE 'Europe/London'
-             ELSE timestamp AT TIME ZONE 'UTC' END;
+  USING timestamp AT TIME ZONE 'UTC';
 
 ALTER TABLE logs
   ALTER COLUMN timestamp TYPE timestamp

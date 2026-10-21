@@ -338,10 +338,10 @@ const NUTRITION_METRICS = [
 
 // ── Timestamp column convention (sweep item 13) ──────────────────────────────
 // Until migrations/item-13-timestamptz has run, metrics/workouts/logs.timestamp are
-// `timestamp without time zone` and hold a different zone per source: UTC for the
-// in-app modules (they write `toISOString()` and Postgres drops the `Z`), Europe/London
-// wall-clock for `healthsync` (external writer, item 19) and for `logs` (DEFAULT
-// CURRENT_TIMESTAMP in the London session). Every SQL read path that needs an instant
+// `timestamp without time zone` and do not hold one zone: UTC for the in-app modules
+// (they write `toISOString()` and Postgres drops the `Z`) and for healthsync's workouts,
+// Europe/London wall-clock for healthsync's metrics (kb-health, item 19) and for `logs`
+// (DEFAULT CURRENT_TIMESTAMP in the London session). Every SQL read path that needs an instant
 // has to say which. After the migration each column stores the instant and the column
 // is the answer on its own; node-pg then hands back the right Date for every source,
 // which is what fixes the JS read paths in item 44.
@@ -364,12 +364,15 @@ async function detectTimestampColumns() {
   console.log(`[schema] timestamptz columns: metrics=${tzColumns.metrics} workouts=${tzColumns.workouts} logs=${tzColumns.logs}`);
 }
 
-// SQL for the instant a metrics/workouts row was recorded. Never a single AT TIME
-// ZONE for the whole table while the column is naive -- the zone belongs to the source.
-const readingInstant = (table: 'metrics' | 'workouts', col = 'timestamp') =>
-  tzColumns[table]
-    ? col
-    : `(CASE WHEN source = 'healthsync' THEN ${col} AT TIME ZONE 'Europe/London' ELSE ${col} AT TIME ZONE 'UTC' END)`;
+// SQL for the instant a metrics/workouts row was recorded. The convention is per TABLE
+// and source, never one AT TIME ZONE for a table: healthsync's writer (kb-health on the
+// host) stamps `metrics` as London wall-clock but `workouts` as UTC, like every in-app
+// module. `srcCol` is the source column, qualified when the query aliases the table.
+const readingInstant = (table: 'metrics' | 'workouts', col = 'timestamp', srcCol = 'source') => {
+  if (tzColumns[table]) return col;
+  if (table === 'workouts') return `(${col} AT TIME ZONE 'UTC')`;
+  return `(CASE WHEN ${srcCol} = 'healthsync' THEN ${col} AT TIME ZONE 'Europe/London' ELSE ${col} AT TIME ZONE 'UTC' END)`;
+};
 
 // SQL for the instant a log row was written.
 const logInstant = (col = 'timestamp') => tzColumns.logs ? col : `(${col} AT TIME ZONE 'Europe/London')`;
@@ -2468,7 +2471,7 @@ async function checkScheduledRegeneration(userId: number) {
       workoutCutoffDate.setDate(workoutCutoffDate.getDate() - workoutHistoryDays);
       const workoutCutoffStr = workoutCutoffDate.toISOString();
 
-      const rawMetrics = await db.prepare("SELECT type, value, unit, timestamp, source FROM metrics WHERE user_id = ? AND timestamp >= ?").all(userId, cutoffStr);
+      const rawMetrics = await db.prepare(`SELECT type, value, unit, source, ${ db.type === 'sqlite' ? 'timestamp' : readingInstant('metrics') } AS timestamp FROM metrics WHERE user_id = ? AND timestamp >= ?`).all(userId, cutoffStr);
       const timezone = user.timezone || undefined;
       const filteredMetrics = filterMetricsByPriority(rawMetrics, user.metric_priorities, timezone);
       const metrics = filteredMetrics;
@@ -3193,7 +3196,9 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     });
 
     const keyMetrics = await db.prepare(`
-      SELECT * FROM metrics 
+      SELECT id, user_id, type, value, unit, source,
+             ${ db.type === 'sqlite' ? 'timestamp' : readingInstant('metrics') } AS timestamp
+      FROM metrics 
       WHERE user_id = ? AND type IN ('weight', 'body_fat', 'muscle_mass', 'lean_body_mass')
       AND ${ db.type === 'sqlite' ? "replace(timestamp, ' ', 'T')" : "timestamp" } >= ?
       ${ endStr ? `AND ${ db.type === 'sqlite' ? "replace(timestamp, ' ', 'T')" : "timestamp" } <= ?` : '' }
@@ -3390,7 +3395,12 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     }
 
     const workouts = await db.prepare(`
-      SELECT w.*, r.folder_name as routine_folder 
+      SELECT w.id, w.user_id, w.name, w.duration, w.volume, w.source, w.external_id,
+             w.routine_external_id, w.distance, w.distance_unit, w.energy_burned,
+             w.energy_burned_unit, w.heart_rate_avg, w.heart_rate_max, w.elevation,
+             w.elevation_unit,
+             ${ db.type === 'sqlite' ? 'w.timestamp' : readingInstant('workouts', 'w.timestamp') } AS timestamp,
+             r.folder_name as routine_folder 
       FROM workouts w 
       LEFT JOIN routines r ON w.routine_external_id = r.external_id 
       WHERE w.user_id = ?
@@ -3492,15 +3502,16 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         }
       }
     };
-    // The naive `timestamp` column does not hold one zone, it holds one PER SOURCE, so
-    // the conversion has to be per source too:
+    // The naive `timestamp` column does not hold one zone, it holds one per source AND
+    // table, so the conversion has to follow both (`readingInstant`):
     //   - every in-app ingest module normalises with `toISOString()` -> the row holds
     //     UTC. Reading those as London wall-clock reported them exactly one hour OLDER
     //     than reality under BST (apple_health's newest reading 08:48 was served as
     //     08:48Z, rendering 08:48 London, when the real instant was 09:48 London -- two
     //     minutes before the 09:50 sync that wrote it).
     //   - `healthsync` is written straight into Postgres by something outside this
-    //     codebase (sweep item 19) and stamps Europe/London wall-clock. Reading those as
+    //     codebase (kb-health, sweep item 19) and stamps its METRICS as Europe/London
+    //     wall-clock (its workouts are UTC, like the in-app modules). Reading those as
     //     UTC puts the freshest feed in the app an hour in the FUTURE -- which is the
     //     symptom behind the 2026-10-21 07:58 regression, reverted at 08:27. That revert
     //     was right for healthsync and for `logs`, and wrong for the other five sources;

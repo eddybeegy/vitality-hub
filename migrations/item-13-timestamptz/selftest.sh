@@ -61,11 +61,15 @@ INSERT INTO expect VALUES
 INSERT INTO workouts (id, user_id, name, duration, volume, timestamp, source, external_id) VALUES
   (1, 1, 'Push', 60, 1000, '2026-10-20 22:30:00', 'hevy', 'h1'),           -- 23:30 BST on the 20th
   (2, 1, 'Walk', 30, 0, '2026-10-26 07:00:00', 'apple_health', 'a1'),     -- GMT
-  (3, 1, 'Run', 40, 0, '2026-10-21 07:15:00', 'healthsync', 'hs1'),       -- London 07:15 BST
-  (4, 1, 'Run', 40, 0, '2026-11-02 07:15:00', 'healthsync', 'hs2');       -- London 07:15 GMT
+-- healthsync workouts are UTC (kb-health's workout INSERT uses utcNaive), unlike its
+-- metrics. The live row 202737 has exactly this shape; 3 is the one a per-source rule
+-- would have shifted an hour early without any other assertion noticing.
+  (3, 1, 'Traditional Strength Training', 40, 0, '2026-10-20 09:25:32', 'healthsync',
+     'healthsync_2026-10-20T09:25:32.887Z_Traditional_Strength_Training'),
+  (4, 1, 'Run', 40, 0, '2026-11-02 07:15:00', 'healthsync', 'healthsync_2026-11-02T07:15:00.000Z_Run');
 INSERT INTO expect VALUES
   ('workouts', 1, '2026-10-20 22:30:00+00'), ('workouts', 2, '2026-10-26 07:00:00+00'),
-  ('workouts', 3, '2026-10-21 07:15:00+01'), ('workouts', 4, '2026-11-02 07:15:00+00');
+  ('workouts', 3, '2026-10-20 09:25:32+00'), ('workouts', 4, '2026-11-02 07:15:00+00');
 
 -- logs: explicit London wall-clock, plus one taking the DEFAULT in this London session
 INSERT INTO logs (id, user_id, level, message, source, timestamp) VALUES
@@ -101,8 +105,7 @@ CREATE TABLE before_fresh AS
                                      ELSE timestamp AT TIME ZONE 'UTC' END) AS ts
   FROM metrics WHERE user_id = 1 GROUP BY source
   UNION ALL
-  SELECT 'workouts', source, MAX(CASE WHEN source = 'healthsync' THEN timestamp AT TIME ZONE 'Europe/London'
-                                ELSE timestamp AT TIME ZONE 'UTC' END)
+  SELECT 'workouts', source, MAX(timestamp AT TIME ZONE 'UTC')
   FROM workouts WHERE user_id = 1 GROUP BY source
   UNION ALL
   SELECT 'logs', source, MAX(timestamp AT TIME ZONE 'Europe/London') FROM logs WHERE level = 'info' GROUP BY source;
@@ -175,6 +178,12 @@ BEGIN
   SELECT count(*) INTO n FROM metrics
   WHERE source = 'apple_health' AND timestamp >= '2026-10-24T00:00:00.000Z' AND timestamp < '2026-10-25T00:00:00.000Z';
   IF n <> 1 THEN RAISE EXCEPTION 'UTC day range for 2026-10-24 matched % rows, expected 1', n; END IF;
+
+  -- healthsync workouts agree with the UTC instant their external_id carries
+  SELECT count(*) INTO n FROM workouts
+  WHERE source = 'healthsync'
+    AND abs(extract(epoch FROM timestamp - substring(external_id FROM '^healthsync_([0-9T:.-]+Z)')::timestamptz)) >= 1;
+  IF n <> 0 THEN RAISE EXCEPTION '% healthsync workouts disagree with their external_id instant', n; END IF;
   RAISE NOTICE 'up.sql assertions passed';
 END $$;
 SQL

@@ -8,10 +8,13 @@
 --
 --   psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -f up.sql
 --
--- The conversion is per source, never one blanket AT TIME ZONE (handoff fact 1):
---   * metrics / workouts: the five in-app modules write `toISOString()`, so the naive
---     value is UTC -> `AT TIME ZONE 'UTC'`. `healthsync` (external, item 19) stamps
---     Europe/London wall-clock -> `AT TIME ZONE 'Europe/London'`.
+-- The conversion is per table AND source, never one blanket AT TIME ZONE for metrics:
+--   * metrics: the five in-app modules write `toISOString()`, so the naive value is
+--     UTC -> `AT TIME ZONE 'UTC'`. `healthsync` (kb-health, item 19) stamps metrics via
+--     `localNaive()`, Europe/London wall-clock -> `AT TIME ZONE 'Europe/London'`.
+--   * workouts: every source is UTC, healthsync included (kb-health's workout INSERT
+--     uses `utcNaive()`; preflight section 2b checks it against the UTC instant in
+--     its `external_id`) -> `AT TIME ZONE 'UTC'`.
 --   * logs: DEFAULT CURRENT_TIMESTAMP evaluated in the Europe/London session ->
 --     `AT TIME ZONE 'Europe/London'`.
 -- `naive AT TIME ZONE z` reads the naive value as wall-clock in z and returns the
@@ -46,8 +49,7 @@ ALTER TABLE metrics
 
 ALTER TABLE workouts
   ALTER COLUMN timestamp TYPE timestamptz
-  USING CASE WHEN source = 'healthsync' THEN timestamp AT TIME ZONE 'Europe/London'
-             ELSE timestamp AT TIME ZONE 'UTC' END;
+  USING timestamp AT TIME ZONE 'UTC';
 
 ALTER TABLE logs
   ALTER COLUMN timestamp TYPE timestamptz

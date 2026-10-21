@@ -34,8 +34,15 @@ an extract if an item needs it.
    merge sha when it lands.
 4. **PR body states** what changed, what a reviewer should see on screen or in the
    response body, and what you could not check.
-5. builder runs four gates before merging: the diff stays in scope for the named
-   item; `tsc` adds no error beyond the two known pre-existing ones; no DELETE of
-   `apple_health` nutrition rows is reintroduced; no blanket `AT TIME ZONE` is
-   applied to `metrics`/`workouts` (those columns hold a different zone per
-   source — see `handoff.md`). A failed gate gets a comment on the PR, not a merge.
+5. builder runs five gates before merging: the diff stays in scope for the named
+   item; `npx tsc --noEmit` adds no error beyond the two known pre-existing ones;
+   `npx vitest run` is green (baseline 2026-10-21: 5 files, 60 tests, 1.3 s — pass
+   no `--reporter=basic`, it was removed in vitest 4); no DELETE of `apple_health`
+   nutrition rows is reintroduced; no blanket `AT TIME ZONE` is applied to
+   `metrics`/`workouts` (those columns hold a different zone per source — see
+   `handoff.md`). A failed gate gets a comment on the PR, not a merge.
+6. **Unit tests are welcome and are the only check you can run yourself.** The
+   suite is `vitest`, co-located `*.test.ts`. An item whose fix is a pure function
+   (date arithmetic, source precedence, param validation) should come with a test
+   that fails before the change — that is worth more than a described repro,
+   because builder can run it without a browser.

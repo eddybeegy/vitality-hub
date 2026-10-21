@@ -5,10 +5,11 @@
 --
 -- What up.sql assumes, and what each section below checks:
 --   * all three columns are still `timestamp without time zone` (section 1);
---   * metrics/workouts hold UTC for every source except `healthsync`, which holds
---     Europe/London wall-clock (handoff fact 1). Section 2 lists every source with
---     its newest row so a source nobody has accounted for is visible BEFORE it is
---     converted under the UTC rule;
+--   * metrics hold UTC for every source except `healthsync`, which holds Europe/London
+--     wall-clock; workouts hold UTC for every source, healthsync included (section
+--     2b checks that against the UTC instant in healthsync's `external_id`). Section 2
+--     lists every source with its newest row so a source nobody has accounted for is
+--     visible BEFORE it is converted under the UTC rule;
 --   * logs holds Europe/London wall-clock (DEFAULT CURRENT_TIMESTAMP in a London
 --     session) — section 1 prints the session zone, which must be Europe/London;
 --   * the per-source conversion cannot make two metrics rows collide on
@@ -34,6 +35,16 @@ SELECT 'logs', '(all)', count(*), min(timestamp), max(timestamp)
 FROM logs
 ORDER BY 1, 2;
 
+\echo '== 2b. healthsync workouts: naive timestamp vs the UTC instant in external_id (expect utc_match = t on every row)'
+-- external_id looks like healthsync_2026-10-20T09:25:32.887Z_<name>; the naive column
+-- holds that instant to the second. A London wall-clock row would be off by 3600 s.
+SELECT id, timestamp AS naive_ts, external_id,
+  abs(extract(epoch FROM (timestamp AT TIME ZONE 'UTC')
+      - substring(external_id FROM '^healthsync_([0-9T:.-]+Z)')::timestamptz)) < 1 AS utc_match
+FROM workouts
+WHERE source = 'healthsync'
+ORDER BY timestamp DESC;
+
 \echo '== 3. London wall-clock values that do not map to exactly one instant'
 -- nonexistent: inside the spring-forward gap (e.g. 2027-03-28 01:30). Postgres maps
 --   these forward an hour, so 01:30 and 02:30 become the same instant.
@@ -43,7 +54,6 @@ ORDER BY 1, 2;
 -- the lost information, it can only tell you how many rows are affected.
 WITH london AS (
   SELECT 'metrics' AS tbl, timestamp AS ts FROM metrics WHERE source = 'healthsync'
-  UNION ALL SELECT 'workouts', timestamp FROM workouts WHERE source = 'healthsync'
   UNION ALL SELECT 'logs', timestamp FROM logs
 )
 SELECT tbl,
