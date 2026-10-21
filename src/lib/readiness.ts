@@ -1,5 +1,5 @@
 import type { StandardizedMetric } from '../services/healthDataService';
-import { scoreAgainstBaseline, type Baseline } from './baselines';
+import { metricDay, scoreAgainstBaseline, type Baseline } from './baselines';
 
 export interface ReadinessComponent {
   name: string;
@@ -27,14 +27,23 @@ const WEIGHTS_WITHOUT_RHR = { hrv: 0.4, rhr: 0, sleep: 0.4, burn: 0.2 };
  * the user's own baselines (see baselines.ts), Sleep, and Yesterday's Strain.
  *
  * The one implementation: the dashboard, Smart Adjustments and the server's
- * buildReadiness() (which serves coach) all call this, so they cannot drift.
+ * loadReadinessHistory() (which serves coach and the history) all call this, so they cannot drift.
  */
 export function calculateReadinessScore(
-  metrics: Pick<StandardizedMetric, 'type' | 'value' | 'timestamp'>[],
+  allMetrics: Pick<StandardizedMetric, 'type' | 'value' | 'timestamp'>[],
   targets: any[] = [],
-  timezone: string = 'UTC'
+  timezone: string = 'UTC',
+  /**
+   * Score as of this calendar day (YYYY-MM-DD, user's zone) instead of today:
+   * only readings on or before it count and "yesterday" is the day before it.
+   * Used to rebuild readiness history (readinessHistory.ts). Omitted = today.
+   * Passing today's date gives the same result unless a sleep row is already
+   * dated today (a sleep ending after midday), which the live score counts and
+   * the as-of score leaves for tomorrow.
+   */
+  asOf?: string
 ): ReadinessResult | null {
-  if (!metrics || metrics.length === 0) return null;
+  if (!allMetrics || allMetrics.length === 0) return null;
 
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -62,7 +71,19 @@ export function calculateReadinessScore(
   // DST boundary incorrectly because there is no clock time involved.
   // Setting TZ=Europe/London on the container would have masked this for one
   // user and left the bug in place.
-  const todayInTz = formatter.format(new Date());
+  const todayInTz = asOf ?? formatter.format(new Date());
+  // As of a past day, keep only what was known that morning. Sleep rows are
+  // dated by the night they started (aggregateDailyMetrics shifts sleep back 12h),
+  // so the night that ended on the morning of asOf is dated the day before it,
+  // and a sleep row dated asOf itself is the *following* night: excluded.
+  const metrics = asOf
+    ? allMetrics.filter(m => {
+        const day = metricDay(String(m.timestamp ?? ''), formatter);
+        if (day === null) return false;
+        return m.type.startsWith('sleep') ? day < asOf : day <= asOf;
+      })
+    : allMetrics;
+  if (metrics.length === 0) return null;
   const [tzY, tzM, tzD] = todayInTz.split('-').map(Number);
   const yesterday = new Date(Date.UTC(tzY, tzM - 1, tzD) - 86400000).toISOString().slice(0, 10);
 
