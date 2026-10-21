@@ -57,6 +57,8 @@ interface SettingsState {
   settings: Settings;
   targets: Target[];
   targetsLoaded: boolean;
+  /** True once /api/settings has loaded; until then `settings` is defaultSettings. */
+  settingsLoaded: boolean;
   showApiKey: boolean;
   showModulePasswords: Record<string, boolean>;
   setSettings: (settings: Partial<Settings> | ((prev: Settings) => Settings)) => void;
@@ -130,6 +132,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: defaultSettings,
   targets: defaultTargets,
   targetsLoaded: false,
+  settingsLoaded: false,
   showApiKey: false,
   showModulePasswords: {},
   setSettings: (updater) => set((state) => ({
@@ -182,7 +185,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           meal_suggestion_dinner: data.meal_suggestion_dinner == null ? true : !!data.meal_suggestion_dinner,
           show_debug_logs: !!data.show_debug_logs
         };
-        return { settings: newSettings };
+        return { settings: newSettings, settingsLoaded: true };
       });
     } catch (err) {
       console.error("Failed to fetch settings:", err);
@@ -226,7 +229,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
   handleSaveSettings: async () => {
-    const { settings } = get();
+    const { settings, settingsLoaded } = get();
+    // Item 50 follow-up: if /api/settings never loaded, `settings` is still
+    // defaultSettings, and saving would POST every default over the real row (the
+    // client sends the whole object). Same guard as handleSaveTargets/targetsLoaded.
+    // Every caller goes through here -- Settings, Profile, and the Dashboard's
+    // auto-save on widget reorder -- so one check covers them all.
+    if (!settingsLoaded) {
+      console.warn("Attempted to save settings before they were loaded. Skipping.");
+      useUIStore.getState().showToast("Your settings haven't loaded, so nothing was saved. Reload the page and try again.", "error");
+      return;
+    }
     try {
       const trimmedSettings = {
         ...settings,
