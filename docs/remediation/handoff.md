@@ -34,8 +34,13 @@ branches + PRs, do not expect to verify at runtime.** builder deploys and verifi
    zone` and hold a different zone per source.** The five in-app modules
    (`modules/apple_health.ts`, `cronometer.ts`, `withings.ts`, `nutracheck.ts`,
    `hevy.ts`) all end in `new Date(...).toISOString()` → **UTC**. `healthsync`
-   has **no module in this repo** — it is an external writer (HealthSync → Home
-   Assistant → Postgres) and stamps **Europe/London wall-clock**. `logs.timestamp`
+   has **no module in this repo** — it is written by `kb-health`, a container on
+   the deploy host that reads Home Assistant over a websocket. **Its convention
+   splits by table**: metrics are stamped **Europe/London wall-clock**
+   (`localNaive`), workouts are stamped **UTC** (`utcNaive`). So a
+   `CASE WHEN source = 'healthsync'` exception belongs on `metrics` only;
+   `workouts` is UTC for every source. Proof: healthsync workout 202737 has naive
+   `2026-10-20 09:25:32` and `external_id healthsync_2026-10-20T09:25:32.887Z_...`. `logs.timestamp`
    takes the column DEFAULT `CURRENT_TIMESTAMP` in the PG session zone
    (Europe/London) → **London wall-clock**. So no single `AT TIME ZONE` is correct
    for the table. SQL read paths now `CASE` on source; the JS read paths still
@@ -44,13 +49,17 @@ branches + PRs, do not expect to verify at runtime.** builder deploys and verifi
    in `SOURCE_RANK` at the same rank; don't "fix" one away.
 3. `metric_priorities` only names weight, body_fat, muscle_mass, calories_in and
    blood_pressure, so anything keyed off it misses every high-frequency type.
-4. Apple Health is **not** dead despite what item 18 says: 1,595,487 metric rows,
+4. Row counts, measured 2026-10-21 11:25: `metrics` 1,697,022 (apple_health
+   1,595,487, healthsync 50,558, cronometer 45,548, withings 5,422, hevy 7 —
+   `nutracheck`/`nutrachek` has none); `workouts` 486 (apple_health 330, hevy 154,
+   healthsync 2).
+5. Apple Health is **not** dead despite what item 18 says: 1,595,487 metric rows,
    newest 09:48 London on 2026-10-21. Its *workouts* feed is stale (newest
    2026-10-13) — that's item 39.
-5. apple_health **nutrition** is at 0 rows — a boot-time purge (now removed) had
+6. apple_health **nutrition** is at 0 rows — a boot-time purge (now removed) had
    been deleting it. History is unrecoverable; only new Health Auto Export pushes
    repopulate.
-6. Kieron's decision, 2026-10-21 10:25: keep Apple Health nutrition, but never
+7. Kieron's decision, 2026-10-21 10:25: keep Apple Health nutrition, but never
    surface it on a day cronometer (or a future nutrition source) covers.
    Precedence is a **read** concern — do not reintroduce any DELETE.
 
@@ -93,8 +102,9 @@ Self-contained, mostly front-end, verifiable by reading the code:
   with no sync trigger at all.
 - **#13 migrate `metrics.timestamp`, `workouts.timestamp`, `logs.timestamp` to
   `timestamptz`.** Drafting this migration is ideal cloud work: it must convert
-  per-source (fact 1 above), must land before 2027-03-29, and needs the external
-  healthsync writer (#19) pinned to one convention at the same time. Deliver the
+  per-source **and per-table** (fact 1 above — `workouts` is UTC even for
+  healthsync), must land before 2027-03-29, and needs the healthsync writer (#19)
+  pinned to one convention at the same time, which builder does. Deliver the
   migration SQL + the read-path simplifications it enables; builder runs it
   against a backup first.
 
@@ -102,8 +112,10 @@ Self-contained, mostly front-end, verifiable by reading the code:
 
 - **#38** — a leaked `error` listener per backpressured write in `writeChunk`
   (`server.ts:3579`). builder's own bug from the export fix; already in hand.
-- **#19** — the undocumented external `healthsync` writer. Lives outside this
-  repo, on Home Assistant.
+- **#19** — the `healthsync` writer. It is `kb-health`, a container on the deploy
+  host (not Home Assistant, and not in this repo), so builder owns it end to end:
+  pinning it to an explicit offset is one line plus a rebuild, done in the same
+  window as `up.sql`. Treat the cross-system dependency in item 13 as handled.
 - **#18** — needs the DB to settle which of the three disagreeing surfaces is
   right.
 - **#21 BP widget** (15 readings, last real one 2026-09-17) and **#39** — both
