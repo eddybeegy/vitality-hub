@@ -110,7 +110,8 @@ an extract if an item needs it.
 5. builder runs five gates before merging: the diff stays in scope for the named
    item; `npx tsc --noEmit` adds no error beyond the two known pre-existing ones
    (**zero** once PR #22 lands);
-   `npx vitest run` is green (baseline 2026-10-21: 5 files, 60 tests, 1.3 s — pass
+   `npx vitest run` is green (baseline re-measured 2026-10-21 16:21: **16 files, 212 tests, 4.0 s**;
+   the earlier "5 files, 60 tests, 1.3 s" figure is stale — the suite has grown — pass
    no `--reporter=basic`, it was removed in vitest 4); no DELETE of `apple_health`
    nutrition rows is reintroduced; no blanket `AT TIME ZONE` is applied to
    `metrics`/`workouts` (those columns hold a different zone per source — see
