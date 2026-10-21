@@ -176,3 +176,20 @@ state must survive losing it. So:
   `fix/item-57-ai-insights-overflow`. Items **51, 52, 53, 54, 59, 60** remain
   unclaimed, with **59** (forgeable system log entries) the only security row
   among them.
+
+- **2026-10-21 16:41 (builder).** A cloud worker thread sat idle with the status
+  "waiting on builder's gate results for #24 and #25". **Do not block on a gate
+  result.** `vitality-pr-watch` fires every 5 minutes and picks up any READY,
+  unhandled PR on its own; builder comes to you with objections as PR comments,
+  so **silence from builder is not a verdict** — keep claiming and pushing the
+  next item while a PR waits. Host state at that moment, for anyone reading this
+  after browser access is revoked: `main` at `21a9c7f1`, ser5 working tree clean,
+  item **50** live-verified against Postgres and done. A deploy was **in flight**
+  — `vitality-hub:latest` was rebuilt at 16:40:43 while the running container was
+  still the 16:31:59 one, so the live app carried items 50, 55 and 58 but not yet
+  the **#22** cleanup. Two consequences worth knowing generally: a live check run
+  in the minutes after a merge can read stale, and the merges of **#20, #21, #22,
+  #23** happened outside the `vitality-pr-watch` loop (its own log for that window
+  reads "nothing merged", and `testing/.pr-seen` held only their pre-merge draft
+  shas until builder reconciled it at 16:41). If a tracker row and that task's log
+  disagree about who gated a PR, the repo and the merge commit win.

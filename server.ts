@@ -24,6 +24,7 @@ import { probeProvider } from "./ai_providers/openai_compatible";
 import { setupDb } from "./src/lib/db";
 import { parseEnumParam, parseDateParam, parseDayParam, parseIntParam, checkDateOrder } from "./src/lib/queryParams";
 import { buildSettingsUpdate, hasSettingsField } from "./src/lib/settingsUpdate";
+import { validateClientLog, formatLogLine } from "./src/lib/logEntry";
 import { parseLogLevel, parseSourceList, createLogFilter } from "./src/lib/logLevel";
 import { planRefresh, refreshStartMessage, refreshFinishMessage, RefreshModuleResult } from "./src/lib/refreshPlan";
 import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/lib/aggregatedMetrics";
@@ -299,7 +300,8 @@ async function logEvent(level: 'debug' | 'info' | 'warn' | 'error', message: str
   if (!shouldRecordLog(level, source)) return;
   try {
     const timestamp = new Date().toISOString();
-    const logLine = `[${timestamp}] [${source}] ${userId ? `[User ${userId}] ` : ''}${level.toUpperCase()}: ${message}\n`;
+    // Item 59: one entry is always exactly one line -- CR/LF in a message is escaped.
+    const logLine = formatLogLine(timestamp, level, message, source, userId);
     
     // Always write to file
     fs.appendFileSync(getLogFilePath(), logLine);
@@ -4311,7 +4313,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         
         const parsedLogs = [];
         for (const line of lines) {
-          const match = line.match(/\[(.*?)\] \[(.*?)\] (?:\[User (\d+)\] )?(.*?): (.*)/);
+          const match = line.match(/^\[(.*?)\] \[(.*?)\] (?:\[User (\d+)\] )?(.*?): (.*)/);
           if (match) {
             const logUserId = match[3];
             // Only show logs for this user or system logs (no user ID)
@@ -4339,13 +4341,16 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     }
   });
 
-  app.post("/api/logs", requireAuth, (req: any, res) => {
-    const { level, message, source } = req.body;
-    if (!level || !message || !source) {
-      return res.status(400).json({ error: "Missing required fields" });
+  app.post("/api/logs", requireAuth, async (req: any, res) => {
+    // Item 59: strings only, a known level, a plain-identifier source, a bounded message.
+    // Truthiness alone let a newline in `message` plant a forged line in the log file.
+    const parsed = validateClientLog(req.body);
+    if (parsed.error !== undefined) {
+      return res.status(400).json({ error: parsed.error });
     }
+    const { level, message, source } = parsed.entry;
     // Attribute the log to the authenticated user instead of writing a spoofable system (NULL) log.
-    logEvent(level, message, source, req.user.id);
+    await logEvent(level, message, source, req.user.id);
     res.json({ status: "ok" });
   });
 

@@ -500,7 +500,10 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
     <div className="space-y-8">
       {/* Date Scroller */}
       <div className="flex flex-col md:flex-row gap-4 items-start md:items-center">
-        <div className="relative w-full max-w-full">
+        {/* Item 57: min-w-0 + md:flex-1 let this flex item shrink below its content's
+            width. Without them, once the Regeneration Time box sits beside it in the md row,
+            the 30-tile strip's width leaked through and scrolled the whole page sideways. */}
+        <div className="relative w-full max-w-full min-w-0 md:flex-1">
           <div ref={scrollerRef} style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain', scrollSnapType: 'x mandatory' }} className="w-full max-w-full bg-white dark:bg-zinc-900 p-2 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm overflow-x-auto">
             <div className="flex gap-2 flex-nowrap min-w-max px-2">
             {availableDates.map(date => {
@@ -572,7 +575,7 @@ export const AIInsights: React.FC<AIInsightsProps> = ({
         </div>
 
         {batchesForSelectedDate.length > 0 && (
-          <div className="bg-white dark:bg-zinc-900 p-2 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm min-w-[200px]">
+          <div className="bg-white dark:bg-zinc-900 p-2 rounded-2xl border border-black/5 dark:border-white/5 shadow-sm min-w-[200px] shrink-0">
             <div className="px-3 pt-1 pb-2">
               <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5">
                 <Calendar size={10} />

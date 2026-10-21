@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseLogLevel, parseSourceList, createLogFilter, DEFAULT_LOG_LEVEL } from './logLevel';
+import { parseLogLevel, parseSourceList, createLogFilter, normaliseLogLevel, DEFAULT_LOG_LEVEL } from './logLevel';
 
 describe('parseLogLevel', () => {
   it('defaults to info when unset or blank', () => {
@@ -68,5 +68,46 @@ describe('createLogFilter', () => {
     const f = createLogFilter({ level: 'info' });
     expect(f('trace', 'client')).toBe(true);
     expect(createLogFilter({ level: 'warn' })('trace', 'client')).toBe(false);
+  });
+});
+
+// Item 60: the message level used to be compared verbatim, so "DEBUG" and "debug "
+// ranked as an unknown level (= info) and were recorded at the default threshold.
+describe('normaliseLogLevel', () => {
+  it('maps any case/whitespace spelling of a known level to the canonical one', () => {
+    expect(normaliseLogLevel('debug')).toBe('debug');
+    expect(normaliseLogLevel('DEBUG')).toBe('debug');
+    expect(normaliseLogLevel('debug ')).toBe('debug');
+    expect(normaliseLogLevel(' Warn\n')).toBe('warn');
+  });
+
+  it('returns null for anything that is not one of the four levels', () => {
+    expect(normaliseLogLevel('totally-made-up-level')).toBeNull();
+    expect(normaliseLogLevel('')).toBeNull();
+    expect(normaliseLogLevel(123)).toBeNull();
+    expect(normaliseLogLevel(undefined)).toBeNull();
+    expect(normaliseLogLevel({ level: 'debug' })).toBeNull();
+  });
+});
+
+describe('createLogFilter level normalisation (item 60)', () => {
+  it('drops non-canonical spellings of debug at the default level', () => {
+    const f = createLogFilter({ level: 'info' });
+    expect(f('DEBUG', 'api')).toBe(false);
+    expect(f('debug ', 'api')).toBe(false);
+    expect(f(' Debug\t', 'api')).toBe(false);
+  });
+
+  it('ranks non-canonical spellings of the other levels as those levels', () => {
+    const f = createLogFilter({ level: 'warn' });
+    expect(f('INFO', 'api')).toBe(false);
+    expect(f('Warn ', 'api')).toBe(true);
+    expect(f('ERROR', 'api')).toBe(true);
+  });
+
+  it('LOG_DEBUG_SOURCES still applies to a non-canonical debug', () => {
+    const f = createLogFilter({ level: 'info', debugSources: parseSourceList('withings') });
+    expect(f('DEBUG', 'withings')).toBe(true);
+    expect(f('DEBUG', 'hevy')).toBe(false);
   });
 });
