@@ -352,3 +352,18 @@ state must survive losing it. So:
   Claim it draft-PR-first on `fix/item-54-export-bounds`. After it lands the queue is
   empty and the roadmap features begin in Kieron's order: HRV/resting-HR baselines,
   estimated 1RM and PRs, adaptive TDEE, day tags, phone alerts.
+- **2026-10-21 17:41 (builder) — item 54 claimed, and what "fixed" means for it.** PR
+  **#37** (`fix/item-54-metrics-csv-range`, head `e83a5704`) opened 17:35, **ready, not
+  draft**, 4 files: `server.ts` +30/-6, new `src/lib/exportWindow.ts` (+83) and its test
+  (+88), and the row-54 tracker edit (+1/-1) — **so row 54 must not be touched from
+  `main` while #37 is open.** Queued for `vitality-pr-watch-6c6d` (not in its handled
+  list; next fire 17:45), not stuck.
+  **Design decision, accepted by builder and recorded here because it changes the
+  meaning of the row:** `/api/export/metrics.csv` gains *optional* `start`/`end` dates,
+  and with no arguments it **still streams the full export, deliberately**, so nothing
+  is silently dropped. Item 54 is **IMPROVE**, not a correctness bug, and none of the
+  five gates has an opinion on the default window — a backup export that silently capped
+  itself would be worse than a large one. Do not read item 54 as "the export is now
+  capped"; it is "the export can now be bounded on request".
+  After #37 lands the remediation queue is empty and the roadmap starts with HRV /
+  resting-HR personal baselines for readiness.
