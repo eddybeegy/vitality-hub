@@ -27,6 +27,7 @@ import { buildSettingsUpdate, hasSettingsField } from "./src/lib/settingsUpdate"
 import { validateClientLog, formatLogLine, escapeLogFields } from "./src/lib/logEntry";
 import { jsonParseErrorResponse } from "./src/lib/bodyParseError";
 import { parseLogsQuery, zonedDayBounds, resolveTimeZone, logTimestampToIso, toSqliteTimestamp } from "./src/lib/logsQuery";
+import { parseExportWindow, windowConditions, type ExportWindow } from "./src/lib/exportWindow";
 import { parseLogLevel, parseSourceList, createLogFilter } from "./src/lib/logLevel";
 import { planRefresh, refreshStartMessage, refreshFinishMessage, RefreshModuleResult } from "./src/lib/refreshPlan";
 import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/lib/aggregatedMetrics";
@@ -3733,6 +3734,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     userId: number,
     onBatch: (rows: any[]) => Promise<void>,
     batchSize: number = EXPORT_BATCH_ROWS,
+    window: ExportWindow | null = null,
   ): Promise<void> {
     // An export is a backup, so the timestamps in it have to be real instants:
     // `healthsync` rows hold Europe/London wall-clock in a column every reader
@@ -3750,16 +3752,31 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     const tsOut = db.type === 'sqlite' ? 'timestamp' : readingInstant(table);
     const select = ['id', `${tsOut} AS timestamp`, 'timestamp AS __cursor_ts',
       ...columns.filter(c => c !== 'id' && c !== 'timestamp')].join(', ');
+    // Item 54: an optional [start, end) instant window. Filtered on the true instant
+    // (tsOut), plus a day-widened bound on the raw column so the (user_id, timestamp)
+    // index still narrows the scan -- see rawColumnBounds. SQLite stores ISO-Z text
+    // (tsOut is the raw column there), so ISO bounds compare directly.
+    let windowSql = '';
+    let windowParams: string[] = [];
+    if (window) {
+      ({ sql: windowSql, params: windowParams } = windowConditions(
+        window,
+        // In a WHERE clause the converted instant has to be the expression itself (the
+        // `timestamp` output alias is not visible there), table-qualified like the cursor.
+        db.type === 'sqlite' ? `${table}.timestamp` : readingInstant(table, `${table}.timestamp`, `${table}.source`),
+        db.type === 'sqlite' ? null : `${table}.timestamp`,
+      ));
+    }
     let lastTs: any = null;
     let lastId = 0;
     for (;;) {
       const rows = (lastTs === null
         ? await db.prepare(
-            `SELECT ${select} FROM ${table} WHERE user_id = ? ORDER BY ${table}.timestamp ASC, ${table}.id ASC LIMIT ${batchSize}`
-          ).all(userId)
+            `SELECT ${select} FROM ${table} WHERE user_id = ?${windowSql} ORDER BY ${table}.timestamp ASC, ${table}.id ASC LIMIT ${batchSize}`
+          ).all(userId, ...windowParams)
         : await db.prepare(
-            `SELECT ${select} FROM ${table} WHERE user_id = ? AND (${table}.timestamp, ${table}.id) > (?, ?) ORDER BY ${table}.timestamp ASC, ${table}.id ASC LIMIT ${batchSize}`
-          ).all(userId, lastTs, lastId)) as any[];
+            `SELECT ${select} FROM ${table} WHERE user_id = ?${windowSql} AND (${table}.timestamp, ${table}.id) > (?, ?) ORDER BY ${table}.timestamp ASC, ${table}.id ASC LIMIT ${batchSize}`
+          ).all(userId, ...windowParams, lastTs, lastId)) as any[];
       if (!rows.length) return;
       await onBatch(rows);
       const last = rows[rows.length - 1];
@@ -3783,6 +3800,12 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
 
   await app.get("/api/export/metrics.csv", requireAuth, async (req: any, res) => {
     const columns = ['type', 'value', 'unit', 'timestamp', 'source'];
+    // Item 54: optional ?startDate=&endDate= (YYYY-MM-DD, inclusive, user's timezone).
+    // Neither given is the full export, as before: this is the backup button.
+    const user = await db.prepare("SELECT timezone FROM users WHERE id = ?").get(req.user.id) as any;
+    const parsedWindow = parseExportWindow(req.query, resolveTimeZone(user?.timezone));
+    if (parsedWindow.error !== undefined) return res.status(400).json({ error: parsedWindow.error });
+    const window = parsedWindow.window;
     // Cloudflare caches by URL extension, so `.csv` landed in its default
     // static rule: these responses came back `cf-cache-status: HIT` with
     // `Cache-Control: max-age=14400` that the origin never set. A backup
@@ -3792,12 +3815,13 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     // cache-busted. An export is never cacheable: it is a point-in-time dump.
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="${exportFilename('metrics', 'csv')}"`);
+    const rangeLabel = window ? `metrics-${req.query.startDate ?? 'start'}-to-${req.query.endDate ?? 'now'}` : 'metrics';
+    res.setHeader('Content-Disposition', `attachment; filename="${exportFilename(rangeLabel, 'csv')}"`);
     try {
       await writeChunk(res, columns.join(',') + '\n');
       await forEachExportBatch('metrics', columns, req.user.id, async rows => {
         await writeChunk(res, rows.map(r => csvRow(r, columns)).join('\n') + '\n');
-      });
+      }, EXPORT_BATCH_ROWS, window);
       res.end();
     } catch (e) { failMidStream(res, req.user?.id, 'metrics.csv', e); }
   });
