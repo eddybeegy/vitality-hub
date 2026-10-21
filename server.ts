@@ -24,7 +24,7 @@ import { probeProvider } from "./ai_providers/openai_compatible";
 import { setupDb } from "./src/lib/db";
 import { parseEnumParam, parseDateParam, parseDayParam, parseIntParam, checkDateOrder } from "./src/lib/queryParams";
 import { buildSettingsUpdate, hasSettingsField } from "./src/lib/settingsUpdate";
-import { validateClientLog, formatLogLine } from "./src/lib/logEntry";
+import { validateClientLog, formatLogLine, escapeLogFields } from "./src/lib/logEntry";
 import { jsonParseErrorResponse } from "./src/lib/bodyParseError";
 import { parseLogLevel, parseSourceList, createLogFilter } from "./src/lib/logLevel";
 import { planRefresh, refreshStartMessage, refreshFinishMessage, RefreshModuleResult } from "./src/lib/refreshPlan";
@@ -308,7 +308,9 @@ async function logEvent(level: 'debug' | 'info' | 'warn' | 'error', message: str
     fs.appendFileSync(getLogFilePath(), logLine);
 
     // Write to DB
-    await db.prepare("INSERT INTO logs (user_id, level, message, source) VALUES (?, ?, ?, ?)").run(userId || null, level, message, source);
+    // Item 64: the row stores the same escaped text as the file line, not the raw message.
+    const row = escapeLogFields(message, source);
+    await db.prepare("INSERT INTO logs (user_id, level, message, source) VALUES (?, ?, ?, ?)").run(userId || null, level, row.message, row.source);
   } catch (e) {
     console.error("Failed to write log:", e);
   }

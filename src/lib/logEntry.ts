@@ -9,8 +9,9 @@
 // user. Two layers here:
 //
 //   - validateClientLog: what the route accepts from a client at all.
-//   - formatLogLine: how any entry (client or server-side) becomes one file line, with
-//     CR/LF and other control characters escaped so a line is always exactly one entry.
+//   - formatLogLine / escapeLogFields: how any entry (client or server-side) is stored,
+//     with CR/LF and other control characters escaped so an entry is always exactly one
+//     line -- in the file and, since item 64, in the `logs` table too.
 //
 // Pure functions, no fs or Express, so they are unit-tested directly.
 
@@ -68,6 +69,16 @@ const escapeControl = (s: string): string =>
   });
 
 /**
+ * The message and source exactly as every log sink stores them (item 64): the file line
+ * and the `logs` table row hold the same single-line text, so neither a whitespace-pre
+ * render nor a raw export of either can turn one entry back into two.
+ */
+export function escapeLogFields(message: unknown, source: unknown): { message: string; source: string } {
+  const msg = typeof message === 'string' ? message : JSON.stringify(message) ?? String(message);
+  return { message: escapeControl(msg), source: escapeControl(String(source ?? '')) };
+}
+
+/**
  * One line of the system log file, newline-terminated. Whatever `message` and `source`
  * contain, the result holds exactly one '\n', at the end.
  */
@@ -78,7 +89,6 @@ export function formatLogLine(
   source: unknown,
   userId?: number | null,
 ): string {
-  const msg = typeof message === 'string' ? message : JSON.stringify(message) ?? String(message);
-  const src = escapeControl(String(source ?? ''));
-  return `[${timestamp}] [${src}] ${userId ? `[User ${userId}] ` : ''}${escapeControl(String(level).toUpperCase())}: ${escapeControl(msg)}\n`;
+  const f = escapeLogFields(message, source);
+  return `[${timestamp}] [${f.source}] ${userId ? `[User ${userId}] ` : ''}${escapeControl(String(level).toUpperCase())}: ${f.message}\n`;
 }
