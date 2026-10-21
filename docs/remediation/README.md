@@ -447,3 +447,25 @@ state must survive losing it. So:
   DB access note for the next session: it is `docker exec postgres psql -U vitality -d health`,
   there is no `settings` table (metric priorities live in `users.metric_priorities`), and
   `metrics` has no `date` column — use `timestamp::date`.
+
+- **2026-10-21 18:08 (builder) — CORRECTION to the 18:04 entry above (`b95ce558`).** **"Item 67
+  changes no displayed blood-pressure value" is wrong. Two displayed readings change.** The
+  cloud session caught it on #41 and it was right; the host check below is builder's own and
+  confirms its figures exactly:
+  - **2025-12-08: 117/73 → 125/74.** apple_health has one reading (117/73, stamped 00:00:00);
+    withings has two (133/75 at 13:51:09 and 117/73 at 19:51:56), mean **125/74**.
+  - **2026-05-10: 103/69 → 103/68.** apple_health 102.5/69, withings 103/68 — today's display
+    is itself split-source (withings systolic, apple_health diastolic), so only the diastolic
+    moves.
+  **Where the 18:04 entry went wrong:** it tested only *healthsync* contention and then
+  generalised from it. Item 67 makes the `blood_pressure` priority key live, and that key
+  orders **withings above apple_health** — a second mechanism, independent of healthsync, on
+  days where both of those sources have readings. The healthsync half of the 18:04 entry still
+  stands: one contested day (2026-09-17), all sources identical 99/65, label-only change. On
+  the other six overlap days (2025-12-09, 12-15, 2026-03-09, 03-23, 03-31, 04-09) apple_health
+  carries only the diastolic and its value equals withings', so nothing visible changes there.
+  **So: item 67 changes the source label on 2026-09-17 and the displayed numbers on exactly two
+  days, 2025-12-08 and 2026-05-10.** That is the sentence to carry forward. The `125/74` is a
+  mean of two real readings that was never itself measured — that is **row 69**, logged by a
+  sibling builder session, and it needs Kieron's call (daily average, latest reading, or every
+  reading). Item 67 does not depend on that answer.
