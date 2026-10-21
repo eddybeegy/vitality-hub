@@ -241,6 +241,39 @@ export default function App() {
     return target && isTargetSet(target.value) ? Number(target.value) : undefined;
   };
 
+  // Shared by every "last synced" badge: HH:MM if the timestamp falls on today in the
+  // user's timezone, otherwise the full date.
+  const formatSyncTimestamp = useCallback((timestamp: string | null | undefined) => {
+    if (!timestamp) return null;
+    const date = parseUTCDate(timestamp);
+    if (isNaN(date.getTime())) return null;
+
+    const tz = settings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    
+    // Check if it's "today" in the TARGET timezone
+    const now = new Date();
+    const dayFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
+    const targetDateStr = dayFormatter.format(date);
+    const todayTargetStr = dayFormatter.format(now);
+    
+    const isToday = targetDateStr === todayTargetStr;
+    
+    if (isToday) {
+      try {
+        return new Intl.DateTimeFormat('en-GB', {
+          timeZone: tz,
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        }).format(date);
+      } catch (e) {
+        return formatDateWithTimezone(timestamp, tz);
+      }
+    }
+    
+    return formatDateWithTimezone(timestamp, tz);
+  }, [settings?.timezone]);
+
   // Callers pass metrics `source` values, not module ids. `healthsync` must be listed
   // alongside `apple_health` wherever Apple Health data is meant: it is HealthSync's
   // HASS-routed copy of the same data, it has no module of its own, and it is routinely
@@ -289,36 +322,15 @@ export default function App() {
       }
     }
 
-    if (!maxTimestamp) return null;
-    
-    const date = parseUTCDate(maxTimestamp);
-    if (isNaN(date.getTime())) return null;
+    return formatSyncTimestamp(maxTimestamp);
+  }, [summaryData.metrics, summaryData.workouts, summaryData.dataFreshness, formatSyncTimestamp]);
 
-    const tz = settings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-    
-    // Check if it's "today" in the TARGET timezone
-    const now = new Date();
-    const dayFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
-    const targetDateStr = dayFormatter.format(date);
-    const todayTargetStr = dayFormatter.format(now);
-    
-    const isToday = targetDateStr === todayTargetStr;
-    
-    if (isToday) {
-      try {
-        return new Intl.DateTimeFormat('en-GB', {
-          timeZone: tz,
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: false
-        }).format(date);
-      } catch (e) {
-        return formatDateWithTimezone(maxTimestamp, tz);
-      }
-    }
-    
-    return formatDateWithTimezone(maxTimestamp, tz);
-  }, [summaryData.metrics, summaryData.workouts, summaryData.dataFreshness, settings?.timezone]);
+  // Newest reading for one MODULE, from the server's dataFreshness.byModule (which already
+  // folds e.g. healthsync into apple_health). Per-card badges use this so a Withings card
+  // shows Withings' own time, not the newest reading across every Activity source.
+  const getModuleLastSynced = useCallback((moduleId: string) => {
+    return formatSyncTimestamp(summaryData?.dataFreshness?.byModule?.[moduleId]?.lastReading);
+  }, [summaryData.dataFreshness, formatSyncTimestamp]);
 
   if (isAuthChecking) {
     return (
@@ -578,6 +590,7 @@ export default function App() {
                   getChartData={getChartData}
                   summaryData={summaryData}
                   lastSynced={getLatestMetricTime(['apple_health', 'healthsync', 'withings'])}
+                  getModuleLastSynced={getModuleLastSynced}
                   syncAllModules={syncAllModules}
                   isSyncing={isSyncing}
                   getTargetValue={getTargetValue}

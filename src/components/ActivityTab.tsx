@@ -12,6 +12,7 @@ interface ActivityTabProps {
   getChartData: (type: string, dataKey: string) => any[];
   summaryData: any;
   lastSynced: string | null;
+  getModuleLastSynced: (moduleId: string) => string | null;
   syncAllModules: () => Promise<void>;
   isSyncing: boolean;
   getTargetValue: (type: string) => number | undefined;
@@ -22,10 +23,18 @@ export const ActivityTab = React.memo(({
   getChartData,
   summaryData,
   lastSynced,
+  getModuleLastSynced,
   syncAllModules,
   isSyncing,
   getTargetValue
 }: ActivityTabProps) => {
+  // Each card is labelled with one source, so it shows that source's own newest reading.
+  // These used to all print the tab-wide `lastSynced` (newest across Apple Health,
+  // healthsync and Withings), so "Withings: 08:48" could appear when Withings' real
+  // newest reading was 04:21.
+  const appleHealthSynced = getModuleLastSynced('apple_health');
+  const withingsSynced = getModuleLastSynced('withings');
+
   return (
     <motion.div 
       key="activity"
@@ -71,7 +80,7 @@ export const ActivityTab = React.memo(({
             { value: 9, label: 'Max', color: '#ef4444' }
           ]}
           sourceName="Apple Health"
-          lastSyncStr={lastSynced}
+          lastSyncStr={appleHealthSynced}
         />
         <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
           data={getChartData('resting_heart_rate', 'bpm')} 
@@ -87,7 +96,7 @@ export const ActivityTab = React.memo(({
             ...(getTargetValue('resting_heart_rate') ? [{ value: getTargetValue('resting_heart_rate'), label: 'Target', color: '#10b981' }] : [])
           ]}
           sourceName="Apple Health"
-          lastSyncStr={lastSynced}
+          lastSyncStr={appleHealthSynced}
         />
         <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any}
           data={getChartData('hrv', 'ms')}
@@ -98,7 +107,7 @@ export const ActivityTab = React.memo(({
           unit=" ms"
           preferredUnits={settings?.preferred_units}
           sourceName="Apple Health"
-          lastSyncStr={lastSynced}
+          lastSyncStr={appleHealthSynced}
         />
         <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
           data={getChartData('active_energy', 'energy')} 
@@ -110,7 +119,7 @@ export const ActivityTab = React.memo(({
           aggregation="sum"
           preferredUnits={settings?.preferred_units}
           sourceName="Apple Health"
-          lastSyncStr={lastSynced}
+          lastSyncStr={appleHealthSynced}
         />
         <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
           url="/api/metrics/aggregated?type=vo2max" 
@@ -123,7 +132,7 @@ export const ActivityTab = React.memo(({
           preferredUnits={settings?.preferred_units}
           referenceLines={getTargetValue('vo2_max') ? [{ value: getTargetValue('vo2_max'), label: 'Target', color: '#ef4444' }] : undefined}
           sourceName="Apple Health"
-          lastSyncStr={lastSynced}
+          lastSyncStr={appleHealthSynced}
         />
         <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
           data={getBloodPressureData(summaryData.metrics)} 
@@ -141,7 +150,7 @@ export const ActivityTab = React.memo(({
             { value: 80, label: 'Dia High', color: '#ef4444' }
           ]}
           sourceName="Apple Health"
-          lastSyncStr={lastSynced}
+          lastSyncStr={appleHealthSynced}
         />
         <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
           url="/api/metrics/aggregated?type=lean_body_mass" 
@@ -152,7 +161,7 @@ export const ActivityTab = React.memo(({
           unit={` ${getWeightUnit(settings?.preferred_units)}`}
           preferredUnits={settings?.preferred_units}
           sourceName="Withings"
-          lastSyncStr={lastSynced}
+          lastSyncStr={withingsSynced}
         />
       </div>
 
@@ -170,7 +179,7 @@ export const ActivityTab = React.memo(({
             aggregation="sum"
             preferredUnits={settings?.preferred_units}
             sourceName="Apple Health"
-            lastSyncStr={lastSynced}
+            lastSyncStr={appleHealthSynced}
           />
           <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
             data={getChartData('sleep_deep', 'seconds').map(d => ({ ...d, hours: d.seconds / 3600 }))} 
@@ -183,7 +192,7 @@ export const ActivityTab = React.memo(({
             aggregation="sum"
             preferredUnits={settings?.preferred_units}
             sourceName="Apple Health"
-            lastSyncStr={lastSynced}
+            lastSyncStr={appleHealthSynced}
           />
           <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
             data={getChartData('sleep_rem', 'seconds').map(d => ({ ...d, hours: d.seconds / 3600 }))} 
@@ -196,7 +205,7 @@ export const ActivityTab = React.memo(({
             aggregation="sum"
             preferredUnits={settings?.preferred_units}
             sourceName="Apple Health"
-            lastSyncStr={lastSynced}
+            lastSyncStr={appleHealthSynced}
           />
           <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
             data={getChartData('sleep_awake', 'seconds').map(d => ({ ...d, hours: d.seconds / 3600 }))} 
@@ -209,7 +218,7 @@ export const ActivityTab = React.memo(({
             aggregation="sum"
             preferredUnits={settings?.preferred_units}
             sourceName="Apple Health"
-            lastSyncStr={lastSynced}
+            lastSyncStr={appleHealthSynced}
           />
           <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
             url="/api/metrics/aggregated?type=steps" 
@@ -223,7 +232,7 @@ export const ActivityTab = React.memo(({
             preferredUnits={settings?.preferred_units}
             referenceLines={getTargetValue('steps') ? [{ value: getTargetValue('steps'), label: 'Target', color: '#ef4444' }] : undefined}
             sourceName="Apple Health"
-            lastSyncStr={lastSynced}
+            lastSyncStr={appleHealthSynced}
           />
           <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
             url="/api/metrics/aggregated?type=walking_heart_rate" 
@@ -235,7 +244,7 @@ export const ActivityTab = React.memo(({
             variant="mini"
             preferredUnits={settings?.preferred_units}
             sourceName="Apple Health"
-            lastSyncStr={lastSynced}
+            lastSyncStr={appleHealthSynced}
           />
           <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
             url="/api/metrics/aggregated?type=oxygen_saturation" 
@@ -247,7 +256,7 @@ export const ActivityTab = React.memo(({
             variant="mini"
             preferredUnits={settings?.preferred_units}
             sourceName="Apple Health"
-            lastSyncStr={lastSynced}
+            lastSyncStr={appleHealthSynced}
             referenceLines={getTargetValue('blood_oxygen_saturation') ? [{ value: getTargetValue('blood_oxygen_saturation'), label: 'Target', color: '#ef4444' }] : undefined}
           />
           <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
@@ -260,7 +269,7 @@ export const ActivityTab = React.memo(({
             variant="mini"
             preferredUnits={settings?.preferred_units}
             sourceName="Apple Health"
-            lastSyncStr={lastSynced}
+            lastSyncStr={appleHealthSynced}
           />
           <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
             url="/api/metrics/aggregated?type=pulse_wave_velocity" 
@@ -272,7 +281,7 @@ export const ActivityTab = React.memo(({
             variant="mini"
             preferredUnits={settings?.preferred_units}
             sourceName="Withings"
-            lastSyncStr={lastSynced}
+            lastSyncStr={withingsSynced}
           />
           <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
             url="/api/metrics/aggregated?type=visceral_fat" 
@@ -284,7 +293,7 @@ export const ActivityTab = React.memo(({
             variant="mini"
             preferredUnits={settings?.preferred_units}
             sourceName="Withings"
-            lastSyncStr={lastSynced}
+            lastSyncStr={withingsSynced}
             referenceLines={getTargetValue('visceral_fat') ? [{ value: getTargetValue('visceral_fat'), label: 'Target', color: '#ef4444' }] : undefined}
           />
           <HealthChart timezone={settings?.timezone} defaultPeriod={settings?.default_graph_range as any} defaultGranularity={settings?.default_graph_grouping as any} 
@@ -297,7 +306,7 @@ export const ActivityTab = React.memo(({
             variant="mini"
             preferredUnits={settings?.preferred_units}
             sourceName="Withings"
-            lastSyncStr={lastSynced}
+            lastSyncStr={withingsSynced}
             referenceLines={getTargetValue('metabolic_age') ? [{ value: getTargetValue('metabolic_age'), label: 'Target', color: '#ef4444' }] : undefined}
           />
         </div>
