@@ -1439,7 +1439,7 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                       </div>
                     )}
                     {widgetId === 'body_diagram' && (
-                      <BodyDiagramWidget workouts={summaryData.workouts} recoveryDays={settings?.readiness_recovery_days ?? 7} />
+                      <BodyDiagramWidget workouts={summaryData.workouts} recoveryDays={settings?.readiness_recovery_days ?? 3} />
                     )}
                     {widgetId === 'sleep_stages' && (
                       <div className="h-full">

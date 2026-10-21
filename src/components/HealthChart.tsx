@@ -7,6 +7,7 @@ import { ChartSkeleton } from './ui/Skeleton';
 import { SyncStatus } from './SyncStatus';
 import { cn, parseUTCDate } from '../lib/utils';
 import { useHealthStore } from '../store/useHealthStore';
+import { readChartRows, asRows } from '../lib/chartRows';
 
 interface ReferenceLineProps {
   value: number;
@@ -49,6 +50,9 @@ export const HealthChart = ({
   const [period, setPeriod] = useState<Period>(defaultPeriod || (variant === 'mini' ? '7d' : '90d'));
   const [fetchedData, setFetchedData] = useState<any[]>([]);
   const [internalLoading, setInternalLoading] = useState(false);
+  // Item 58: set when the url fetch failed, so the chart says so instead of "No data".
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const loading = externalLoading || internalLoading;
 
   // Sync with default props only once when they first become available
@@ -76,6 +80,7 @@ export const HealthChart = ({
       const fetchData = async () => {
         if (!isFocusRefresh) {
           setFetchedData([]); // Clear old data to show loading state and avoid stale data
+          setFetchError(null);
           setInternalLoading(true);
         }
         try {
@@ -98,10 +103,19 @@ export const HealthChart = ({
           // values this component needs to do stage two itself. The day->week/month
           // collapse now happens in `processedData` below. See sweep item 9.
           const response = await fetch(`${url}&granularity=day&aggregation=${aggregation}&startDate=${startDate.toISOString()}`);
-          const result = await response.json();
-          setFetchedData(result);
+          const result = await readChartRows(response);
+          if (result.error === null) {
+            setFetchedData(result.rows);
+            setFetchError(null);
+          } else {
+            console.error(`Failed to fetch aggregated data from ${url}: ${result.error}`);
+            // A silent focus refresh that fails (e.g. a 502 mid-deploy) keeps the rows
+            // already on screen rather than replacing them with an error.
+            if (!isFocusRefresh) setFetchError(result.error);
+          }
         } catch (error) {
           console.error("Failed to fetch aggregated data:", error);
+          if (!isFocusRefresh) setFetchError('network error');
         } finally {
           setInternalLoading(false);
         }
@@ -111,14 +125,14 @@ export const HealthChart = ({
     // `granularity` is deliberately NOT a dependency any more: the request is always
     // day-granularity, so toggling DAY/WEEK/MONTH re-buckets the data we already have
     // instead of refetching identical rows.
-  }, [url, aggregation, period, focusRefreshNonce]);
+  }, [url, aggregation, period, focusRefreshNonce, retryNonce]);
 
   const isMini = variant === 'mini';
   const isWeightBased = dataKey === 'weight' || dataKey === 'muscle_mass' || dataKey === 'bone_mass' || dataKey === 'lean_body_mass' || dataKey === 'fat_mass';
 
   const processedData = useMemo(() => {
-    let chartData = url ? fetchedData : data;
-    if (!chartData || chartData.length === 0) return [];
+    let chartData = asRows(url ? fetchedData : data);
+    if (chartData.length === 0) return [];
     
     const weightKeys = ['weight', 'muscle_mass', 'bone_mass', 'lean_body_mass', 'fat_mass'];
     const distanceKeys = ['distance', 'walking_running_distance'];
@@ -370,8 +384,8 @@ export const HealthChart = ({
 
     // Fallback to raw data ONLY if latest is still null (rarely happens if processedData exists)
     if (stats.latest === null) {
-      const rawData = url ? fetchedData : data;
-      if (rawData && rawData.length > 0) {
+      const rawData = asRows(url ? fetchedData : data);
+      if (rawData.length > 0) {
         const sortedRaw = [...rawData].sort((a, b) => new Date(a.date || a.timestamp).getTime() - new Date(b.date || b.timestamp).getTime());
         const lastRaw = sortedRaw[sortedRaw.length - 1];
         
@@ -526,7 +540,18 @@ export const HealthChart = ({
         )}
       </div>
       <div className={cn("flex-1 w-full relative", isMini ? "h-[120px] min-h-[120px]" : "h-[240px] min-h-[240px]")}>
-        {processedData.length === 0 && !loading && !internalLoading && (
+        {url && fetchError && !loading && !internalLoading && (
+          <div role="alert" className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-zinc-50/50 dark:bg-zinc-800/50 rounded-xl z-10">
+            <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Couldn't load this chart</p>
+            <button
+              onClick={() => { lastFetchKey.current = null; setRetryNonce(n => n + 1); }}
+              className="px-3 py-1 text-xs font-medium rounded-lg bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:opacity-80 transition-opacity"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        {processedData.length === 0 && !fetchError && !loading && !internalLoading && (
           <div className="absolute inset-0 flex items-center justify-center bg-zinc-50/50 dark:bg-zinc-800/50 rounded-xl z-10">
             <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">No data available for this period</p>
           </div>

@@ -1,21 +1,32 @@
-# API Documentation
+# API overview
 
-The application exposes a RESTful API for frontend-backend communication.
+All routes are under `/api` and need the `auth_token` cookie unless noted. The full
+reference is [api-openapi.md](api-openapi.md) and the OpenAPI 3 contract in
+[openapi.yaml](openapi.yaml).
 
-## Authentication
-- `POST /api/auth/login`: Authenticates the user and sets a JWT cookie.
-- `POST /api/auth/logout`: Clears the authentication cookie.
-- `GET /api/auth/me`: Returns the current authenticated user's profile.
+## Auth
+- `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout` (no auth)
+- `GET /api/auth/me`
 
-## Settings
-- `GET /api/settings`: Retrieves user settings.
-- `POST /api/settings`: Updates user settings, including AI configuration.
+## Settings and modules
+- `GET /api/settings`, `POST /api/settings`
+- `GET /api/modules`, `POST /api/modules/:moduleId/settings`,
+  `POST /api/modules/:moduleId/toggle`, `POST /api/sync/:moduleId`,
+  `GET /api/sync/status`, `POST /api/data/refresh`
 
-## Health Data
-- `GET /api/metrics/aggregated`: Retrieves aggregated health metrics (e.g., weight, body fat).
-- `GET /api/ai/data`: Retrieves comprehensive health data for AI insights.
+## Health data
+- `GET /api/data/summary`, `GET /api/metrics/aggregated`, workouts, nutrition and targets
+- Exports: `GET /api/export/metrics.csv`, `GET /api/export/workouts.csv`,
+  `GET /api/export/all.json`
+- Health Auto Export: `GET /api/export-token`, `POST /health-export` (token auth)
 
-## AI Insights
-- `GET /api/ai-insights`: Retrieves historical AI insights.
-- `POST /api/ai-insights`: Saves new AI-generated insights.
-- `POST /api/chat-history`: Saves chat messages.
+## AI
+- `GET /api/ai/data`, `GET|POST /api/ai/insights`, `GET /api/ai/insights/freshness`
+- `POST /api/ai/regenerate`, `POST /api/ai/chat`
+
+## Admin (`role = admin`)
+- `GET /api/admin/users`, `POST /api/admin/users/:id/{approve,reject,purge,toggle-debug}`
+- `GET|POST /api/admin/config`
+
+## Logs
+- `GET /api/logs`

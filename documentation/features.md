@@ -1,13 +1,15 @@
 # Features
 
 ## Health Tracking
-- **Data Syncing**: Integrates with Cronometer, Hevy, Withings, and Apple Health.
+- **Data Syncing**: Apple Health and Apple Workouts (via Health Auto Export), Withings,
+  Hevy, Cronometer, Strava, MyFitnessPal and Nutracheck.
 - **Metrics Visualization**: Interactive charts for weight, body fat, muscle mass, sleep, heart rate, and more using Recharts.
 - **Nutrition Monitoring**: Tracks daily protein, calorie, and other nutrient intake.
 - **Timezone Handling**: Robust parsing and aggregation of health data using user-defined timezones.
 
 ## AI Insights
-- **Daily Briefings**: AI-generated nutrition and workout insights.
+- **Daily Briefings**: AI-generated nutrition and workout insights, produced by the coach
+  agent, with a banner when they go stale.
 - **Personalized AI**: Users can select an AI Persona (e.g., "Strict Analyst") and AI Focus (e.g., "Body Recomposition").
 - **Chat Assistant**: Interactive chat with the AI assistant, context-aware of the user's health data and history.
 

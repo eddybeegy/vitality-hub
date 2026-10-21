@@ -1,16 +1,12 @@
+/// <reference types="vitest/config" />
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig, loadEnv} from 'vite';
-import type { UserConfig } from 'vitest/config';
+import {defineConfig} from 'vite';
 
-export default defineConfig(({mode}) => {
-  const env = loadEnv(mode, '.', '');
+export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(process.env.GEMINI_API_KEY || env.GEMINI_API_KEY),
-    },
     resolve: {
       alias: {
         '@': path.resolve(process.cwd(), '.'),
@@ -21,8 +17,7 @@ export default defineConfig(({mode}) => {
       include: ['**/*.test.ts'],
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
+      // HMR stays off -- an AI Studio leftover, where agent edits made the page flicker.
       hmr: false,
       watch: {
         ignored: ['**/health.db*'],

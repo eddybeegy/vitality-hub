@@ -1,30 +1,39 @@
 # Architecture
 
-The application follows a full-stack architecture using a Node.js/Express backend and a React/Vite frontend.
+## Frontend (`src/`)
+- **Framework**: React 19 with Vite 6. Heavy screens (admin, logs, debug, analytics) are
+  lazy-loaded; `src/lib/chunkReload.ts` reloads once if a lazy chunk is missing after a
+  deploy.
+- **State**: Zustand stores in `src/store/` (`useAuthStore`, `useSettingsStore`,
+  `useHealthStore`, `useAIStore`, `useUIStore`).
+- **Styling**: Tailwind CSS 4.
+- **Charts**: Recharts. **Animation**: `motion`. **Body diagram**: three.js loading
+  `public/body-diagram.glb`.
+- **Pure logic** lives in `src/lib/` (date ranges, aggregation, freshness, targets,
+  refresh planning, query-param validation) and is unit-tested there.
+- **PWA**: `public/manifest.json` and a minimal service worker `public/sw.js`.
 
-## Frontend
-- **Framework**: React 18+ with Vite.
-- **State Management**: Zustand for managing application state (settings, health data, AI insights).
-- **Styling**: Tailwind CSS.
-- **Visualization**: Recharts for health charts.
-- **Animations**: Framer Motion.
+## Backend (`server.ts`)
+- **Framework**: Express 4, a single file. In development it mounts Vite as middleware;
+  in production it is bundled by esbuild to `dist/server.cjs` and serves `dist/`.
+- **Database**: `src/lib/db.ts` wraps SQLite (`better-sqlite3`), Postgres (`pg`) and
+  MariaDB/MySQL (`mysql2`) behind one `prepare().get/all/run` interface. Tables are
+  created and columns added on boot. See [database.md](database.md).
+- **Data-source modules** (`modules/`): each exports a `DataSourceModule`. Withings, Hevy
+  and Cronometer pull from upstream APIs and are what Refresh Data runs
+  (`src/lib/refreshPlan.ts`); Strava syncs from its own module settings; Apple Health and
+  Apple Workouts are push-only via `POST /health-export`; MyFitnessPal and Nutracheck take
+  uploaded export files.
+- **Background work**: `src/lib/taskQueue.ts` is an in-memory FIFO (`syncQueue`). Sync and
+  Refresh Data requests enqueue work and return `202` immediately.
+- **Caching**: `node-cache` with a 5-minute TTL for aggregated metrics and summaries,
+  cleared per user on writes.
+- **AI** (`ai_providers/`): see [ai_integration.md](ai_integration.md).
+- **Logging**: daily files under `logs/` plus the `logs` table, filtered by `LOG_LEVEL`
+  and `LOG_DEBUG_SOURCES`.
 
-## Backend
-- **Framework**: Express.js.
-- **Database**: SQLite (via `better-sqlite3`) for storing user data, meal items, metrics, and chat history.
-- **API**: RESTful API endpoints for data fetching, settings management, and AI interaction.
-
-## Database Schema
-- **users**: Stores user profile, settings, AI configuration, and authentication info.
-- **meal_items**: Stores nutritional data synced from modules.
-- **metrics**: Stores health metrics (weight, sleep, etc.).
-- **ai_insights**: Stores AI-generated nutrition and workout insights.
-- **chat_history**: Stores chat conversations with the AI assistant.
-
-## Caching Layer
-- The application implements an in-memory caching layer using `node-cache` to store frequently accessed data, such as aggregated health metrics and summary data. This reduces database load and improves dashboard responsiveness.
-- Caching is configured with a Time-To-Live (TTL) of 5 minutes.
-
-## Background Job Processing
-- The application uses an in-memory task queue to handle heavy data synchronization tasks.
-- This ensures that API requests for data synchronization return immediately (202 Accepted), keeping the UI responsive while tasks are processed asynchronously in the background.
+## Tooling
+- `src/lib/migrateDb.ts` copies all tables between two engines (`SOURCE_DATABASE_TYPE` →
+  `DEST_DATABASE_TYPE`). Run it with `npx tsx src/lib/migrateDb.ts`.
+- `migrations/` holds one-off, hand-run SQL migrations, each with a README, preflight and
+  self-test.

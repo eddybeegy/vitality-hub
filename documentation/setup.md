@@ -1,18 +1,21 @@
-# Setup & Installation
+# Setup
 
 ## Prerequisites
-- Node.js (v18+)
-- npm (v10+)
+- Node.js 20+ (the Docker image uses Node 20) and npm
+- Go 1.24+ if you want Cronometer sync outside Docker
 
-## Installation
-1. Clone the repository.
-2. Install dependencies: `npm install`.
-3. Set up environment variables: Create a `.env` file based on `.env.example`.
-4. Start the development server: `npm run dev`.
+## Steps
+1. `npm install`
+2. `cp .env.example .env` and set `JWT_SECRET` (required; the server will not start
+   without it) and `ADMIN_PASSWORD` for the first admin login.
+3. Optional: build the Cronometer wrapper —
+   `cd go-wrapper && go build -o gocronometer-wrapper main.go`.
+4. `npm run dev`, then open http://localhost:3000.
 
-## Environment Variables
-- `JWT_SECRET`: Used for signing authentication tokens.
-- `WITHINGS_CLIENT_ID`, `WITHINGS_CLIENT_SECRET`: Used for Withings OAuth integration.
-- `HEVY_API_KEY`: Used for Hevy integration.
-- `GEMINI_API_KEY`: Used for AI functionalities.
-- `NODE_ENV`: Used to determine production vs. development environment.
+## Checks
+- `npm test` — Vitest unit tests.
+- `npm run lint` — TypeScript type check.
+- `npm run lint:eslint` — ESLint.
+
+## Environment variables
+All variables, with defaults and notes, are listed in `.env.example`.

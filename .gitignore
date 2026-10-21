@@ -15,6 +15,9 @@ gha-creds-*.json
 backups/
 .claude/
 
-# deploy-convention timestamped backups (see CLAUDE.md deploy notes)
+# timestamped backups from the host deploy convention (e.g. server.ts.bak-20261021)
 *.bak-*
 *.bak
+
+# built from go-wrapper/main.go (Dockerfile stage 1, or `go build` locally)
+go-wrapper/gocronometer-wrapper
