@@ -9,10 +9,13 @@
 //
 // Pure functions, no Express types, so they are unit-tested directly.
 
-export type ParamResult<T> = { ok: true; value: T } | { ok: false; error: string };
+// `error` set means reject with a 400. (Keyed on `error` rather than an `ok: boolean`
+// discriminant because the project compiles without strictNullChecks, where a boolean
+// discriminant does not narrow.)
+export type ParamResult<T> = { value: T; error?: undefined } | { value?: undefined; error: string };
 
-const ok = <T>(value: T): ParamResult<T> => ({ ok: true, value });
-const fail = <T = never>(error: string): ParamResult<T> => ({ ok: false, error });
+const ok = <T>(value: T): ParamResult<T> => ({ value });
+const fail = (error: string): { error: string } => ({ error });
 
 // Express/qs hands back an array for `?x=a&x=b` and an object for `?x[k]=v`. Neither
 // is a valid value for any parameter these routes take, so both are rejected rather
@@ -35,7 +38,7 @@ export function parseEnumParam<T extends string>(
   fallback?: T,
 ): ParamResult<T> {
   const s = single(name, raw);
-  if (!s.ok) return s;
+  if (s.error !== undefined) return fail(s.error);
   if (s.value === undefined) {
     return fallback !== undefined ? ok(fallback) : fail(`Missing ${name}`);
   }
@@ -64,7 +67,7 @@ function isCalendarDay(y: number, m: number, d: number): boolean {
  */
 export function parseDateParam(name: string, raw: unknown): ParamResult<Date | null> {
   const s = single(name, raw);
-  if (!s.ok) return s;
+  if (s.error !== undefined) return fail(s.error);
   if (s.value === undefined) return ok(null);
   const m = ISO_DATE_RE.exec(s.value);
   if (!m) return fail(`Invalid ${name} '${s.value}': expected YYYY-MM-DD or an ISO 8601 date-time`);
@@ -85,7 +88,7 @@ export function parseDateParam(name: string, raw: unknown): ParamResult<Date | n
  */
 export function parseDayParam(name: string, raw: unknown): ParamResult<string | null> {
   const s = single(name, raw);
-  if (!s.ok) return s;
+  if (s.error !== undefined) return fail(s.error);
   if (s.value === undefined) return ok(null);
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.value);
   if (!m || !isCalendarDay(Number(m[1]), Number(m[2]), Number(m[3]))) {
@@ -104,7 +107,7 @@ export function parseIntParam(
   { min, max, fallback }: { min: number; max: number; fallback: number },
 ): ParamResult<number> {
   const s = single(name, raw);
-  if (!s.ok) return s;
+  if (s.error !== undefined) return fail(s.error);
   if (s.value === undefined) return ok(fallback);
   if (!/^\d+$/.test(s.value)) return fail(`Invalid ${name} '${s.value}': expected a whole number`);
   const n = Number(s.value);
