@@ -44,7 +44,19 @@ an extract if an item needs it.
    queue working, not a stall.
 3. **Only builder edits `progress.md`**, so PRs never conflict in the tracker.
    Put your status in the PR body instead; builder records the result and the
-   merge sha when it lands.
+   merge sha when it lands. That still stands — a cloud thread editing the
+   tracker inside a feature PR would collide with every other open PR and with
+   builder's own mirror. What changed on 2026-10-21 13:25 is **who is late**: the
+   same-session recording duty is builder's, not yours. Any builder session that
+   decides something, lands something, or is told something by Kieron writes it
+   into this file in that same session — the tracker ran two reports stale that
+   afternoon and Kieron was told four items were still waiting on him an hour
+   after he had answered them.
+   When you do write it, patch the single row against the blob of the current
+   `main`, never mirror the whole file from the shared `/opt/build/vitality-hub`
+   clone: `b888314` did that from a stale copy and reverted items 14/33/35 plus the
+   Loose threads section, and `49f562c` had to restore them. Several builder
+   sessions edit this file at once.
 4. **PR body states** what changed, what a reviewer should see on screen or in the
    response body, and what you could not check.
 5. builder runs five gates before merging: the diff stays in scope for the named
