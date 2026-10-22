@@ -41,6 +41,8 @@ import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toS
 import { validateDayTagInput, normaliseTag, tagsForAIContext, todayIn, addDays, daysBetween, MAX_RANGE_DAYS, type DayTag } from "./src/lib/dayTags";
 import { zonedTimeToInstant } from './src/lib/tzPoint';
 import { mountMcpServer, MCP_PATH } from './src/mcp/server.js';
+import { tools as mcpTools } from './src/mcp/tools.js';
+import { isDigestPeriod } from './src/lib/digest.js';
 
 // Increase MaxListeners limit to prevent TLSSocket warnings during concurrent API sync chunks
 EventEmitter.defaultMaxListeners = 50;
@@ -3672,6 +3674,26 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     await app.get("/api/targets", requireAuth, async (req: any, res) => {
     const targets = await db.prepare("SELECT * FROM targets WHERE user_id = ?").all(req.user.id);
     res.json(targets);
+  });
+
+  // ── Weekly / monthly digest ───────────────────────────────────────────────
+  // One implementation, two callers: this endpoint and the get_digest MCP tool
+  // both go through mcpTools.getDigest, so the dashboard card and an agent
+  // summarising the week cannot disagree about what the week did.
+  await app.get("/api/digest", requireAuth, async (req: any, res) => {
+    const period = typeof req.query.period === 'string' ? req.query.period : 'week';
+    if (!isDigestPeriod(period)) {
+      return res.status(400).json({ error: "period must be 'week' or 'month'" });
+    }
+    try {
+      res.json(await mcpTools.getDigest(
+        { db, readingInstant, filterMetricsByPriority, userId: req.user.id },
+        { period },
+      ));
+    } catch (e: any) {
+      console.error('[digest] failed:', e?.message || e);
+      res.status(500).json({ error: 'Failed to build digest' });
+    }
   });
 
   // ── Personal data export / backup ─────────────────────────────────────────

@@ -44,6 +44,7 @@ export const DashboardLayoutSettings = React.memo(({
     { id: 'muscle_heatmap', label: 'Muscle Group Load (Heatmap)' },
     { id: 'body_diagram', label: 'Body Diagram (Muscle Readiness)' },
     { id: 'weekly_trends', label: 'This Week vs Last Week' },
+    { id: 'digest', label: 'Weekly / Monthly Digest' },
     { id: 'sleep_consistency', label: 'Sleep Trend & Consistency' },
     { id: 'water_intake', label: 'Water Intake' },
     { id: 'todays_targets', label: "Today's Targets Overview" },

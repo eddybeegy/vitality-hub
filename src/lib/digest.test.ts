@@ -1,0 +1,215 @@
+import { describe, it, expect } from 'vitest';
+import { buildDigest, renderDigestText, changeOf, PERIOD_DAYS, isDigestPeriod, type DigestInput } from './digest';
+
+const TODAY = '2026-10-18';
+
+/** A daily row for `date` with the given metric values. */
+const day = (date: string, values: Record<string, number>) => ({ date, ...values });
+
+const base = (over: Partial<DigestInput> = {}): DigestInput => ({
+  period: 'week',
+  today: TODAY,
+  timezone: 'Europe/London',
+  daily: [],
+  workouts: [],
+  ...over,
+});
+
+const lineOf = (digest: any, key: string) =>
+  digest.sections.flatMap((s: any) => s.lines).find((l: any) => l.key === key);
+
+describe('buildDigest windows', () => {
+  it('uses a trailing 7-day window ending today, and the 7 before it', () => {
+    const d = buildDigest(base());
+    expect(d.current).toEqual({ from: '2026-10-12', to: '2026-10-18' });
+    expect(d.previous).toEqual({ from: '2026-10-05', to: '2026-10-11' });
+    expect(d.days).toBe(7);
+  });
+
+  it('uses 30 days for a month', () => {
+    const d = buildDigest(base({ period: 'month' }));
+    expect(d.current).toEqual({ from: '2026-09-19', to: '2026-10-18' });
+    expect(d.previous).toEqual({ from: '2026-08-20', to: '2026-09-18' });
+    expect(PERIOD_DAYS.month).toBe(30);
+  });
+
+  it('ignores days outside both windows', () => {
+    const d = buildDigest(base({
+      daily: [day('2026-10-12', { steps: 10000 }), day('2026-10-11', { steps: 2000 }), day('2026-09-01', { steps: 99999 })],
+    }));
+    const steps = lineOf(d, 'steps');
+    expect(steps.current).toBe(10000);
+    expect(steps.previous).toBe(2000);
+  });
+});
+
+describe('aggregation', () => {
+  it('averages sleep across nights with data and converts seconds to hours', () => {
+    const d = buildDigest(base({
+      daily: [day('2026-10-18', { sleep_total: 7 * 3600 }), day('2026-10-17', { sleep_total: 8 * 3600 })],
+    }));
+    const sleep = lineOf(d, 'sleep_hours');
+    expect(sleep.current).toBe(7.5);
+    expect(sleep.unit).toBe('h');
+    // Averaged over the 2 nights that have data, not over all 7 days.
+    expect(sleep.daysWithData).toBe(2);
+  });
+
+  it('reports the latest weight separately from the window average', () => {
+    const d = buildDigest(base({
+      daily: [day('2026-10-14', { weight: 76 }), day('2026-10-18', { weight: 74 })],
+    }));
+    expect(lineOf(d, 'weight').current).toBe(75);
+    expect(lineOf(d, 'weight_latest').current).toBe(74);
+  });
+
+  it('sums sessions, minutes and volume from workouts, duration as minutes', () => {
+    const d = buildDigest(base({
+      workouts: [
+        { timestamp: '2026-10-18T09:00:00.000Z', duration: 49, volume: 4000 },
+        { timestamp: '2026-10-16T09:00:00.000Z', duration: 51, volume: 3000 },
+        { timestamp: '2026-10-08T09:00:00.000Z', duration: 40, volume: 1000 },
+      ],
+    }));
+    expect(lineOf(d, 'sessions').current).toBe(2);
+    expect(lineOf(d, 'sessions').previous).toBe(1);
+    expect(lineOf(d, 'training_minutes').current).toBe(100);
+    expect(lineOf(d, 'training_volume').current).toBe(7000);
+  });
+
+  it('accepts Date timestamps on workouts', () => {
+    const d = buildDigest(base({ workouts: [{ timestamp: new Date('2026-10-17T22:00:00.000Z'), duration: 30 }] }));
+    expect(lineOf(d, 'sessions').current).toBe(1);
+  });
+
+  it('skips unparseable metric values rather than producing NaN', () => {
+    const d = buildDigest(base({
+      daily: [{ date: '2026-10-18', steps: 'banana' as any }, day('2026-10-17', { steps: 4000 })],
+    }));
+    expect(lineOf(d, 'steps').current).toBe(4000);
+  });
+});
+
+describe('change and direction', () => {
+  it('computes percent change against the previous window', () => {
+    const d = buildDigest(base({
+      daily: [day('2026-10-18', { protein: 110 }), day('2026-10-08', { protein: 100 })],
+    }));
+    const protein = lineOf(d, 'protein');
+    expect(protein.changePct).toBe(10);
+    expect(protein.direction).toBe('up');
+    expect(protein.text).toBe('Protein: 110 g (prev 100, +10%)');
+  });
+
+  it('reports no previous period rather than an infinite change', () => {
+    const d = buildDigest(base({ daily: [day('2026-10-18', { steps: 5000 })] }));
+    const steps = lineOf(d, 'steps');
+    expect(steps.previous).toBeNull();
+    expect(steps.changePct).toBeNull();
+    expect(steps.direction).toBeNull();
+    expect(steps.text).toBe('Steps: 5,000 /day (no previous period)');
+  });
+
+  it('calls a sub-1% move flat', () => {
+    const d = buildDigest(base({
+      daily: [day('2026-10-18', { weight: 74.6 }), day('2026-10-08', { weight: 74.65 })],
+    }));
+    expect(lineOf(d, 'weight').direction).toBe('flat');
+  });
+
+  it('changeOf refuses a zero baseline', () => {
+    expect(changeOf(5, 0)).toBeNull();
+    expect(changeOf(null, 10)).toBeNull();
+    expect(changeOf(5, 4)).toBe(25);
+  });
+
+  it('a workout window with no previous sessions has no percentage', () => {
+    const d = buildDigest(base({ workouts: [{ timestamp: '2026-10-18T09:00:00.000Z', duration: 45 }] }));
+    expect(lineOf(d, 'sessions').previous).toBe(0);
+    expect(lineOf(d, 'sessions').changePct).toBeNull();
+  });
+});
+
+describe('targets and missing data', () => {
+  it('attaches the matching target to its line', () => {
+    const d = buildDigest(base({
+      daily: [day('2026-10-18', { calories_in: 2100, steps: 8000 })],
+      targets: [{ type: 'calories_in', value: 2000 }, { type: 'protein', value: '180' }],
+    }));
+    expect(lineOf(d, 'calories_in').target).toBe(2000);
+    expect(lineOf(d, 'protein').target).toBe(180);
+    expect(lineOf(d, 'steps').target).toBeNull();
+  });
+
+  it('marks a metric with no data as no data and headlines it', () => {
+    const d = buildDigest(base({ daily: [day('2026-10-18', { steps: 8000 })] }));
+    const bodyFat = lineOf(d, 'body_fat');
+    expect(bodyFat.current).toBeNull();
+    expect(bodyFat.text).toBe('Body fat: no data');
+    expect(d.headlines.some((h) => h.startsWith('Nothing logged in the last 7 days for:') && h.includes('Body fat'))).toBe(true);
+  });
+});
+
+describe('headlines', () => {
+  it('leads with the biggest movers and caps at five', () => {
+    const d = buildDigest(base({
+      daily: [
+        day('2026-10-18', { steps: 10000, protein: 200, calories_in: 3000, weight: 70, body_fat: 20, active_energy: 900, resting_heart_rate: 70, sleep_total: 8 * 3600, sleep_deep: 2 * 3600 }),
+        day('2026-10-08', { steps: 5000, protein: 100, calories_in: 1500, weight: 80, body_fat: 25, active_energy: 300, resting_heart_rate: 50, sleep_total: 4 * 3600, sleep_deep: 1 * 3600 }),
+      ],
+    }));
+    expect(d.headlines).toHaveLength(5);
+    expect(d.headlines[0]).toMatch(/\+200%|200%/);
+  });
+
+  it('lists every silent metric on one line, not one bullet each', () => {
+    const d = buildDigest(base({
+      daily: [day('2026-10-18', { steps: 5000 }), day('2026-10-08', { steps: 5000 })],
+    }));
+    const quiet = d.headlines.filter((h) => h.startsWith('Nothing logged'));
+    expect(quiet).toHaveLength(1);
+    expect(quiet[0]).toContain('Sleep, Deep sleep, Calories in, Protein, Weight, Body fat');
+    // Weight and "latest weight" are the same metric; it is named once.
+    expect(quiet[0].match(/Weight/g)).toHaveLength(1);
+  });
+
+  it('says so when nothing moved and nothing is missing', () => {
+    const full = (date: string) => day(date, {
+      sleep_total: 7 * 3600, sleep_deep: 3600, calories_in: 2000, protein: 150,
+      weight: 75, body_fat: 20, steps: 5000, active_energy: 500, resting_heart_rate: 55,
+    });
+    const d = buildDigest(base({
+      daily: [full('2026-10-18'), full('2026-10-08')],
+      workouts: [{ timestamp: '2026-10-18T09:00:00.000Z', duration: 45, volume: 3000 },
+                 { timestamp: '2026-10-08T09:00:00.000Z', duration: 45, volume: 3000 }],
+    }));
+    expect(d.headlines).toEqual(['Nothing moved more than 5% against the previous period.']);
+  });
+});
+
+describe('rendering', () => {
+  it('renders a plain-text digest with every section', () => {
+    const text = renderDigestText(buildDigest(base({
+      daily: [day('2026-10-18', { sleep_total: 7 * 3600, steps: 6000 })],
+      workouts: [{ timestamp: '2026-10-17T09:00:00.000Z', duration: 45, volume: 3000 }],
+    })));
+    expect(text.split('\n')[0]).toBe('Weekly digest — 2026-10-12 to 2026-10-18');
+    for (const section of ['Training', 'Sleep', 'Intake', 'Body', 'Activity']) {
+      expect(text).toContain(section);
+    }
+    expect(text).toContain('Sessions: 1');
+  });
+
+  it('titles a monthly digest as monthly', () => {
+    expect(renderDigestText(buildDigest(base({ period: 'month' })))).toContain('Monthly digest');
+  });
+});
+
+describe('isDigestPeriod', () => {
+  it('accepts only week and month', () => {
+    expect(isDigestPeriod('week')).toBe(true);
+    expect(isDigestPeriod('month')).toBe(true);
+    expect(isDigestPeriod('year')).toBe(false);
+    expect(isDigestPeriod(undefined)).toBe(false);
+  });
+});

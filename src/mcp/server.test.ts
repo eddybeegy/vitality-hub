@@ -82,7 +82,7 @@ describe('createMcpServer', () => {
     // map is the only public-ish view, so assert via the registered names.
     const names = Object.keys((server as any)._registeredTools || {});
     expect(names.sort()).toEqual([
-      'get_metrics', 'get_nutrition', 'get_readiness', 'get_sleep', 'get_targets', 'get_workouts', 'list_metric_types',
+      'get_digest', 'get_metrics', 'get_nutrition', 'get_readiness', 'get_sleep', 'get_targets', 'get_workouts', 'list_metric_types',
     ]);
     await server.close();
   });
