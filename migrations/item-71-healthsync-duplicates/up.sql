@@ -21,9 +21,17 @@ CREATE TEMP TABLE item71_scope ON COMMIT DROP AS
 --   single : one row is one reading; copies match on value and unit on the same day.
 -- Only add a type here when preflight section 2 says it looks like re-sync copies.
 -- Never a summed or nutrition type: up.sql and guard.sql refuse them.
+-- The six singles were measured on live by builder, 2026-10-21 (PR #44): every one is
+-- ~1 value a day with the same worst group of 8 copies as BP (one sync event).
 SELECT * FROM (VALUES
   ('blood_pressure_systolic',  'bp'),
-  ('blood_pressure_diastolic', 'bp')
+  ('blood_pressure_diastolic', 'bp'),
+  ('body_fat',                 'single'),
+  ('bmi',                      'single'),
+  ('lean_body_mass',           'single'),
+  ('height',                   'single'),
+  ('respiratory_rate',         'single'),
+  ('heart_rate_recovery',      'single')
 ) AS s(type, kind)
 -- END scope
 ;

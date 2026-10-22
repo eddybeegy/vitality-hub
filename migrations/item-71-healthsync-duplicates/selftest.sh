@@ -7,7 +7,14 @@
 #   PGHOST=... PGPORT=... PGUSER=... ./selftest.sh
 #
 # Needs a role that can CREATE DATABASE. Never touches any existing database.
+# Runs twice: `timestamp` (the app's DDL) and `timestamptz` (live, since item 13).
 set -euo pipefail
+if [ -z "${ITEM71_TSTYPE:-}" ]; then
+  for t in timestamp timestamptz; do echo "######## metrics.timestamp is $t"; ITEM71_TSTYPE=$t "$0"; done
+  exit 0
+fi
+# Literals in the seed are London wall-clock, as healthsync writes them.
+export PGTZ=Europe/London
 here="$(cd "$(dirname "$0")" && pwd)"
 db="item71_selftest_$$"
 run() { psql -X -q -v ON_ERROR_STOP=1 -d "$db" "$@"; }
@@ -26,10 +33,10 @@ echo '   ok'
 psql -X -q -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE $db"
 trap "psql -X -q -d postgres -c \"DROP DATABASE IF EXISTS $db\" >/dev/null" EXIT
 
-run >/dev/null <<'SQL'
+run -v tstype="$ITEM71_TSTYPE" >/dev/null <<'SQL'
 -- Same DDL the app creates on Postgres (server.ts schema, DATETIME -> TIMESTAMP).
 CREATE TABLE metrics (id SERIAL PRIMARY KEY, user_id INTEGER, type TEXT, value REAL, unit TEXT,
-  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP, source TEXT);
+  timestamp :tstype DEFAULT CURRENT_TIMESTAMP, source TEXT);
 CREATE UNIQUE INDEX metrics_unique_idx ON metrics (user_id, type, timestamp, source);
 CREATE INDEX metrics_user_source_ts_idx ON metrics (user_id, source, timestamp);
 
@@ -66,6 +73,20 @@ INSERT INTO metrics (user_id, type, value, unit, timestamp, source) VALUES
   (1, 'blood_pressure_diastolic',  80, 'mmHg', '2026-09-21 08:00:00.001', 'healthsync'),
   (1, 'blood_pressure_diastolic',  80, 'mmHg', '2026-09-21 08:00:01',     'healthsync');
 SELECT bp(1, 'healthsync', '2026-09-21 09:00:00', 120, 80);
+-- I. single-kind types in scope: height re-synced 4 times (keep 1); respiratory_rate with a
+--    second real value that day and one copy (keep both values); body_fat on two days, and
+--    bmi either side of London midnight (22:30Z and 23:30Z are one UTC day, two London
+--    days): all kept.
+INSERT INTO metrics (user_id, type, value, unit, timestamp, source)
+SELECT 1, 'height', 1.8, 'm', '2026-09-09 08:26:47'::timestamp + n * interval '22 minutes', 'healthsync' FROM generate_series(0, 3) n;
+INSERT INTO metrics (user_id, type, value, unit, timestamp, source) VALUES
+  (1, 'respiratory_rate', 14.5, 'count/min', '2026-09-09 07:00:00', 'healthsync'),
+  (1, 'respiratory_rate', 15.0, 'count/min', '2026-09-09 08:00:00', 'healthsync'),
+  (1, 'respiratory_rate', 14.5, 'count/min', '2026-09-09 09:00:00', 'healthsync'),
+  (1, 'body_fat', 20.1, '%', '2026-09-09 07:00:00', 'healthsync'),
+  (1, 'body_fat', 20.1, '%', '2026-09-10 07:00:00', 'healthsync'),
+  (1, 'bmi', 24.0, 'count', '2026-09-09 23:30:00', 'healthsync'),
+  (1, 'bmi', 24.0, 'count', '2026-09-10 00:30:00', 'healthsync');
 -- H. out-of-scope types: natural heart-rate repeats, summed steps, apple_health nutrition.
 INSERT INTO metrics (user_id, type, value, unit, timestamp, source)
 SELECT 1, 'heart_rate', 55 + n % 30, 'bpm', '2026-09-09 00:00:00'::timestamp + n * interval '5 minutes', 'healthsync' FROM generate_series(0, 99) n;
@@ -88,22 +109,26 @@ rm -f /tmp/item71_pre.$$
 
 echo '== up =='
 run -f "$here/up.sql" >/dev/null
-# A: 7 pairs, B: 2+1 pairs, D: 1 pair -> 11 pairs = 22 rows
-eq 'removed rows' 'SELECT count(*) FROM item71_removed_metrics' 22
-eq 'metrics after' 'SELECT count(*) FROM metrics' "$((total - 22))"
+# A: 7 pairs, B: 2+1 pairs, D: 1 pair -> 11 pairs = 22 rows; I: height 3 + respiratory_rate 1
+eq 'removed rows' 'SELECT count(*) FROM item71_removed_metrics' 26
+eq 'metrics after' 'SELECT count(*) FROM metrics' "$((total - 26))"
 eq 'A keeps the earliest copy' "SELECT string_agg(to_char(timestamp, 'HH24:MI:SS.MS') || '=' || value, ',' ORDER BY timestamp) FROM metrics WHERE user_id = 1 AND source = 'healthsync' AND timestamp::date = '2026-09-09' AND type LIKE 'blood%'" '08:26:47.000=103,08:26:47.005=68'
 eq 'B keeps one of each reading' "SELECT string_agg(value::text, ',' ORDER BY timestamp, type DESC) FROM metrics WHERE user_id = 1 AND source = 'healthsync' AND timestamp::date = '2026-09-17'" '103,68,99,68'
 eq 'C next day kept' "SELECT count(*) FROM metrics WHERE source = 'healthsync' AND timestamp::date = '2026-09-18'" 2
 eq 'D user 2 keeps one pair' "SELECT count(*) FROM metrics WHERE user_id = 2" 2
 eq 'E other sources untouched' "SELECT count(*) FROM metrics WHERE source <> 'healthsync'" "$(val "SELECT count(*) FROM seed WHERE source <> 'healthsync'")"
 eq 'F/G unpaired and ambiguous untouched' "SELECT count(*) FROM metrics WHERE timestamp::date IN ('2026-09-20', '2026-09-21')" 7
+eq 'I height keeps the earliest' "SELECT string_agg(to_char(timestamp, 'HH24:MI:SS'), ',') FROM metrics WHERE type = 'height'" '08:26:47'
+eq 'I respiratory_rate keeps both values' "SELECT string_agg(value::text, ',' ORDER BY timestamp) FROM metrics WHERE type = 'respiratory_rate'" '14.5,15'
+eq 'I body_fat on two days kept' "SELECT count(*) FROM metrics WHERE type = 'body_fat'" 2
+eq 'I bmi either side of London midnight kept' "SELECT count(*) FROM metrics WHERE type = 'bmi'" 2
 eq 'H out-of-scope types untouched' "SELECT count(*) FROM metrics WHERE type IN ('heart_rate', 'steps', 'protein')" 115
 eq 'no orphan halves created' "SELECT count(*) FROM metrics s WHERE s.source = 'healthsync' AND s.type = 'blood_pressure_systolic' AND s.timestamp::date NOT IN ('2026-09-20', '2026-09-21') AND NOT EXISTS (SELECT 1 FROM metrics d WHERE d.user_id = s.user_id AND d.source = s.source AND d.type = 'blood_pressure_diastolic' AND d.timestamp BETWEEN s.timestamp - interval '2 seconds' AND s.timestamp + interval '2 seconds')" 0
 
 echo '== up again is a no-op =='
 run -f "$here/up.sql" >/dev/null
-eq 'still 22 in backup' 'SELECT count(*) FROM item71_removed_metrics' 22
-eq 'metrics unchanged' 'SELECT count(*) FROM metrics' "$((total - 22))"
+eq 'still 26 in backup' 'SELECT count(*) FROM item71_removed_metrics' 26
+eq 'metrics unchanged' 'SELECT count(*) FROM metrics' "$((total - 26))"
 
 echo '== down restores every row with its id =='
 run -f "$here/down.sql" >/dev/null
@@ -122,7 +147,7 @@ eq 'refusals changed nothing' 'SELECT count(*) FROM metrics' "$total"
 echo '== guard stops new copies at write time =='
 run -f "$here/up.sql" >/dev/null
 run -f "$here/guard.sql" >/dev/null
-after="$((total - 22))"
+after="$((total - 26))"
 # copy of A, the two halves as two statements (kb-health style)
 run -c "INSERT INTO metrics (user_id,type,value,unit,timestamp,source) VALUES (1,'blood_pressure_systolic',103,'mmHg','2026-09-09 13:00:00','healthsync')"
 eq 'lone half waits for its partner' 'SELECT count(*) FROM metrics' "$((after + 1))"
@@ -138,12 +163,18 @@ run -o /dev/null -c "SELECT bp(1, 'apple_health', '2026-09-17 23:00:00', 99, 65)
 eq 'other source kept' 'SELECT count(*) FROM metrics' "$((after + 6))"
 run -c "INSERT INTO metrics (user_id,type,value,unit,timestamp,source) VALUES (1,'heart_rate',62,'bpm','2026-09-09 23:59:00','healthsync')"
 eq 'out-of-scope healthsync type kept' 'SELECT count(*) FROM metrics' "$((after + 7))"
-run -c "INSERT INTO item71_dedupe_scope VALUES ('weight', 'single')"
-run -c "INSERT INTO metrics (user_id,type,value,unit,timestamp,source) VALUES (1,'weight',80.5,'kg','2026-09-09 07:00:00','healthsync'), (1,'weight',80.5,'kg','2026-09-09 09:00:00','healthsync'), (1,'weight',80.4,'kg','2026-09-09 10:00:00','healthsync')"
-eq 'single kind: copy removed, new value kept' "SELECT string_agg(value::text, ',' ORDER BY timestamp) FROM metrics WHERE type = 'weight'" '80.5,80.4'
+run -c "INSERT INTO metrics (user_id,type,value,unit,timestamp,source) VALUES (1,'height',1.8,'m','2026-09-09 20:00:00','healthsync'), (1,'height',1.81,'m','2026-09-09 21:00:00','healthsync')"
+eq 'single kind: copy removed, new value kept' "SELECT string_agg(value::text, ',' ORDER BY timestamp) FROM metrics WHERE type = 'height'" '1.8,1.81'
+# written by a UTC session, one statement each, either side of London midnight
+PGTZ=UTC run -c "INSERT INTO metrics (user_id,type,value,unit,timestamp,source) VALUES (1,'bmi',25.0,'count','2026-09-11 23:30:00+01','healthsync')"
+PGTZ=UTC run -c "INSERT INTO metrics (user_id,type,value,unit,timestamp,source) VALUES (1,'bmi',25.0,'count','2026-09-12 00:30:00+01','healthsync')"
+eq 'single kind: London day boundary respected' "SELECT count(*) FROM metrics WHERE type = 'bmi'" 4
+eq 'guard: every removed row is in the audit table' "SELECT count(*) FROM item71_removed_metrics" 31
+eq 'guard: audit rows are the copies it removed' "SELECT string_agg(type || '=' || value, ',' ORDER BY id) FROM item71_removed_metrics WHERE id > (SELECT max(id) FROM seed)" 'blood_pressure_systolic=103,blood_pressure_diastolic=68,blood_pressure_systolic=103,blood_pressure_diastolic=68,height=1.8'
 
 echo '== down removes the guard =='
 run -f "$here/down.sql" >/dev/null
+eq 'down restored the guard removals too' "SELECT count(*) FROM metrics WHERE id > (SELECT max(id) FROM seed) AND type = 'height' AND value::text = '1.8'" 1
 eq 'trigger gone' "SELECT count(*) FROM pg_trigger WHERE tgname = 'item71_healthsync_copy_guard'" 0
 run -o /dev/null -c "SELECT bp(1, 'healthsync', '2026-09-09 16:00:00', 103, 68)"
 eq 'copies insert normally again' "SELECT count(*) FROM metrics WHERE timestamp = '2026-09-09 16:00:00'" 1
