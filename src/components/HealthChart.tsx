@@ -10,6 +10,7 @@ import { useHealthStore } from '../store/useHealthStore';
 import { readChartRows, asRows } from '../lib/chartRows';
 import { useDayTagsStore } from '../store/useDayTagsStore';
 import { markersForBuckets, tagsOnBucket, tagLabel } from '../lib/dayTags';
+import { periodDays, shiftPrevious, mergePrevious, percentChange, formatChange } from '../lib/periodCompare';
 
 interface ReferenceLineProps {
   value: number;
@@ -50,6 +51,9 @@ export const HealthChart = ({
 }: ChartProps) => {
   const [granularity, setGranularity] = useState<Granularity>(defaultGranularity || 'day');
   const [period, setPeriod] = useState<Period>(defaultPeriod || (variant === 'mini' ? '7d' : '90d'));
+  // Item 87: overlay the previous period of the same length, shifted onto this one.
+  const [compare, setCompare] = useState(false);
+  const compareDays = compare && variant !== 'mini' ? periodDays(period) : null;
   const [fetchedData, setFetchedData] = useState<any[]>([]);
   const [internalLoading, setInternalLoading] = useState(false);
   // Item 58: set when the url fetch failed, so the chart says so instead of "No data".
@@ -76,7 +80,7 @@ export const HealthChart = ({
 
   useEffect(() => {
     if (url) {
-      const fetchKey = `${url}|${aggregation}|${period}`;
+      const fetchKey = `${url}|${aggregation}|${period}|${compareDays ?? 0}`;
       const isFocusRefresh = lastFetchKey.current === fetchKey;
       lastFetchKey.current = fetchKey;
       const fetchData = async () => {
@@ -95,6 +99,8 @@ export const HealthChart = ({
           else if (period === '90d') startDate.setDate(now.getDate() - 90);
           else if (period === '1y') startDate.setFullYear(now.getFullYear() - 1);
           else startDate.setFullYear(now.getFullYear() - 10); // All time
+          // Comparing: fetch the previous period too (a superset, so no second request).
+          if (compareDays) startDate.setDate(startDate.getDate() - compareDays);
 
           // Always request DAY granularity, regardless of the toggle. The server applies
           // `aggregation` to collapse intraday samples into a day -- that is stage one and
@@ -127,14 +133,14 @@ export const HealthChart = ({
     // `granularity` is deliberately NOT a dependency any more: the request is always
     // day-granularity, so toggling DAY/WEEK/MONTH re-buckets the data we already have
     // instead of refetching identical rows.
-  }, [url, aggregation, period, focusRefreshNonce, retryNonce]);
+  }, [url, aggregation, period, compareDays, focusRefreshNonce, retryNonce]);
 
   const isMini = variant === 'mini';
   const isWeightBased = dataKey === 'weight' || dataKey === 'muscle_mass' || dataKey === 'bone_mass' || dataKey === 'lean_body_mass' || dataKey === 'fat_mass';
 
-  const processedData = useMemo(() => {
+  const bucketed = useMemo(() => {
     let chartData = asRows(url ? fetchedData : data);
-    if (chartData.length === 0) return [];
+    if (chartData.length === 0) return { current: [] as any[], previous: [] as any[] };
     
     const weightKeys = ['weight', 'muscle_mass', 'bone_mass', 'lean_body_mass', 'fat_mass'];
     const distanceKeys = ['distance', 'walking_running_distance'];
@@ -204,7 +210,15 @@ export const HealthChart = ({
     });
 
     const sorted = [...validData].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    
+
+    const dayFormatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+
+    const bucketize = (sorted: any[]) => {
     const grouped: Record<string, { 
       date: string, 
       sums: Record<string, number>, 
@@ -218,13 +232,6 @@ export const HealthChart = ({
       if (!allKeys.includes(rangeKeys[0])) allKeys.push(rangeKeys[0]);
       if (!allKeys.includes(rangeKeys[1])) allKeys.push(rangeKeys[1]);
     }
-
-    const dayFormatter = new Intl.DateTimeFormat('en-CA', {
-      timeZone: timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    });
 
     sorted.forEach(item => {
       const d = parseUTCDate(item.date);
@@ -331,7 +338,28 @@ export const HealthChart = ({
         return result;
       })
       .filter(r => Object.keys(r).length > 1);
-  }, [data, fetchedData, url, granularity, period, dataKey, stackKeys, rangeKeys, type, aggregation, preferredUnits]);
+    };
+
+    // Item 87: the previous period, each row moved forward onto the current period's
+    // days, then bucketed exactly like the current rows so DAY/WEEK/MONTH line up.
+    let previous: any[] = [];
+    if (compareDays) {
+      const dayOf = (item: any): string => {
+        if (!item.date) return '';
+        if (typeof item.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.date)) return item.date;
+        const d = parseUTCDate(item.date);
+        if (isNaN(d.getTime())) return '';
+        try { return dayFormatter.format(d); } catch { return d.toISOString().split('T')[0]; }
+      };
+      const shifted = shiftPrevious(chartData, dayOf, cutoffDateOnly, compareDays)
+        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+      previous = bucketize(shifted);
+    }
+
+    return { current: bucketize(sorted), previous };
+  }, [data, fetchedData, url, granularity, period, compareDays, timezone, dataKey, stackKeys, rangeKeys, type, aggregation, preferredUnits]);
+  const processedData = bucketed.current;
+  const previousData = bucketed.previous;
 
   // Item 74: a dashed vertical marker on every bucket that holds a tagged day. The
   // store fetches once for the whole app, however many charts are mounted.
@@ -388,7 +416,7 @@ export const HealthChart = ({
     return referenceLines;
   }, [referenceLines, preferredUnits, isWeightBased, dataKey]);
   const periodStats = useMemo(() => {
-    const stats = { latest: null as number | null, average: null as number | null, latestRange: null as [number, number] | null };
+    const stats = { latest: null as number | null, average: null as number | null, prevAverage: null as number | null, latestRange: null as [number, number] | null };
     
     if (!processedData || processedData.length === 0) return stats;
 
@@ -444,19 +472,34 @@ export const HealthChart = ({
       }
     }
 
-    let sum = 0;
-    let count = 0;
-    processedData.forEach(item => {
-      const val = type === 'rangeBar' && Array.isArray(item[dataKey]) ? Number(item[dataKey][1]) : headlineValue(item);
-      if (val !== null && !isNaN(val)) {
-        sum += val;
-        count++;
-      }
-    });
-    stats.average = count > 0 ? sum / count : null;
+    const averageOf = (rows: any[]): number | null => {
+      let sum = 0;
+      let count = 0;
+      rows.forEach(item => {
+        const val = type === 'rangeBar' && Array.isArray(item[dataKey]) ? Number(item[dataKey][1]) : headlineValue(item);
+        if (val !== null && !isNaN(val)) {
+          sum += val;
+          count++;
+        }
+      });
+      return count > 0 ? sum / count : null;
+    };
+    stats.average = averageOf(processedData);
+    stats.prevAverage = previousData.length ? averageOf(previousData) : null;
     
     return stats;
-  }, [data, fetchedData, url, processedData, dataKey, type, rangeKeys, stackKeys, sumStackInLatest]);
+  }, [data, fetchedData, url, processedData, previousData, dataKey, type, rangeKeys, stackKeys, sumStackInLatest]);
+
+  // Item 87: one dashed series for the previous period. Skipped for range bars and
+  // stacks, where a second copy of every series would be unreadable; the headline
+  // still compares their averages.
+  const prevKey = `prev_${dataKey}`;
+  const showPrevSeries = !!compareDays && type !== 'rangeBar' && !(stackKeys && stackKeys.length > 0);
+  const chartRows = useMemo(
+    () => (showPrevSeries ? mergePrevious(processedData, previousData, dataKey, prevKey) : processedData),
+    [showPrevSeries, processedData, previousData, dataKey, prevKey],
+  );
+  const prevName = `Previous ${period}`;
 
   const safeDateFormatter = (str: string) => {
     const d = parseUTCDate(str);
@@ -471,6 +514,22 @@ export const HealthChart = ({
     } catch (e) {
       return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     }
+  };
+
+  const formatAverage = (avg: number | null) => {
+    if (avg === null) return '--';
+    const val = Number(avg);
+
+    if (preferredUnits === 'stone' && isWeightBased) {
+      const stones = Math.floor(val / 14);
+      const lbs = (val % 14).toFixed(1);
+      return `${stones}st ${lbs}lb`;
+    }
+
+    if (unit.includes('steps') || unit.includes('kcal') || unit.includes('count')) {
+      return val.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    }
+    return val.toFixed(1);
   };
 
   if (loading || internalLoading) {
@@ -515,22 +574,17 @@ export const HealthChart = ({
                   latest {preferredUnits === 'stone' && isWeightBased ? '' : unit}
                 </span>
                 <span className="text-[9px] font-medium text-zinc-400/70 dark:text-zinc-500/70">
-                  avg: {(() => {
-                    if (periodStats.average === null) return '--';
-                    const val = Number(periodStats.average);
-
-                    if (preferredUnits === 'stone' && isWeightBased) {
-                      const stones = Math.floor(val / 14);
-                      const lbs = (val % 14).toFixed(1);
-                      return `${stones}st ${lbs}lb`;
-                    }
-
-                    if (unit.includes('steps') || unit.includes('kcal') || unit.includes('count')) {
-                      return val.toLocaleString(undefined, { maximumFractionDigits: 0 });
-                    }
-                    return val.toFixed(1);
-                  })()} {preferredUnits === 'stone' && isWeightBased ? '' : unit}
+                  avg: {formatAverage(periodStats.average)} {preferredUnits === 'stone' && isWeightBased ? '' : unit}
                 </span>
+                {compareDays && (
+                  <span className="text-[9px] font-medium text-zinc-400/70 dark:text-zinc-500/70">
+                    prev {period}: {formatAverage(periodStats.prevAverage)} {preferredUnits === 'stone' && isWeightBased ? '' : unit}
+                    {(() => {
+                      const pct = percentChange(periodStats.average, periodStats.prevAverage);
+                      return pct === null ? null : <span className="ml-1 font-bold">({formatChange(pct)})</span>;
+                    })()}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -564,7 +618,20 @@ export const HealthChart = ({
         )}
         
         {!isMini && (
-          <div className="flex justify-end">
+          <div className="flex justify-end items-center gap-2">
+            {periodDays(period) !== null && (
+              <button
+                onClick={() => setCompare(c => !c)}
+                aria-pressed={compare}
+                title="Compare with the previous period of the same length"
+                className={cn(
+                  "px-2 py-1 text-[9px] font-bold uppercase rounded-md border transition-all",
+                  compare ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 border-transparent" : "text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 border-black/5 dark:border-white/5"
+                )}
+              >
+                vs prev
+              </button>
+            )}
             <div className="flex bg-zinc-50 dark:bg-zinc-800/50 p-1 rounded-lg border border-black/5 dark:border-white/5">
               {(['1d', '7d', '30d', '90d', '1y', 'all'] as Period[]).map((p) => (
                 <button
@@ -601,7 +668,7 @@ export const HealthChart = ({
         )}
         <ResponsiveContainer width="100%" height="100%" debounce={50} minWidth={0} minHeight={0}>
           {type === 'line' ? (
-            <LineChart data={processedData} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
+            <LineChart data={chartRows} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
               <XAxis 
                 dataKey="date" 
                 tick={{ fontSize: 8, fill: 'currentColor' }} 
@@ -645,12 +712,15 @@ export const HealthChart = ({
               ))}
               {renderTagMarkers()}
               <Line name={name || title} type="monotone" dataKey={dataKey} stroke={color} strokeWidth={isMini ? 1.5 : 2} dot={true} />
+              {showPrevSeries && (
+                <Line name={prevName} type="monotone" dataKey={prevKey} stroke={color} strokeOpacity={0.45} strokeWidth={1.5} strokeDasharray="4 3" dot={false} connectNulls />
+              )}
               {stackKeys?.map(s => (
                 <Line key={s.key} name={s.name} type="monotone" dataKey={s.key} stroke={s.color} strokeWidth={isMini ? 1.5 : 2} dot={true} />
               ))}
             </LineChart>
           ) : type === 'rangeBar' ? (
-            <BarChart data={processedData} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
+            <BarChart data={chartRows} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
               <XAxis 
                 dataKey="date" 
                 tick={{ fontSize: 8, fill: 'currentColor' }}
@@ -700,7 +770,7 @@ export const HealthChart = ({
               <Bar name={name || title} dataKey={dataKey} fill={color} radius={[4, 4, 4, 4]} barSize={barSize} />
             </BarChart>
           ) : type === 'bar' ? (
-            <BarChart data={processedData} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
+            <BarChart data={chartRows} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
               <XAxis 
                 dataKey="date" 
                 tick={{ fontSize: 8, fill: 'currentColor' }}
@@ -741,9 +811,12 @@ export const HealthChart = ({
               ) : (
                 <Bar name={name || title} dataKey={dataKey} fill={color} radius={[2, 2, 0, 0]} barSize={barSize} />
               )}
+              {showPrevSeries && (
+                <Bar name={prevName} dataKey={prevKey} fill={color} fillOpacity={0.3} radius={[2, 2, 0, 0]} barSize={barSize} />
+              )}
             </BarChart>
           ) : (
-            <AreaChart data={processedData} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
+            <AreaChart data={chartRows} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
               <XAxis 
                 dataKey="date" 
                 tick={{ fontSize: 8, fill: 'currentColor' }}
@@ -778,6 +851,9 @@ export const HealthChart = ({
               ))}
               {renderTagMarkers()}
               <Area name={name || title} type="monotone" dataKey={dataKey} stroke={color} fill={color} fillOpacity={0.1} />
+              {showPrevSeries && (
+                <Area name={prevName} type="monotone" dataKey={prevKey} stroke={color} strokeOpacity={0.45} strokeDasharray="4 3" fill="none" connectNulls />
+              )}
               {stackKeys?.map(s => (
                 <Area key={s.key} name={s.name} type="monotone" dataKey={s.key} stroke={s.color} fill={s.color} fillOpacity={0.1} />
               ))}
