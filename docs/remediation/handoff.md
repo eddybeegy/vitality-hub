@@ -51,7 +51,11 @@ for a fresh session to resume from them alone (see the ownership note in
 
 ### Remaining roadmap, in order
 
-The source is the feature-ideas page <https://claude.ai/artifact/BvnqazRXJJYEVrVRqEHrKZ>.
+The source is the feature-ideas page. A **copy with a status chip on every idea**
+(merged with its PR, open, partly built, or to do) is committed at
+[`feature-ideas.html`](feature-ideas.html), and the live original is the artifact
+<https://claude.ai/artifact/BvnqazRXJJYEVrVRqEHrKZ>. Keep the chips in the repo copy
+current as items land, so a hand-back starts from an accurate list.
 Kieron's ordering: the rest of the page in page order, with **phone alerts LAST**.
 
 1. **Item 90, bedtime timing.** Finish the branch above.
