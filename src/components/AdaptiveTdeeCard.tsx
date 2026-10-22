@@ -4,10 +4,15 @@ import { fetchJson } from '../lib/apiFetch';
 import { getLocalDateString } from '../lib/utils';
 import { useRefreshOnFocus } from '../lib/useRefreshOnFocus';
 import { estimateTdee, seriesOf, tdeeWindow, MIN_LOGGED_KCAL, type TdeeResult } from '../lib/tdee';
+import { suggestTargets } from '../lib/adaptiveTargets';
 
 interface AdaptiveTdeeCardProps {
   timezone?: string;
   preferredUnits?: string;
+  /** Current targets, to compare the suggestion with; unset or 0 means none. */
+  weightGoalKg?: number;
+  calorieTarget?: number;
+  proteinTarget?: number;
 }
 
 const KG_TO_LB = 2.20462;
@@ -23,9 +28,10 @@ const CONFIDENCE_STYLE: Record<string, string> = {
 // live in src/lib/tdee.ts. Two reads of /api/metrics/aggregated because weight
 // wants the day's mean and energy wants the day's total; the server has already
 // chosen one source per (day, type) and placed each reading on its local day.
-export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({ timezone, preferredUnits }) => {
+export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({ timezone, preferredUnits, weightGoalKg, calorieTarget, proteinTarget }) => {
   const [result, setResult] = useState<TdeeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [leanMassKg, setLeanMassKg] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -36,7 +42,7 @@ export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({ timezone, pr
       from.setUTCDate(from.getUTCDate() - 2);
       const startDate = from.toISOString();
       const [weightRows, energyRows] = await Promise.all([
-        fetchJson<any[]>(`/api/metrics/aggregated?type=weight&granularity=day&aggregation=avg&startDate=${startDate}`),
+        fetchJson<any[]>(`/api/metrics/aggregated?type=weight,lean_body_mass&granularity=day&aggregation=avg&startDate=${startDate}`),
         fetchJson<any[]>(`/api/metrics/aggregated?type=calories_in,active_energy,basal_energy&granularity=day&aggregation=sum&startDate=${startDate}`),
       ]);
       setResult(estimateTdee({
@@ -46,6 +52,8 @@ export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({ timezone, pr
         activeEnergy: seriesOf(energyRows, 'active_energy'),
         basalEnergy: seriesOf(energyRows, 'basal_energy'),
       }));
+      const lean = seriesOf(weightRows, 'lean_body_mass');
+      setLeanMassKg(lean.length ? lean[lean.length - 1].value : null);
       setError(null);
     } catch (e) {
       console.error('Failed to load adaptive TDEE inputs', e);
@@ -128,6 +136,31 @@ export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({ timezone, pr
               {result.apple ? `. Apple is active + resting energy over ${result.apple.days} days.` : '. Not enough Apple active + resting energy to compare.'}
             </span>
           </p>
+          {(() => {
+            const s = suggestTargets({ tdee: result.tdee, trendWeightKg: result.trendWeightKg, goalWeightKg: weightGoalKg, leanMassKg });
+            const current = (v?: number) => (v && v > 0 ? Math.round(v).toLocaleString() : 'not set');
+            const goalLabel = s.direction === 'maintain'
+              ? (weightGoalKg && weightGoalKg > 0 ? 'you are at your weight goal, so this maintains' : 'no weight goal set, so this maintains')
+              : `${s.direction === 'lose' ? 'losing' : 'gaining'} ${formatRate(s.ratePerWeek).replace(/^[+−]/, '')} towards your goal`;
+            return (
+              <div className="pt-4 border-t border-zinc-100 dark:border-zinc-800">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-2">Suggested targets</p>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <p className="font-semibold text-zinc-800 dark:text-zinc-100">{s.calories.toLocaleString()} kcal</p>
+                    <p className="text-[11px] text-zinc-400">now {current(calorieTarget)}</p>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-zinc-800 dark:text-zinc-100">{s.protein} g protein</p>
+                    <p className="text-[11px] text-zinc-400">now {current(proteinTarget)}</p>
+                  </div>
+                </div>
+                <p className="text-[11px] text-zinc-400 mt-2">
+                  Calories: {goalLabel}. Protein: {s.proteinBasis === 'lean_mass' ? '2.2 g per kg of lean mass' : '1.8 g per kg of body weight (no lean mass reading)'}. Change them in Targets if they suit you.
+                </p>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
