@@ -5,7 +5,8 @@ import { SyncButton } from './SyncButton';
 import { SyncStatus } from './SyncStatus';
 import { EmptyState } from './ui/EmptyState';
 import { HealthChart } from './HealthChart';
-import { formatWorkoutWeight, formatWeight, convertWeight, getWeightUnit, convertDistance, getDistanceUnit, formatPaceAndSpeed, formatDateWithTimezone } from '../lib/utils';
+import { cardioTrends, WINDOW_DAYS as CARDIO_WINDOW_DAYS, type Sport } from '../lib/cardioTrends';
+import { formatWorkoutWeight, formatWeight, convertWeight, getWeightUnit, convertDistance, getDistanceUnit, formatPaceAndSpeed, formatDateWithTimezone, getLocalDateString } from '../lib/utils';
 import { analyseStrength, estimate1RM, isWeightedExercise, isWorkingSet, prKindLabel, REP_RANGES } from '../lib/strength';
 
 interface WorkoutsTabProps {
@@ -104,6 +105,13 @@ export const WorkoutsTab = React.memo(({
 
   // Chart values follow the volume chart: kg for metric, lbs otherwise.
   const toChartWeight = (kg: number) => settings?.preferred_units === 'metric' ? kg : kg * 2.20462;
+
+  // Runs, rides and walks scored as metres per heartbeat (Apple workouts carry
+  // distance and average HR).
+  const cardio = React.useMemo(
+    () => cardioTrends(summaryData.workouts || [], getLocalDateString(settings?.timezone), settings?.timezone),
+    [summaryData.workouts, settings?.timezone]
+  );
 
   const weekVolumeComparison = React.useMemo(() => {
     // Strength-set volume (weight x reps) summed over two trailing 7-day
@@ -629,6 +637,44 @@ export const WorkoutsTab = React.memo(({
             </div>
           )}
         </div>
+
+        {/* Cardio trends: distance per heartbeat for runs, rides and walks */}
+        {cardio.length > 0 && (
+          <div className="space-y-4 mt-8">
+            <div className="flex justify-between items-baseline gap-2 flex-wrap">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Cardio Fitness</h3>
+              <span className="text-[11px] text-zinc-400 dark:text-zinc-500">Metres per heartbeat, last {CARDIO_WINDOW_DAYS} days &middot; higher is fitter</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {cardio.map(t => {
+                const names: Record<Sport, string> = { run: 'Running', ride: 'Cycling', walk: 'Walking' };
+                const last = t.sessions[t.sessions.length - 1];
+                const imperial = settings?.preferred_units === 'imperial';
+                const pace = imperial ? last.pace * 1.609344 : last.pace;
+                const paceSecs = Math.round(pace * 60);
+                const paceLabel = `${Math.floor(paceSecs / 60)}:${String(paceSecs % 60).padStart(2, '0')} /${imperial ? 'mi' : 'km'}`;
+                return (
+                  <div key={t.sport} className="p-4 bg-white dark:bg-zinc-900 rounded-2xl border border-black/5 dark:border-white/5">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">{names[t.sport]}</p>
+                    <div className="flex items-baseline gap-2 mt-1">
+                      <span className="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100">{last.efficiency.toFixed(2)}</span>
+                      <span className="text-[11px] text-zinc-400 dark:text-zinc-500">m/beat</span>
+                      {t.change !== null && (
+                        <span className={t.change >= 0 ? "text-xs font-bold text-emerald-600 dark:text-emerald-400" : "text-xs font-bold text-rose-600 dark:text-rose-400"}>
+                          {t.change >= 0 ? '▲' : '▼'} {Math.abs(t.change * 100).toFixed(1)}%
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1">
+                      Latest {paceLabel} at {Math.round(last.avgHr)} bpm &middot; {t.sessions.length} sessions
+                      {t.change === null && ' · trend after 6'}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Top Exercises View */}
         <div className="space-y-6 mt-8">
