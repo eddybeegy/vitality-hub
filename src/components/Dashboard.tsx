@@ -21,6 +21,7 @@ import { DayTagsCard } from './DayTagsCard';
 import { ProgressRing } from './ui/ProgressRing';
 import { CardSkeleton, ChartSkeleton } from './ui/Skeleton';
 import { ReadinessCard } from './ReadinessCard';
+import { computeTrainingLoad } from '../lib/trainingLoad';
 import { SmartAdjustments } from './SmartAdjustments';
 import { formatWeight, convertWeight, getWeightUnit, getLocalDateString, formatDateWithTimezone, cn } from '../lib/utils';
 import { useSettingsStore } from '../store/useSettingsStore';
@@ -1254,47 +1255,44 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                             </div>
                             <p className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mb-3 italic font-serif">Training Status</p>
                             {(() => {
-                                const now = Date.now();
-                                const sessionVolume = (w: any) => (w.exercises || []).reduce((sum: number, ex: any) => {
-                                    if (ex.type !== 'strength' && ex.type !== 'weightlifting') return sum;
-                                    return sum + (ex.sets || []).reduce((s: number, set: any) => {
-                                        const weight = set.weight_kg || set.weight || 0;
-                                        const reps = set.reps || 0;
-                                        return s + (weight > 0 && reps > 0 ? weight * reps : 0);
-                                    }, 0);
-                                }, 0);
-
-                                const loadInWindow = (days: number) => (summaryData.workouts || [])
-                                    .filter((w: any) => (now - new Date(w.timestamp).getTime()) / 86400000 < days)
-                                    .reduce((s: number, w: any) => s + sessionVolume(w), 0);
-
-                                const acute = loadInWindow(7) / 7;
-                                const chronic = loadInWindow(28) / 28;
-
-                                if (chronic === 0 && acute === 0) {
+                                const load = computeTrainingLoad(summaryData.workouts || [], getLocalDateString(settings?.timezone), settings?.timezone);
+                                if (!load) {
                                     return <p className="text-xs text-zinc-400">Not enough workout history yet</p>;
                                 }
 
-                                const ratio = chronic > 0 ? acute / chronic : (acute > 0 ? 2 : 0);
-
-                                let zone = { label: 'Detraining', color: 'text-sky-500', bg: 'bg-sky-500', note: 'Load is well below your usual — room to build back up.' };
-                                if (ratio >= 0.8 && ratio < 1.3) zone = { label: 'Optimal', color: 'text-emerald-500', bg: 'bg-emerald-500', note: "You're training in a sustainable, well-balanced zone." };
-                                else if (ratio >= 1.3 && ratio < 1.5) zone = { label: 'Building', color: 'text-amber-500', bg: 'bg-amber-500', note: 'Load is ramping up — keep an eye on recovery.' };
-                                else if (ratio >= 1.5) zone = { label: 'High Risk', color: 'text-rose-500', bg: 'bg-rose-500', note: 'Load has spiked sharply versus your recent average — elevated injury risk.' };
-
-                                const pct = Math.min(100, (ratio / 2) * 100);
+                                const zones = {
+                                    detraining: { label: 'Detraining', color: 'text-sky-500', bg: 'bg-sky-500', note: 'Load is well below your usual — room to build back up.' },
+                                    optimal: { label: 'Optimal', color: 'text-emerald-500', bg: 'bg-emerald-500', note: "You're training in a sustainable, well-balanced zone." },
+                                    building: { label: 'Building', color: 'text-amber-500', bg: 'bg-amber-500', note: 'Load is ramping up — keep an eye on recovery.' },
+                                    high: { label: 'High Risk', color: 'text-rose-500', bg: 'bg-rose-500', note: 'Load has spiked sharply versus your recent average — elevated injury risk.' },
+                                };
+                                const zone = zones[load.zone];
+                                const pct = Math.min(100, (load.ratio / 2) * 100);
+                                const formNote = load.form <= -10 ? 'tired' : load.form >= 5 ? 'fresh' : 'balanced';
 
                                 return (
                                     <div>
                                         <div className="flex items-baseline gap-2 mb-2">
-                                            <span className="text-3xl font-bold tracking-tighter text-zinc-900 dark:text-zinc-100 font-mono">{ratio.toFixed(2)}</span>
+                                            <span className="text-3xl font-bold tracking-tighter text-zinc-900 dark:text-zinc-100 font-mono">{load.ratio.toFixed(2)}</span>
                                             <span className={cn("text-sm font-bold", zone.color)}>{zone.label}</span>
                                         </div>
                                         <div className="h-2 w-full bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden mb-3">
                                             <div className={cn("h-full rounded-full", zone.bg)} style={{ width: `${pct}%` }} />
                                         </div>
                                         <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">{zone.note}</p>
-                                        <p className="text-[9px] text-zinc-400 dark:text-zinc-500 mt-3 uppercase tracking-wide">7-day load ÷ 28-day load</p>
+                                        <div className="grid grid-cols-3 gap-2 mt-3">
+                                            {[
+                                                { label: 'Fitness', value: load.fitness.toFixed(0), hint: '42-day weighted average, min/day' },
+                                                { label: 'Fatigue', value: load.fatigue.toFixed(0), hint: '7-day weighted average, min/day' },
+                                                { label: 'Form', value: `${load.form > 0 ? '+' : ''}${load.form.toFixed(0)}`, hint: `Fitness minus fatigue as of yesterday: ${formNote}` },
+                                            ].map(m => (
+                                                <div key={m.label} title={m.hint}>
+                                                    <p className="text-[9px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">{m.label}</p>
+                                                    <p className="text-sm font-mono font-bold text-zinc-800 dark:text-zinc-200">{m.value}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <p className="text-[9px] text-zinc-400 dark:text-zinc-500 mt-3 uppercase tracking-wide">Workout minutes, all sources &middot; 7-day ÷ 28-day</p>
                                     </div>
                                 );
                             })()}
