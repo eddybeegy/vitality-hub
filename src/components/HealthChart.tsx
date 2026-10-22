@@ -12,7 +12,7 @@ import { useDayTagsStore } from '../store/useDayTagsStore';
 import { markersForBuckets, tagsOnBucket, tagLabel } from '../lib/dayTags';
 import { useMedicationsStore } from '../store/useMedicationsStore';
 import { medicationMarkers } from '../lib/medications';
-import { periodDays, shiftPrevious, mergePrevious, percentChange, formatChange } from '../lib/periodCompare';
+import { periodDays, shiftPrevious, mergePrevious, percentChange, formatChange, baselineOffset, availableBaselines, BASELINES, type BaselineKey } from '../lib/periodCompare';
 
 interface ReferenceLineProps {
   value: number;
@@ -53,9 +53,18 @@ export const HealthChart = ({
 }: ChartProps) => {
   const [granularity, setGranularity] = useState<Granularity>(defaultGranularity || 'day');
   const [period, setPeriod] = useState<Period>(defaultPeriod || (variant === 'mini' ? '7d' : '90d'));
-  // Item 87: overlay the previous period of the same length, shifted onto this one.
-  const [compare, setCompare] = useState(false);
-  const compareDays = compare && variant !== 'mini' ? periodDays(period) : null;
+  // Item 87: overlay an earlier window of the same length, shifted onto this one.
+  // The baseline is which earlier window: adjacent ('prev'), a month back, a year
+  // back. null = comparison off.
+  const [baseline, setBaseline] = useState<BaselineKey | null>(null);
+  const windowDays = variant !== 'mini' ? periodDays(period) : null;
+  // How far back the baseline window starts. Separate from the window length: a
+  // 7-day chart vs a year ago shifts by 365 but still buckets 7 days. null when the
+  // baseline is off, or not offered for this period (it would overlap -- see
+  // baselineOffset), in which case the comparison simply switches itself off.
+  const offsetDays = baseline && windowDays ? baselineOffset(baseline, windowDays) : null;
+  const compareDays = offsetDays === null ? null : windowDays;
+  const baselineSuffix = baseline === 'month' ? ' a month earlier' : baseline === 'year' ? ' a year earlier' : '';
   const [fetchedData, setFetchedData] = useState<any[]>([]);
   const [internalLoading, setInternalLoading] = useState(false);
   // Item 58: set when the url fetch failed, so the chart says so instead of "No data".
@@ -82,7 +91,7 @@ export const HealthChart = ({
 
   useEffect(() => {
     if (url) {
-      const fetchKey = `${url}|${aggregation}|${period}|${compareDays ?? 0}`;
+      const fetchKey = `${url}|${aggregation}|${period}|${offsetDays ?? 0}`;
       const isFocusRefresh = lastFetchKey.current === fetchKey;
       lastFetchKey.current = fetchKey;
       const fetchData = async () => {
@@ -102,7 +111,7 @@ export const HealthChart = ({
           else if (period === '1y') startDate.setFullYear(now.getFullYear() - 1);
           else startDate.setFullYear(now.getFullYear() - 10); // All time
           // Comparing: fetch the previous period too (a superset, so no second request).
-          if (compareDays) startDate.setDate(startDate.getDate() - compareDays);
+          if (offsetDays) startDate.setDate(startDate.getDate() - offsetDays);
 
           // Always request DAY granularity, regardless of the toggle. The server applies
           // `aggregation` to collapse intraday samples into a day -- that is stage one and
@@ -135,7 +144,7 @@ export const HealthChart = ({
     // `granularity` is deliberately NOT a dependency any more: the request is always
     // day-granularity, so toggling DAY/WEEK/MONTH re-buckets the data we already have
     // instead of refetching identical rows.
-  }, [url, aggregation, period, compareDays, focusRefreshNonce, retryNonce]);
+  }, [url, aggregation, period, offsetDays, focusRefreshNonce, retryNonce]);
 
   const isMini = variant === 'mini';
   const isWeightBased = dataKey === 'weight' || dataKey === 'muscle_mass' || dataKey === 'bone_mass' || dataKey === 'lean_body_mass' || dataKey === 'fat_mass';
@@ -342,10 +351,10 @@ export const HealthChart = ({
       .filter(r => Object.keys(r).length > 1);
     };
 
-    // Item 87: the previous period, each row moved forward onto the current period's
+    // Item 87: the baseline window, each row moved forward onto the current period's
     // days, then bucketed exactly like the current rows so DAY/WEEK/MONTH line up.
     let previous: any[] = [];
-    if (compareDays) {
+    if (compareDays && offsetDays) {
       const dayOf = (item: any): string => {
         if (!item.date) return '';
         if (typeof item.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.date)) return item.date;
@@ -353,13 +362,13 @@ export const HealthChart = ({
         if (isNaN(d.getTime())) return '';
         try { return dayFormatter.format(d); } catch { return d.toISOString().split('T')[0]; }
       };
-      const shifted = shiftPrevious(chartData, dayOf, cutoffDateOnly, compareDays)
+      const shifted = shiftPrevious(chartData, dayOf, cutoffDateOnly, compareDays, offsetDays)
         .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
       previous = bucketize(shifted);
     }
 
     return { current: bucketize(sorted), previous };
-  }, [data, fetchedData, url, granularity, period, compareDays, timezone, dataKey, stackKeys, rangeKeys, type, aggregation, preferredUnits]);
+  }, [data, fetchedData, url, granularity, period, compareDays, offsetDays, timezone, dataKey, stackKeys, rangeKeys, type, aggregation, preferredUnits]);
   const processedData = bucketed.current;
   const previousData = bucketed.previous;
 
@@ -511,7 +520,7 @@ export const HealthChart = ({
     return stats;
   }, [data, fetchedData, url, processedData, previousData, dataKey, type, rangeKeys, stackKeys, sumStackInLatest]);
 
-  // Item 87: one dashed series for the previous period. Skipped for range bars and
+  // Item 87: one dashed series for the baseline window. Skipped for range bars and
   // stacks, where a second copy of every series would be unreadable; the headline
   // still compares their averages.
   const prevKey = `prev_${dataKey}`;
@@ -520,7 +529,7 @@ export const HealthChart = ({
     () => (showPrevSeries ? mergePrevious(processedData, previousData, dataKey, prevKey) : processedData),
     [showPrevSeries, processedData, previousData, dataKey, prevKey],
   );
-  const prevName = `Previous ${period}`;
+  const prevName = baselineSuffix ? `${period}${baselineSuffix}` : `Previous ${period}`;
 
   const safeDateFormatter = (str: string) => {
     const d = parseUTCDate(str);
@@ -599,7 +608,7 @@ export const HealthChart = ({
                 </span>
                 {compareDays && (
                   <span className="text-[9px] font-medium text-zinc-400/70 dark:text-zinc-500/70">
-                    prev {period}: {formatAverage(periodStats.prevAverage)} {preferredUnits === 'stone' && isWeightBased ? '' : unit}
+                    {baselineSuffix ? `${period}${baselineSuffix}` : `prev ${period}`}: {formatAverage(periodStats.prevAverage)} {preferredUnits === 'stone' && isWeightBased ? '' : unit}
                     {(() => {
                       const pct = percentChange(periodStats.average, periodStats.prevAverage);
                       return pct === null ? null : <span className="ml-1 font-bold">({formatChange(pct)})</span>;
@@ -640,19 +649,24 @@ export const HealthChart = ({
         
         {!isMini && (
           <div className="flex justify-end items-center gap-2">
-            {periodDays(period) !== null && (
-              <button
-                onClick={() => setCompare(c => !c)}
-                aria-pressed={compare}
-                title="Compare with the previous period of the same length"
-                className={cn(
-                  "px-2 py-1 text-[9px] font-bold uppercase rounded-md border transition-all",
-                  compare ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 border-transparent" : "text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 border-black/5 dark:border-white/5"
-                )}
-              >
-                vs prev
-              </button>
-            )}
+            {windowDays !== null && availableBaselines(windowDays).map((key) => {
+              const b = BASELINES.find(x => x.key === key)!;
+              const on = baseline === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setBaseline(prev => (prev === key ? null : key))}
+                  aria-pressed={on}
+                  title={b.title}
+                  className={cn(
+                    "px-2 py-1 text-[9px] font-bold uppercase rounded-md border transition-all",
+                    on ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 border-transparent" : "text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300 border-black/5 dark:border-white/5"
+                  )}
+                >
+                  {b.label}
+                </button>
+              );
+            })}
             <div className="flex bg-zinc-50 dark:bg-zinc-800/50 p-1 rounded-lg border border-black/5 dark:border-white/5">
               {(['1d', '7d', '30d', '90d', '1y', 'all'] as Period[]).map((p) => (
                 <button
