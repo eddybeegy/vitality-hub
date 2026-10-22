@@ -10,8 +10,13 @@
  * was stored in the wrong unit). The trend is the change between the mean of
  * the first and last TREND_SESSIONS sessions inside the window.
  *
- * The data comes from Apple workouts today (they carry distance and average HR);
- * the Strava module is still a placeholder that stores nothing.
+ * No source populates `workouts.heart_rate_avg`: Apple's export carries no
+ * whole-workout average and Hevy has no such field, so the column is NULL on every
+ * row ever stored and this card rendered empty until 2026-10-22. The server now
+ * derives the average from the `heart_rate` metrics inside each session
+ * (src/lib/workoutHeartRate.ts) and ships it in the same field. Distance is still
+ * only on the minority of workouts that have one, and the Strava module is still a
+ * placeholder that stores nothing.
  */
 import { metricDay } from './baselines';
 import { addDays } from './dayTags';
