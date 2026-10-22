@@ -35,6 +35,7 @@ import { BpSummary } from './BpSummary';
 import { BodyDiagram } from './BodyDiagram';
 import { computeReadiness } from '../lib/bodyDiagram';
 import { isTargetSet } from '../lib/targets';
+import { toDateStr, addDays } from '../lib/dayWalk';
 
 const BodyDiagramWidget: React.FC<{ workouts: any[]; recoveryDays: number }> = ({ workouts, recoveryDays }) => {
   const regionScores = computeReadiness(workouts, recoveryDays);
@@ -582,7 +583,10 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                                     fat: { metricType: 'fat', label: 'Fat', unit: 'g', decimals: 0 },
                                     fiber: { metricType: 'fiber', label: 'Fiber', unit: 'g', decimals: 0 },
                                     water: { metricType: 'water', label: 'Water', unit: 'ml', decimals: 0 },
-                                    active_energy: { metricType: 'active_energy', label: 'Active Energy', convert: (v: number) => v / 4.184, unit: 'kcal', decimals: 0 },
+                                    // No `convert`: apple_health energy is already stored in kcal (the ingest
+                                    // divides by 4.184 on the way in). The /4.184 that used to be here was a
+                                    // SECOND conversion -- it showed 444 kcal/day of active energy as 106.
+                                    active_energy: { metricType: 'active_energy', label: 'Active Energy', unit: 'kcal', decimals: 0 },
                                     sleep: { metricType: 'sleep', label: 'Sleep', convert: (v: number) => v / 3600, unit: 'h', decimals: 1 },
                                     exercise_time: { metricType: 'exercise_time', label: 'Exercise Time', unit: 'min', decimals: 0 },
                                     stand_time: { metricType: 'stand_time', label: 'Stand Time', convert: (v: number) => v / 60, unit: 'h', decimals: 1 },
@@ -991,12 +995,6 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                                 (summaryData.workouts || []).map((w: any) => w.timestamp.split('T')[0])
                               );
 
-                              const toDateStr = (d: Date) => d.toISOString().split('T')[0];
-                              const addDays = (d: Date, n: number) => {
-                                const nd = new Date(d);
-                                nd.setDate(nd.getDate() + n);
-                                return nd;
-                              };
 
                               const today = new Date(getLocalDateString(settings?.timezone));
                               let cursor = workoutDates.has(toDateStr(today)) ? today : addDays(today, -1);
@@ -1073,12 +1071,6 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                                   .map((m: any) => m.timestamp)
                               );
 
-                              const toDateStr = (d: Date) => d.toISOString().split('T')[0];
-                              const addDays = (d: Date, n: number) => {
-                                const nd = new Date(d);
-                                nd.setDate(nd.getDate() + n);
-                                return nd;
-                              };
 
                               const today = new Date(getLocalDateString(settings?.timezone));
                               let cursor = loggedDates.has(toDateStr(today)) ? today : addDays(today, -1);
@@ -1149,12 +1141,6 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                                 .map((m: any) => m.timestamp);
                               const metDates = new Set(metThreshold);
 
-                              const toDateStr = (d: Date) => d.toISOString().split('T')[0];
-                              const addDays = (d: Date, n: number) => {
-                                const nd = new Date(d);
-                                nd.setDate(nd.getDate() + n);
-                                return nd;
-                              };
 
                               const today = new Date(getLocalDateString(settings?.timezone));
                               let cursor = metDates.has(toDateStr(today)) ? today : addDays(today, -1);

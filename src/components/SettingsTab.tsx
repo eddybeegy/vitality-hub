@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { signOut } from '../lib/apiFetch';
+import { metricsCsvHref, isWindowed, rangeOrderError } from '../lib/exportHref';
 import { useUIStore } from '../store/useUIStore';
 
 interface SettingsTabProps {
@@ -112,6 +113,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
 
   const availableModels = currentProvider?.models || [];
   const [exportUrl, setExportUrl] = React.useState<string | null>(null);
+  // Export range (metrics CSV only). Empty = the full export, which stays the default:
+  // a backup button that silently drops history is worse than a big download.
+  const [exportStart, setExportStart] = React.useState('');
+  const [exportEnd, setExportEnd] = React.useState('');
   const [exportLoading, setExportLoading] = React.useState(false);
   const [exportError, setExportError] = React.useState<string | null>(null);
 
@@ -519,12 +524,55 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
                 <Download size={16} /> Data Export &amp; Backup
               </h3>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">Download your own data at any time. CSV files cover a single dataset; the JSON backup includes everything (metrics, workouts with exercises/sets, targets, meals, routines).</p>
+              <div className="rounded-xl border border-black/5 dark:border-white/5 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <p className="text-xs font-bold text-zinc-700 dark:text-zinc-300">Metrics CSV date range <span className="font-normal text-zinc-500">(optional)</span></p>
+                  {isWindowed(exportStart, exportEnd) && (
+                    <button
+                      type="button"
+                      onClick={() => { setExportStart(''); setExportEnd(''); }}
+                      className="text-xs font-bold text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="text-xs text-zinc-500 dark:text-zinc-400 space-y-1">
+                    <span>From</span>
+                    <input
+                      type="date"
+                      value={exportStart}
+                      onChange={e => setExportStart(e.target.value)}
+                      className="w-full bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-zinc-100"
+                    />
+                  </label>
+                  <label className="text-xs text-zinc-500 dark:text-zinc-400 space-y-1">
+                    <span>To</span>
+                    <input
+                      type="date"
+                      value={exportEnd}
+                      onChange={e => setExportEnd(e.target.value)}
+                      className="w-full bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-zinc-100"
+                    />
+                  </label>
+                </div>
+                {rangeOrderError(exportStart, exportEnd) ? (
+                  <p className="text-xs font-bold text-rose-600 dark:text-rose-400">{rangeOrderError(exportStart, exportEnd)}</p>
+                ) : (
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    {isWindowed(exportStart, exportEnd)
+                      ? 'Applies to Metrics (CSV) only. Both dates are inclusive; leave one blank for an open end.'
+                      : 'Leave blank to export every metric you have \u2014 the complete history, and a large download.'}
+                  </p>
+                )}
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <a
-                  href="/api/export/metrics.csv"
+                  href={metricsCsvHref(exportStart, exportEnd)}
                   className="flex items-center justify-center gap-2 bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 text-zinc-900 dark:text-zinc-100 py-3 rounded-xl font-bold text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all"
                 >
-                  <Download size={14} /> Metrics (CSV)
+                  <Download size={14} /> Metrics (CSV){isWindowed(exportStart, exportEnd) ? ' \u00b7 range' : ''}
                 </a>
                 <a
                   href="/api/export/workouts.csv"
@@ -538,6 +586,27 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
                 >
                   <Download size={14} /> Full Backup (JSON)
                 </a>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between p-4 rounded-xl border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-zinc-800/50">
+              <div>
+                <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100">Correlation Explorer</p>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">Show the correlation panel on the Activity tab</p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setSettings({ ...settings, enable_correlations: !settings.enable_correlations })}
+                  className={cn(
+                    "w-12 h-6 rounded-full transition-colors relative",
+                    settings.enable_correlations ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-700"
+                  )}
+                >
+                  <div className={cn(
+                    "absolute top-1 w-4 h-4 rounded-full bg-white transition-all",
+                    settings.enable_correlations ? "left-7" : "left-1"
+                  )} />
+                </button>
               </div>
             </div>
 

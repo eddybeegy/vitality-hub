@@ -35,7 +35,9 @@ const TARGET_METRIC_MAP: Record<string, { metricType: string; convert?: (v: numb
   exercise_time: { metricType: 'exercise_time' },
   stand_time: { metricType: 'stand_time', convert: (v: number) => v / 60 },
   fiber: { metricType: 'fiber' },
-  active_energy: { metricType: 'active_energy', convert: (v: number) => v / 4.184 },
+  // Stored in kcal already; the /4.184 that was here double-converted. See
+  // modules/apple_health.ts.
+  active_energy: { metricType: 'active_energy' },
   blood_oxygen_saturation: { metricType: 'oxygen_saturation' },
 };
 

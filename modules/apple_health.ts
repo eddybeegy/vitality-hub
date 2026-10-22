@@ -139,7 +139,7 @@ export const AppleHealthModule: DataSourceModule = {
           continue;
         }
 
-        const unit = metric.units || metric.unit || "";
+        let unit = metric.units || metric.unit || "";
         let dataPoints = metric.data || metric.metrics || metric.values || metric.samples || (metric.qty !== undefined || metric.value !== undefined ? [metric] : []);
         if (!Array.isArray(dataPoints)) dataPoints = [dataPoints];
 
@@ -182,10 +182,16 @@ export const AppleHealthModule: DataSourceModule = {
               numericVal = numericVal * 3600;
               await insertStmt.run(userId, cleanName, numericVal, 's', ts);
             } else {
-              // Unit conversion for energy (kJ to kcal)
+              // Unit conversion for energy (kJ to kcal). The `unit` column must follow the
+              // value: this converted the number and then stored the incoming 'kJ' string
+              // with it, so 262k apple_health energy rows hold kcal values labelled kJ
+              // (measured 2026-10-22: basal 1,740/day, which is a plausible BMR in kcal
+              // and an impossible 416 kcal in kJ). Two UI surfaces trusted that label and
+              // divided by 4.184 a second time.
               if ((cleanName === 'active_energy' || cleanName === 'basal_energy' || cleanName === 'calories_in') && 
                   (unit.toLowerCase().includes('kj') || unit.toLowerCase().includes('kilojoule'))) {
                 numericVal = numericVal / 4.184;
+                unit = 'kcal';
               }
 
             try {

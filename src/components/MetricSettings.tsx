@@ -9,6 +9,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { withAllSources } from '../lib/sourceList';
 
 interface MetricSource {
   id: string;
@@ -23,8 +24,16 @@ const AVAILABLE_SOURCES: MetricSource[] = [
   { id: 'withings', name: 'Withings' },
   { id: 'hevy', name: 'Hevy' },
   { id: 'strava', name: 'Strava' },
+  // Sweep item 68: healthsync writes to `metrics` from outside this codebase (it has no
+  // ingest module here) and was missing from this list entirely, so its rows could not
+  // be ranked from the UI. Listed below the dedicated modules because it relays the same
+  // Apple Health readings -- same intent as SOURCE_RANK, where healthsync is 4 against
+  // apple_health's 3.
+  { id: 'healthsync', name: 'HealthSync' },
   { id: 'manual', name: 'Manual Entry' }
 ];
+
+const ALL_SOURCE_IDS = AVAILABLE_SOURCES.map(s => s.id);
 
 const COMMON_METRICS = [
   { id: 'steps', name: 'Steps' },
@@ -64,7 +73,7 @@ export const MetricSettings = () => {
   }, [settings?.metric_priorities]);
 
   const handleMove = (metricId: string, sourceId: string, direction: 'up' | 'down') => {
-    const currentPriorities = priorities[metricId] || AVAILABLE_SOURCES.map(s => s.id);
+    const currentPriorities = withAllSources(priorities[metricId] || [], ALL_SOURCE_IDS);
     const index = currentPriorities.indexOf(sourceId);
     if (index === -1) return;
 
@@ -122,7 +131,7 @@ export const MetricSettings = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {COMMON_METRICS.map((metric) => {
-          const currentPriorities = priorities[metric.id] || AVAILABLE_SOURCES.map(s => s.id);
+          const currentPriorities = withAllSources(priorities[metric.id] || [], ALL_SOURCE_IDS);
           
           return (
             <div key={metric.id} className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 shadow-sm overflow-hidden p-6">
