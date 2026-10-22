@@ -33,8 +33,18 @@ export function tzOffsetMs(timeZone: string, at: Date): number {
 
 /**
  * The instant at which the wall clock in `timeZone` reads `dateStr` `timeStr`
- * ('YYYY-MM-DD', 'HH:MM'). Spring-forward times that do not exist resolve to the
- * instant the clock jumps to; autumn times that occur twice resolve to the first.
+ * ('YYYY-MM-DD', 'HH:MM').
+ *
+ * DST edges, as MEASURED rather than as intended (the earlier version of this comment
+ * claimed the opposite of both and was corrected 2026-10-22):
+ *  - A spring-forward time that does not exist resolves to an instant BEFORE the gap,
+ *    not to the instant the clock jumps to: America/New_York 2026-03-08 02:30 resolves
+ *    to 06:30Z, which is 01:30 EST, 30 minutes before the gap opens.
+ *  - An autumn time that occurs twice resolves to the SECOND occurrence:
+ *    Europe/London 2026-10-25 01:30 resolves to 01:30Z, not the 00:30Z first pass.
+ * Both fall out of the two-pass correction below and are deterministic, so callers can
+ * rely on them -- but do not assume either is the conventional choice.
+ *
  * Throws nothing -- an unusable `timeZone` falls back to treating the input as UTC,
  * which is at least deterministic.
  */
