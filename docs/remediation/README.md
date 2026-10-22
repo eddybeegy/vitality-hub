@@ -3,7 +3,29 @@
 Two threads work this list. **Kieron set the split below on 2026-10-21 16:10
 (Telegram, Tier 1); it supersedes any earlier division of labour in this file.**
 
-## Ownership split (Kieron, 2026-10-21 16:10)
+## Ownership change (Kieron, 2026-10-22 06:30): builder is now the primary developer
+
+**Kieron handed all development back to builder "until I say otherwise".** From
+2026-10-22 06:30 **builder owns everything**: application code (`server.ts`,
+migration SQL, tests, features) as well as test, deploy and operations. The cloud
+project session has stood down and starts no new work. The 2026-10-21 16:10 split
+below is kept for history and **no longer applies** while this change stands.
+
+**Kieron may hand work back to the cloud project later.** A cloud session starts
+with no memory beyond this repo. So, while builder holds development:
+
+- Keep `README.md` (this file), `handoff.md` and `progress.md` current enough
+  that a fresh developer could resume from them alone. That means: open PRs and
+  their state, the next roadmap item, any half-built branch, and every rule
+  learned the hard way.
+- The working rules still hold for builder's own code: one item per branch/PR
+  (`fix/item-<n>-<slug>`, title `item <n>: ...`), never two open branches touching
+  `server.ts`, and the five gates (tsc zero errors, vitest green, no nutrition
+  DELETE, no bare `AT TIME ZONE`, portable SQL).
+- The full handover (open PRs, the remaining roadmap in order, the half-built
+  item 90 branch, and known traps) is at the top of [`handoff.md`](handoff.md).
+
+## Ownership split (Kieron, 2026-10-21 16:10) — superseded 2026-10-22 06:30, see above
 
 **cloud — the claude.ai project session "Vitality Hub" — is the primary
 developer.** It owns:
