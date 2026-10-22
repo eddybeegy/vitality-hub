@@ -116,15 +116,16 @@ describe('getNutrition', () => {
 });
 
 describe('getWorkouts', () => {
-  const workout = { id: 1, name: 'Pull', duration: 3600, volume: 4210.5, source: 'hevy', timestamp: '2026-10-20T17:00:00Z' };
+  // `duration` is stored in minutes, not seconds.
+  const workout = { id: 1, name: 'Pull', duration: 48, volume: 4210.5, source: 'hevy', timestamp: '2026-10-20T17:00:00Z' };
 
-  it('converts duration to minutes and nests exercises', async () => {
+  it('reports duration in minutes as stored and nests exercises', async () => {
     const { db } = fakeDb([
       [/FROM workouts/, [workout]],
       [/FROM workout_exercises/, [{ id: 10, workout_id: 1, exercise_title: 'Row', sets_count: 3 }]],
     ]);
     const out = await tools.getWorkouts(ctx(db), { days: 7 });
-    expect(out.workouts[0]).toMatchObject({ name: 'Pull', duration_minutes: 60, volume: 4210.5 });
+    expect(out.workouts[0]).toMatchObject({ name: 'Pull', duration_minutes: 48, volume: 4210.5 });
     expect(out.workouts[0].exercises).toEqual([{ exercise_title: 'Row', sets_count: 3 }]);
   });
 
@@ -160,15 +161,23 @@ describe('getWorkouts', () => {
 });
 
 describe('getSleep', () => {
+  // Stored values are seconds, whatever metrics.unit claims: 25200 s is 7 h.
   const stages = [
-    { type: 'sleep', value: 420, timestamp: '2026-10-21T02:00:00Z' },
-    { type: 'sleep_deep', value: 90, timestamp: '2026-10-21T02:00:00Z' },
+    { type: 'sleep_total', value: 25200, timestamp: '2026-10-21T02:00:00Z' },
+    { type: 'sleep_deep', value: 5400, timestamp: '2026-10-21T02:00:00Z' },
   ];
 
   it('reports stages in hours on the night they belong to', async () => {
     const { db } = fakeDb([[/FROM users/, USER], [/type IN \(\?, \?\)/, []], [/FROM metrics/, stages]]);
     const out = await tools.getSleep(ctx(db), { days: 7 });
-    expect(out.nights[0]).toEqual({ date: '2026-10-20', asleep_hours: 7, deep_hours: 1.5 });
+    expect(out.nights[0]).toEqual({ date: '2026-10-20', total_hours: 7, deep_hours: 1.5 });
+  });
+
+  it('asks for sleep_total, not a bare sleep type this schema does not have', async () => {
+    const { db, calls } = fakeDb([[/FROM users/, USER], [/type IN \(\?, \?\)/, []], [/FROM metrics/, []]]);
+    await tools.getSleep(ctx(db), {});
+    const q = calls.find((c) => c.params.includes('sleep_in_bed'))!;
+    expect(q.params).toContain('sleep_total');
   });
 
   it('returns no timing summary, and says why, below five paired nights', async () => {

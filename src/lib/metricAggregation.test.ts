@@ -8,6 +8,7 @@ describe('isSummedMetric', () => {
     expect(isSummedMetric('steps')).toBe(true);
     expect(isSummedMetric('protein')).toBe(true);
     expect(isSummedMetric('sleep_deep')).toBe(true);
+    expect(isSummedMetric('sleep_total')).toBe(true);
   });
 
   it('treats readings as not summed', () => {
