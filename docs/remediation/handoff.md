@@ -46,6 +46,21 @@ for a fresh session to resume from them alone (see the ownership note in
     After one sync, read the "Sleep data point keys" log line.
   - Whoever resumes it: rebase it on `main` and open a draft PR as the claim.
 
+### builder addendum (page-watch, 2026-10-22 07:35)
+
+- **#61 (item 89) is merged and deployed** — `c8aa8e99`, so nothing from the cloud
+  session is left open. Tracker rows **80-89** are now written in `progress.md`.
+- Verified end state on ser5 at 07:35 BST: clone `/opt/build/vitality-hub` at
+  `c8aa8e9` = `origin/main`, tree clean but for untracked `data/`, container
+  `vitality` recreated 07:34:00 BST, `GET localhost:3000/` 200, `/api/settings` 401.
+  Note for later sessions: the app listens on **3000**, not 8097 — a health check
+  against 8097 returns `000` and looks like an outage.
+- Items 80-89 were merged in two bursts seconds apart (07:24:42-07:26:41 and
+  07:32-07:33 BST) by the cloud session as it handed over, so they did **not** go
+  through builder's per-PR gate (tsc + vitest + deploy + live verify). Per-item
+  behaviour on screen is unverified; the end state above is all that is confirmed.
+- `fix/item-90-bedtime-timing` is still branch-only, as described above.
+
 ### Remaining roadmap, in order
 
 The source is the feature-ideas page. A **copy with a status chip on every idea**
