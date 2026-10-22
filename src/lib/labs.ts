@@ -381,6 +381,16 @@ export function panelDates(rows: readonly LabRow[]): PanelDate[] {
  */
 export interface OutOfRangeRow { analyte: string; label: string; value: number; unit: string | null; flag: Flag; low: number | null; high: number | null; source: EffectiveRange['source']; taken_on: string }
 
+/**
+ * Current exceptions: the LATEST VALUE FOR EACH ANALYTE that sits outside its range,
+ * which is not the same as "everything on the newest panel". A follow-up that retests
+ * one analyte must not hide a low ferritin from the panel a month earlier - nothing
+ * has been measured since, so it is still the current reading.
+ *
+ * Each row therefore carries its own `taken_on`, and callers should show it when it
+ * differs from the newest panel's date: "ferritin low (as of 1 Sep)" is honest about
+ * its age in a way a bare "ferritin low" is not.
+ */
 export function outOfRange(rows: readonly LabRow[], sex: Sex = null): OutOfRangeRow[] {
   return trends(rows, sex)
     .filter((t) => t.flag === 'low' || t.flag === 'high')

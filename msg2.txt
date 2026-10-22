@@ -1,0 +1,21 @@
+Fix labs out-of-range semantics in docs, and date stale exceptions
+
+Live check: a September panel's low ferritin was reported as an exception while the
+newest panel (October) contained only LDL - but the README, the API's own wording and
+a test name all said outOfRange() reports "the latest panel only".
+
+The behaviour is the right one and the documentation was wrong. A follow-up that
+retests one analyte must not hide a low ferritin from the panel before it: nothing
+has been measured since, so it is still the current reading. What was missing was the
+age - a bare "ferritin low" implied the newest draw found it.
+
+- outOfRange() gains a docstring stating the actual rule (latest value per analyte)
+  and why, plus the instruction to show taken_on when it is older.
+- The card now prints "as of <date>" on any exception that is not from the newest
+  panel.
+- Test renamed to match, and a new one pins the cross-panel case the old one could
+  not distinguish (both readings satisfied it).
+- README bullet rewritten, including the case that does drop off: an analyte retested
+  normal, because the newer result for that analyte replaces the old one.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
