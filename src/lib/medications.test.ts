@@ -143,7 +143,19 @@ describe('adherence', () => {
 
   it('handles an empty log and an empty item list', () => {
     expect(adherence([], [], '2026-10-01', '2026-10-22')).toEqual([]);
-    expect(adherence([med()], [], '2026-10-22', '2026-10-22')[0].percent).toBe(0);
+  });
+
+  // Caught on the live database: a freshly added item read "0%", which says the
+  // user failed a course they had not started logging. Nothing said at all is
+  // not a miss, so the percentage is withheld until there is one tick or skip.
+  it('reports no percentage at all until something is logged', () => {
+    const out = adherence([med()], [], '2026-10-16', '2026-10-22');
+    expect(out[0]).toMatchObject({ scheduled_days: 7, taken_days: 0, skipped_days: 0, unlogged_days: 7, percent: null });
+  });
+
+  it('counts unlogged days against the percentage once logging has started', () => {
+    const out = adherence([med()], [{ medication_id: 1, dose_date: '2026-10-22', taken: 1 }], '2026-10-20', '2026-10-22');
+    expect(out[0]).toMatchObject({ scheduled_days: 3, taken_days: 1, unlogged_days: 2, percent: 33 });
   });
 });
 

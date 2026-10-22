@@ -4682,10 +4682,15 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       if ((count?.n || 0) >= MAX_MEDICATION_ITEMS) {
         return res.status(400).json({ error: `Limited to ${MAX_MEDICATION_ITEMS} items` });
       }
-      const r = await db.prepare(
+      await db.prepare(
         "INSERT INTO medications (user_id, name, kind, dose, frequency, start_date, end_date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
       ).run(req.user.id, m.name, m.kind, m.dose, m.frequency, m.start_date, m.end_date, m.notes);
-      res.json({ id: r.lastInsertRowid ?? null, ...m, updated: false });
+      // Read the id back rather than trusting lastInsertRowid: the Postgres adapter
+      // does not set it, so the route was returning id: null on the live database
+      // and every caller that wanted to log a dose straight after had nothing to
+      // address. (user_id, name) is unique, so this is the row just written.
+      const saved = await db.prepare("SELECT id FROM medications WHERE user_id = ? AND name = ?").get(req.user.id, m.name) as any;
+      res.json({ id: saved?.id ?? null, ...m, updated: false });
     } catch (e: any) {
       logEvent('error', `Failed to save medication: ${e?.message || e}`, 'App', req.user.id);
       res.status(500).json({ error: 'Failed to save medication' });
