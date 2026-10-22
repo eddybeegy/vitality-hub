@@ -21,6 +21,7 @@ import { DayTagsCard } from './DayTagsCard';
 import { computeTrainingLoad } from '../lib/trainingLoad';
 import { ProgressRing } from './ui/ProgressRing';
 import { CardSkeleton, ChartSkeleton } from './ui/Skeleton';
+import { projectGoal, weightTrend } from '../lib/weightTrend';
 import { ReadinessCard } from './ReadinessCard';
 import { computeSleepDebt, formatHours, sleepTargetHours } from '../lib/sleepDebt';
 import { DEFAULT_RANGE as DEFAULT_SET_RANGE, weeklySetsByMuscle } from '../lib/weeklySets';
@@ -357,46 +358,40 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                                     );
                                 }
 
-                                const start = Number(weightEntries[0].value);
-                                const current = Number(weightEntries[weightEntries.length - 1].value);
                                 const goal = Number(weightTarget.value);
-
-                                const totalDelta = start - goal;
-                                let progress = totalDelta === 0 ? 100 : ((start - current) / totalDelta) * 100;
-                                progress = Math.max(0, Math.min(100, progress));
-
-                                const remaining = current - goal;
-
-                                const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-                                const recentEntries = weightEntries.filter((m: any) => new Date(m.timestamp).getTime() >= thirtyDaysAgo);
-                                let etaLabel: string | null = null;
-                                if (recentEntries.length >= 2) {
-                                    const first = recentEntries[0];
-                                    const last = recentEntries[recentEntries.length - 1];
-                                    const days = (new Date(last.timestamp).getTime() - new Date(first.timestamp).getTime()) / (1000 * 60 * 60 * 24);
-                                    const dailyRate = days > 0 ? (Number(last.value) - Number(first.value)) / days : 0;
-                                    const movingTowardGoal = (goal < current && dailyRate < 0) || (goal > current && dailyRate > 0);
-                                    if (movingTowardGoal && dailyRate !== 0) {
-                                        const daysToGoal = Math.abs(remaining / dailyRate);
-                                        const weeks = Math.round(daysToGoal / 7);
-                                        etaLabel = weeks <= 1 ? '~1 week left' : `~${weeks} weeks left`;
-                                    }
-                                }
+                                const today = getLocalDateString(settings?.timezone);
+                                const trend = weightTrend(summaryData.metrics || [], today, settings?.timezone);
+                                if (!trend) return null;
+                                const projection = projectGoal(trend, goal, today);
+                                // Rate in kg, or lbs for imperial and stone (a weekly rate in stone is unreadable).
+                                const inLbs = settings?.preferred_units === 'imperial' || settings?.preferred_units === 'stone';
+                                const rate = Math.abs(trend.ratePerWeek) * (inLbs ? 2.20462 : 1);
+                                const rateUnit = inLbs ? 'lbs' : 'kg';
+                                const goalDateLabel = projection.goalDate
+                                    ? new Date(`${projection.goalDate}T12:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+                                    : null;
 
                                 return (
                                     <>
                                         <ProgressRing
-                                            progress={progress}
+                                            progress={projection.progress}
                                             color="#a855f7"
-                                            value={`${Math.round(progress)}%`}
+                                            value={`${Math.round(projection.progress)}%`}
                                             label="To Goal"
                                         />
                                         <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-3 text-center">
-                                            {formatWeight(current, settings?.preferred_units)} &rarr; {formatWeight(goal, settings?.preferred_units)}
+                                            Trend {formatWeight(trend.trend, settings?.preferred_units)} &rarr; {formatWeight(goal, settings?.preferred_units)}
                                         </p>
-                                        {etaLabel && (
-                                            <p className="text-[10px] text-zinc-400 dark:text-zinc-500 mt-1">{etaLabel} at current rate</p>
-                                        )}
+                                        <p className="text-[10px] text-zinc-400 dark:text-zinc-500 mt-1 text-center">
+                                            {Math.abs(trend.ratePerWeek) < 0.05
+                                                ? 'Holding steady'
+                                                : `${trend.ratePerWeek < 0 ? 'Losing' : 'Gaining'} ${rate.toFixed(rate < 1 ? 2 : 1)} ${rateUnit}/week`}
+                                            {projection.reached
+                                                ? ' · goal reached'
+                                                : goalDateLabel
+                                                    ? ` · on track for ${goalDateLabel}`
+                                                    : ' · not heading towards goal yet'}
+                                        </p>
                                     </>
                                 );
                             })()}
