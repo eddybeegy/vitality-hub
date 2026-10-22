@@ -40,6 +40,7 @@ import { pairNights, TIMING_TYPES } from "./src/lib/sleepTiming";
 import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toSnapshot, historyForAIContext, parseStoredComponents, READINESS_ALGO_VERSION, DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, type ReadinessSnapshot } from "./src/lib/readinessHistory";
 import { validateDayTagInput, normaliseTag, tagsForAIContext, todayIn, addDays, daysBetween, MAX_RANGE_DAYS, type DayTag } from "./src/lib/dayTags";
 import { zonedTimeToInstant } from './src/lib/tzPoint';
+import { mountMcpServer, MCP_PATH } from './src/mcp/server.js';
 
 // Increase MaxListeners limit to prevent TLSSocket warnings during concurrent API sync chunks
 EventEmitter.defaultMaxListeners = 50;
@@ -1282,6 +1283,18 @@ try {
     };
   }
 
+  // The MCP server's own token. Separate from the coach's on purpose: this one is
+  // read-only and the coach's can write targets and insights, so neither identity
+  // inherits the other's reach. /mcp is not under /api, so the allowlist names it
+  // directly and resolveServiceToken matches it the same way as any other path.
+  if (process.env.MCP_SERVICE_TOKEN && process.env.MCP_SERVICE_USER_ID) {
+    SERVICE_TOKENS['mcp'] = {
+      token: process.env.MCP_SERVICE_TOKEN,
+      userId: parseInt(process.env.MCP_SERVICE_USER_ID, 10),
+      allow: new Set([`POST ${MCP_PATH}`, `GET ${MCP_PATH}`, `DELETE ${MCP_PATH}`]),
+    };
+  }
+
   const constantEquals = (a: string, b: string) => {
     if (!a || !b || a.length !== b.length) return false;
     try { return timingSafeEqual(Buffer.from(a), Buffer.from(b)); } catch { return false; }
@@ -1354,6 +1367,21 @@ try {
       res.status(401).json({ error: 'Invalid token' });
     }
   };
+
+  // Mounted here, between the body parser and the /api auth mount: the transport
+  // needs the parsed body, and /mcp must not inherit requireAuth's cookie path --
+  // it authenticates with the `mcp` service token only (see src/mcp/server.ts).
+  mountMcpServer(app, {
+    db,
+    readingInstant,
+    filterMetricsByPriority,
+    enabled: !!SERVICE_TOKENS['mcp'],
+    authorize: (req: any) => {
+      const svc = resolveServiceToken(req);
+      return svc && svc.name === 'mcp' ? { userId: svc.userId, name: svc.name } : null;
+    },
+    log: (message: string) => console.log(message),
+  });
 
   app.use('/api', requireAuth);
 
