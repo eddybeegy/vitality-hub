@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Dumbbell, Activity, ChevronUp, ChevronDown, SearchX, Search, Trophy } from 'lucide-react';
+import { Dumbbell, Activity, ChevronUp, ChevronDown, SearchX, Search, Trophy, Check, RefreshCw } from 'lucide-react';
 import { SyncButton } from './SyncButton';
 import { cardioTrends, WINDOW_DAYS as CARDIO_WINDOW_DAYS, type Sport } from '../lib/cardioTrends';
 import { SyncStatus } from './SyncStatus';
@@ -9,6 +9,8 @@ import { HealthChart } from './HealthChart';
 import { formatWorkoutWeight, formatWeight, convertWeight, getWeightUnit, convertDistance, getDistanceUnit, formatPaceAndSpeed, formatDateWithTimezone, getLocalDateString } from '../lib/utils';
 import { analyseStrength, estimate1RM, isWeightedExercise, isWorkingSet, prKindLabel, REP_RANGES } from '../lib/strength';
 import { classifyProgress, RECENT_DAYS } from '../lib/plateaus';
+import { planForExercise, type PlanResult } from '../lib/progressionPlan';
+import { fetchJson } from '../lib/apiFetch';
 
 interface WorkoutsTabProps {
   summaryData: any;
@@ -23,6 +25,78 @@ interface WorkoutsTabProps {
   syncAllModules: () => Promise<void>;
   isSyncing: boolean;
 }
+
+/**
+ * Writes a stalled lift's deload straight into its Hevy routine via
+ * POST /api/hevy/update-routine. The numbers come from progressionPlan, which
+ * refuses rather than guesses - when it does, this renders the reason instead
+ * of a button, because the alternative is a wrong weight in Hevy.
+ */
+const ApplyToHevyButton = React.memo(({ result, units }: { result: PlanResult; units?: string }) => {
+  const [state, setState] = React.useState<'idle' | 'applying' | 'applied' | 'error'>('idle');
+  const [error, setError] = React.useState('');
+
+  if (!result || !result.plan || !result.target) {
+    return (
+      <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-2">
+        Can't push this to Hevy: {result?.reason || 'no plan for this lift.'}
+      </p>
+    );
+  }
+
+  const { plan, target } = result;
+  const apply = async () => {
+    setState('applying');
+    setError('');
+    try {
+      await fetchJson('/api/hevy/update-routine', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          routine_external_id: target.routine_external_id,
+          routine_title: target.routine_title,
+          progressions: [{ exercise_title: plan.exercise_title, sets: plan.sets }],
+        }),
+      });
+      setState('applied');
+    } catch (e: any) {
+      console.error('Apply to Hevy failed:', e);
+      setError(e?.message || 'Failed to update the routine.');
+      setState('error');
+    }
+  };
+
+  return (
+    <div className="mt-3 pt-3 border-t border-black/5 dark:border-white/5">
+      <p className="text-xs text-zinc-600 dark:text-zinc-300">
+        Next session: {plan.sets.length} {plan.sets.length === 1 ? 'set' : 'sets'} at{' '}
+        {formatWorkoutWeight(plan.topWeightKg, units)} (was {formatWorkoutWeight(plan.previousTopWeightKg, units)}), same reps.
+      </p>
+      <div className="flex items-center gap-2 mt-2 flex-wrap">
+        <button
+          onClick={apply}
+          disabled={state === 'applying' || state === 'applied'}
+          className={`px-3 py-1.5 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 disabled:opacity-70 ${
+            state === 'applied'
+              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+              : 'bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white'
+          }`}
+        >
+          {state === 'applying' ? <RefreshCw size={12} className="animate-spin" /> : state === 'applied' ? <Check size={12} /> : <Dumbbell size={12} />}
+          {state === 'applying' ? 'Applying' : state === 'applied' ? 'Applied' : 'Apply to Hevy'}
+        </button>
+        <span className="text-[11px] text-zinc-400 dark:text-zinc-500">
+          {state === 'applied'
+            ? `Updated ${target.routine_title || 'the routine'} in Hevy.`
+            : `Updates ${plan.exercise_title} in ${target.routine_title || 'its routine'}. Nothing else in the routine changes.`}
+        </span>
+      </div>
+      {state === 'error' && (
+        <p className="text-[11px] text-rose-600 dark:text-rose-400 mt-2">{error}</p>
+      )}
+    </div>
+  );
+});
 
 export const WorkoutsTab = React.memo(({
   summaryData,
@@ -109,6 +183,25 @@ export const WorkoutsTab = React.memo(({
   );
   const stalled = progress.filter(p => p.status !== 'progressing');
   const progressingCount = progress.length - stalled.length;
+
+  // Concrete deload per stalled lift, keyed by title. Derived from the last
+  // logged session (routine_exercises stores no target weights), so it moves
+  // with the data rather than being stored anywhere.
+  const plans = React.useMemo(() => {
+    const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: settings?.timezone || undefined, year: 'numeric', month: '2-digit', day: '2-digit' });
+    const out: Record<string, PlanResult> = {};
+    for (const p of stalled) {
+      out[p.title] = planForExercise({
+        title: p.title,
+        status: p.status,
+        workouts: summaryData.workouts || [],
+        routines: summaryData.routines || [],
+        routineExercises: summaryData.routineExercises || [],
+        dayOf: ts => dayFormat.format(new Date(ts)),
+      });
+    }
+    return out;
+  }, [stalled, summaryData.workouts, summaryData.routines, summaryData.routineExercises, settings?.timezone]);
 
   const [progressExercise, setProgressExercise] = React.useState('');
   const selectedStrength = strength.exercises.find(e => e.title === progressExercise) ?? strength.exercises[0];
@@ -800,6 +893,7 @@ export const WorkoutsTab = React.memo(({
                       ({p.change >= 0 ? '+' : ''}{(p.change * 100).toFixed(1)}%, {p.recentSessions} sessions)
                     </p>
                     <p className="text-xs text-zinc-600 dark:text-zinc-300 mt-2">{p.suggestion}</p>
+                    <ApplyToHevyButton result={plans[p.title]} units={settings?.preferred_units} />
                   </div>
                 ))}
               </div>
