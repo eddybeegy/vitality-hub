@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { History, Info, TrendingDown, TrendingUp, Minus } from 'lucide-react';
+import { History, Info, TrendingDown, TrendingUp, Minus, Thermometer } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, YAxis } from 'recharts';
 import { calculateReadinessScore } from '../lib/readiness';
 import { dayRange, explainChange, previousSnapshot, toSnapshot, type ReadinessSnapshot } from '../lib/readinessHistory';
 import { addDays } from '../lib/dayTags';
+import { checkIllnessWarning, describeSignals } from '../lib/illnessWarning';
 import { fetchJson } from '../lib/apiFetch';
 import { getLocalDateString } from '../lib/utils';
 import { useRefreshOnFocus } from '../lib/useRefreshOnFocus';
@@ -22,6 +23,8 @@ interface ReadinessCardProps {
   metrics: StandardizedMetric[];
   targets: any[];
   timezone?: string;
+  /** For the overreach-vs-illness call in the early warning; optional. */
+  workouts?: { timestamp: string; duration: number }[];
 }
 
 const HISTORY_DAYS = 30;
@@ -50,7 +53,7 @@ const formatDay = (day: string) => {
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
 };
 
-export const ReadinessCard: React.FC<ReadinessCardProps> = ({ metrics, targets, timezone }) => {
+export const ReadinessCard: React.FC<ReadinessCardProps> = ({ metrics, targets, timezone, workouts = [] }) => {
   const result = calculateReadinessScore(metrics, targets, timezone);
   const history = useReadinessHistory(timezone);
 
@@ -71,6 +74,8 @@ export const ReadinessCard: React.FC<ReadinessCardProps> = ({ metrics, targets, 
   const todaySnap = toSnapshot(today, result);
   const past = (history || []).filter(s => s.date < today);
   const prev = previousSnapshot(past, today);
+  const warning = checkIllnessWarning(metrics, workouts, today, timezone);
+  const warningLines = describeSignals(warning);
   const change = prev ? explainChange(todaySnap, prev) : null;
   // One point per calendar day so a day with no readings shows as a gap.
   const byDay = new Map(past.map(s => [s.date, s.score]));
@@ -113,6 +118,33 @@ export const ReadinessCard: React.FC<ReadinessCardProps> = ({ metrics, targets, 
           <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1">Readiness score, based on HRV, resting HR, sleep &amp; yesterday's strain</p>
         </div>
       </div>
+
+      {warning.level !== 'none' && (
+        <div
+          role="status"
+          className={cn(
+            "mb-4 p-3 rounded-2xl border flex items-start gap-2.5",
+            warning.level === 'alert'
+              ? "bg-rose-50 border-rose-200 text-rose-800 dark:bg-rose-950/40 dark:border-rose-900 dark:text-rose-200"
+              : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/40 dark:border-amber-900 dark:text-amber-200"
+          )}
+        >
+          <Thermometer size={16} className="shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-wider">
+              {warning.level === 'alert' ? 'Early warning' : 'Worth watching'}
+              {' · '}
+              {warning.cause === 'overreach' ? 'possible overreach' : 'possible illness'}
+            </p>
+            <p className="text-xs font-medium mt-0.5">{warning.message}</p>
+            {warningLines.length > 0 && (
+              <ul className="mt-1 text-[11px] opacity-80 space-y-0.5">
+                {warningLines.map(line => <li key={line}>{line}</li>)}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-4 flex-grow">
         <div className={cn("grid gap-3", components.length === 4 ? "grid-cols-2" : "grid-cols-3")}>

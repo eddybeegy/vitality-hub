@@ -619,6 +619,7 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                         metrics={summaryData.metrics || []}
                         targets={targets || []}
                         timezone={settings?.timezone}
+                        workouts={summaryData.workouts || []}
                       />
                     )}
                     {widgetId === 'micronutrient_radar' && (
