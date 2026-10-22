@@ -231,3 +231,85 @@ deploy, repo tree on ser5 clean at `6ca8f91` (only untracked `data/`).
   adds `.github/workflows/ci.yml` (npm ci, tsc, vitest under `TZ=Europe/London`,
   ESLint report-only) and sets the ~1000 existing `any`/unused-var hits to warn with
   11 real errors left. None of this was verified on the host: draft, so not gated.
+
+## Development back with builder, 2026-10-22 06:40-08:10
+
+Kieron moved all development back to builder (Telegram, 07:31) and asked that these
+docs stay current in case the shared model resumes. Everything below is builder's.
+
+### Blood pressure: Health Sync was republishing, not measuring (fixed at source)
+
+Kieron flagged the BP data as broken. Five real Withings cuff readings had become
+**32 healthsync "readings"**. Root cause is in the healthsync writer (`kb-health`,
+`/opt/stacks/ai-tools/indexer-health/index.mjs`), not in this app: Health Sync
+republishes its **entire** entity set on a trigger, and its point-in-time sensors
+carry no measurement date — only `last_changed`, which is the publish time. So each
+republish wrote a fresh row stamped "now". 62 of the 64 rows sat in clusters of 3+
+types at the identical second, and those types are exactly the item-71 dedupe scope.
+
+Guard deployed in `index.mjs` (backup `index.mjs.bak-republish-20261022`): branch 5
+skips a point-in-time sensor whose value is **unchanged** since the last stored
+reading for that type. Deliberately value-equality, not cluster detection — triggers
+arrive one entity at a time, so the first of a cluster always looks like a lone
+reading and would write anyway, giving a phantom systolic with a suppressed diastolic.
+
+The baseline lookup is **not scoped to healthsync**, and that matters: the 64 phantom
+rows were archived to `bp_republish_removed_metrics` and deleted, which left no
+healthsync baseline at all, so a source-scoped lookup would have let the very next
+republish write a fresh phantom straight on top of the cleanup. Caught before
+shipping; tested live in both directions (new value written, repeat suppressed).
+
+Surviving BP data is withings (10 systolic + 10 diastolic) and apple_health (4 + 10).
+**This root-causes the item-71 family**, so trigger `item71_healthsync_copy_guard`
+can eventually come out via its `down.sql` after a period of proving.
+
+### Sleep "duplication": there wasn't any — correcting an earlier claim
+
+Reported to Kieron that the sleep chart read 10.5-12.66h as shipped versus 5.49-6.59h
+single-source. **That was wrong** and was corrected to him the same morning. It was a
+replication over raw DB rows, a layer the client never sees: `aggregateDailyMetrics`
+applies `chooseSource` to summed metrics too, so `/api/data/summary` returns exactly
+one row per (sleep type, day) with `otherSources` provenance. 2026-10-17 is a single
+apple_health `sleep_total` of 23712.44s (6.59h) with `otherSources: {healthsync: 1}`.
+Replaying `getSleepDurationData` over the real payload gives 5.13-6.59h.
+
+Two latent defects in `getSleepDurationData` remain open, neither currently firing:
+
+- It has **no source filter of its own**. Correct today only because the payload
+  arrives pre-deduplicated — it would double on any caller that passes raw rows.
+- `d.total > 15 ? 8 : d.total` **fabricates an exact 8h night**. Fires 0 times across
+  156 days of payload data (2025-11-07 to 2026-10-21), but it is a silent invention.
+
+### Cardio-efficiency card: no workout has ever had an average HR (fixed, PR #64)
+
+The card rendered nothing. `workouts.heart_rate_avg` is NULL on **all 486 workouts,
+every source** — Apple's export carries no whole-workout average, Hevy has no such
+field. `cardioTrends` requires one, so it dropped every session.
+
+A first read blamed a field-name mismatch (`avgHeartRate` vs `heart_rate_avg`). That
+was wrong: `useHealthStore` runs the payload through `standardizeWorkout`, which maps
+them. The names were fine; the data was not.
+
+`/api/data/summary` now derives the average from the `heart_rate` metrics inside each
+session (`src/lib/workoutHeartRate.ts`) and ships it in the same field, flagged
+`heart_rate_avg_derived`. Nothing is written back to `workouts` — the derivation
+depends on which metrics have synced. Scope is only sessions in the card's 90-day
+window with a distance and no stored average: that lateral join measures **4.8ms**,
+while dropping the distance filter and running over every workout is **540ms** on
+every summary call. Both sides use `readingInstant`, not the raw columns, because
+healthsync stamps `metrics` as London wall-clock but `workouts` as UTC.
+
+Live: 16 sessions now carry a derived average and the card renders a `walk` trend of
+4 sessions. **Known gap**: the other 12 are hevy "Rowing & Core" sessions that
+`sportOf` does not match, left out deliberately because their `duration` covers the
+whole mixed session rather than the rowing, so metres-per-heartbeat would be
+measuring the core work too. A `row` sport needs a rowing-only duration first. With
+4 walks against `2 * TREND_SESSIONS = 6`, the card shows sessions but no change %.
+
+### Still open
+
+- `filteredKeyMetrics` (server.ts) is computed and **never used** — the raw
+  `keyMetrics` ships. Affects `weight`, `body_fat`, `muscle_mass`, `lean_body_mass`.
+- Harden `getSleepDurationData` (own source filter; drop the `> 15 ? 8` fabrication).
+- `fix/item-90-bedtime-timing` is pushed with no PR, half built.
+- Leftover git worktrees on ser5: `/tmp/wt12`, `wt13`, `wt20`-`wt23`.
