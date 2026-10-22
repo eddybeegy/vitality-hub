@@ -21,6 +21,7 @@ import { DayTagsCard } from './DayTagsCard';
 import { ProgressRing } from './ui/ProgressRing';
 import { CardSkeleton, ChartSkeleton } from './ui/Skeleton';
 import { ReadinessCard } from './ReadinessCard';
+import { computeSleepDebt, formatHours, sleepTargetHours } from '../lib/sleepDebt';
 import { SmartAdjustments } from './SmartAdjustments';
 import { formatWeight, convertWeight, getWeightUnit, getLocalDateString, formatDateWithTimezone, cn } from '../lib/utils';
 import { useSettingsStore } from '../store/useSettingsStore';
@@ -501,6 +502,26 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                                         <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-2">
                                             7-day average &middot; {inRange}/{thisWeek.entries.length} nights in 7-9h range
                                         </p>
+                                        {(() => {
+                                            const debt = computeSleepDebt(nightly, sleepTargetHours(targets || []), getLocalDateString(settings?.timezone));
+                                            if (!debt) return null;
+                                            return (
+                                                <div className="mt-3 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+                                                    <p className={cn(
+                                                        "text-sm font-semibold",
+                                                        debt.level === 'high' ? "text-rose-600 dark:text-rose-400"
+                                                            : debt.level === 'some' ? "text-amber-600 dark:text-amber-400"
+                                                            : "text-emerald-600 dark:text-emerald-400"
+                                                    )}>
+                                                        {debt.debtHours > 0 ? `Sleep debt ${formatHours(debt.debtHours)}` : 'No sleep debt'}
+                                                    </p>
+                                                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">
+                                                        Last {debt.windowNights} days vs your {formatHours(debt.targetHours)} target &middot; {debt.shortNights}/{debt.nights} nights short
+                                                        {debt.level !== 'ok' && <> &middot; about {debt.paybackMinutesPerNight} min extra a night for a week clears it</>}
+                                                    </p>
+                                                </div>
+                                            );
+                                        })()}
                                     </div>
                                 );
                             })()}
