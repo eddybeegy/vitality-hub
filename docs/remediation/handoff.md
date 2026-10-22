@@ -106,6 +106,57 @@ is still open** and is the odd one out — later PRs overtook it. At 07:10 the `
 container had been up ~8 h (still on `d08b4ec1`-era code), so items 77-79 are on `main`
 but **not yet deployed**; that deploy is the PR-watch loop's, in flight.
 
+### Update (builder, page-watch, 2026-10-22 07:15) — seven PRs queued, and one decision is with Kieron
+
+**Correction to the 07:10 amendment above:** items 77-79 *were* deployed — the `vitality`
+container was recreated **07:04:59 BST** on `1a1c3c3`, and `vitality-pr-watch-6c6d` has
+since written rows 77/78/79 as DONE/deployed (`11a38cf0`). My "not yet deployed" line was
+read off a `docker ps` taken a minute before that recreate; treat the rows as authoritative.
+
+**Cloud queue snapshot, 07:15 BST.** The *Feature ideas* thread is running well ahead of the
+tracker: **PRs #52-#58 are open and ungated**, all frontend-only, **none touch `server.ts`**,
+each with its own new pure module plus tests. `vitality-pr-watch-6c6d` owns gating, merging
+and deploying them and will write rows 80-86 as it goes; this snapshot exists so the queue is
+recorded on `main` and not only in the thread.
+
+| PR | item | head | size | files |
+| --- | --- | --- | --- | --- |
+| #52 | 80 plateau detection + next-step suggestions | `4fcea498` | +178 -1 | `WorkoutsTab.tsx`, `lib/plateaus.ts(.test)` |
+| #53 | 81 training load (fitness / fatigue / form, all workout minutes so Strava counts) | `f476d05c` | +194 -28 | `Dashboard.tsx`, `lib/trainingLoad.ts(.test)` |
+| #54 | 82 cardio fitness trend (metres per heartbeat) | `efea8e8b` | +226 -1 | `WorkoutsTab.tsx`, `services/healthDataService.ts`, `lib/cardioTrends.ts(.test)` |
+| #55 | 83 smoothed weight trend + goal date | `1b0dfe9a` | +174 -30 | `Dashboard.tsx`, `lib/weightTrend.ts(.test)` |
+| #56 | 84 suggested calorie and protein targets | `bf0d947b` | +136 -3 | `AdaptiveTdeeCard.tsx`, `NutritionTab.tsx`, `lib/adaptiveTargets.ts(.test)` |
+| #57 | 85 weekly micronutrient gaps | `f9be3db0` | +126 -10 | `Dashboard.tsx`, `lib/microGaps.ts(.test)` |
+| #58 | 86 correlation explorer | `9fc7e520` | +233 -0 | `ActivityTab.tsx`, `CorrelationExplorer.tsx`, `lib/correlation.ts(.test)` |
+
+**Merge-order hazard, same class as the #50/#51 import clash pr-watch already hit:** three of
+these edit `src/components/Dashboard.tsx` (#53, #55, #57) and two edit
+`src/components/WorkoutsTab.tsx` (#52, #54). Whichever lands first will make the others
+`dirty` at the import/JSX insertion point. Merge one, then trial-merge the rest before gating.
+`mergeable_state` at 07:15: #53/#54/#55 `clean`, #52/#56/#57/#58 `unstable` — on this repo
+`unstable` is normally Gemini's `review` job timing out at ~7m45s (see README), not the code.
+
+**Held by the thread as needing `server.ts`, so they are builder's, not the cloud's:**
+bedtime timing (needs sleep *start* times served) and training/rest-day targets.
+
+**Open decision, with Kieron on Telegram since 07:15 — do not pre-empt it.** The next roadmap
+item is a **Vitality Hub MCP server**, i.e. the first feature exposing his health data to a
+client outside the app. The thread offered: **A** a read-only `/mcp` route in `server.ts` on
+the existing service-token auth (its recommendation); **B** a separate stdio MCP script on the
+host against the DB read-only, nothing new on the network, host-only; **C** skip it. New
+external data exposure needs Kieron on a Tier 1 channel, so no agent should answer this in the
+thread until he has replied; builder will relay his answer. The thread is building the
+correlation explorer and period comparison meanwhile, so it is not blocked.
+
+**Watcher blind spot found this run — the Overview counter does not see thread questions.**
+The project Overview reported **"Waiting on you 0"** while that MCP question sat unanswered in
+the thread: an in-thread option card is not a "decision, review or permission request" as far
+as that counter is concerned, and the thread tile summary (`PRs #49-#56 up; next up is
+training-day targets`) does not mention it either. It was only visible because **the tab had
+drifted back onto the Feature-ideas thread** (`?thread=cmsg_...MbnPJC5mYUTjB3zdeUuf9H`) on its
+own. So: a question to Kieron can sit on this project with the gate reporting 0 waiting. Do
+not treat `waiting_on_you: 0` as "nothing needs a human".
+
 ## Ground rules for patches
 
 - **Do not put `docs/remediation/progress.md` in a code PR** (builder, 2026-10-21 21:28).
