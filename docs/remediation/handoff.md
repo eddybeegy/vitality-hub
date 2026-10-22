@@ -28,11 +28,8 @@ for a fresh session to resume from them alone (see the ownership note in
   kcal/protein targets), #57 (micronutrient gaps), #58 (correlation explorer),
   #59 (period comparison on charts) and #60 (training-day and rest-day targets).
   Each PR body carries its tracker-row text for `progress.md`.
-- **Open: #61, item 89, BP bands and 7-day average.** It adds NICE home bands
-  (135/85, 150/95, 180/120, low under 90/60), a 7-day average that needs 4 days,
-  and a `BpSummary` card under the Dashboard BP chart. The chart's reference
-  lines move to 135/85. It is client-only, and its body has the tracker row. It
-  was not seen in a browser.
+- **#61, item 89 (BP bands and 7-day average), merged after the handover was written**
+  (`c8aa8e9`). Its body carries the tracker row.
 - **Pushed, NO PR: `fix/item-90-bedtime-timing`, a half-built item 90 (bedtime
   and wake-time consistency).** It touches `server.ts`.
   - Done: the Apple Health ingest stores HAE `sleepStart`/`sleepEnd`, falling
@@ -51,7 +48,11 @@ for a fresh session to resume from them alone (see the ownership note in
 
 ### Remaining roadmap, in order
 
-The source is the feature-ideas page <https://claude.ai/artifact/BvnqazRXJJYEVrVRqEHrKZ>.
+The source is the feature-ideas page. A **copy with a status chip on every idea**
+(merged with its PR, partly built, or to do) is committed at
+[`feature-ideas.html`](feature-ideas.html), and the live original is the artifact
+<https://claude.ai/artifact/BvnqazRXJJYEVrVRqEHrKZ>. Keep the chips in the repo copy
+current as items land, so a hand-back starts from an accurate list.
 Kieron's ordering: the rest of the page in page order, with **phone alerts LAST**.
 
 1. **Item 90, bedtime timing.** Finish the branch above.

@@ -1,0 +1,143 @@
+<title>Vitality Hub Roadmap Status</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: a single reading column; a short "start here" shortlist, then areas, each a list of idea rows with value/effort chips. */
+:root{
+  --bg:#f5f7f6; --surface:#ffffff; --fg:#17201d; --muted:#5b6762; --line:#dde3e0;
+  --accent:#0f7a63; --accent-soft:#e1f1ec;
+  --hi:#0f7a63; --hi-bg:#dcf0e9; --md:#8a5a00; --md-bg:#f8ecd2; --lo:#5b6762; --lo-bg:#eaeeec;
+  --display:"Fraunces",Georgia,serif; --body:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#101614; --surface:#18201d; --fg:#e4ebe8; --muted:#97a49f; --line:#2a3531;
+  --accent:#4cc3a3; --accent-soft:#1b3029;
+  --hi:#6fd8b8; --hi-bg:#163a30; --md:#f0c16a; --md-bg:#3a2e14; --lo:#a9b5b0; --lo-bg:#26302c; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#101614; --surface:#18201d; --fg:#e4ebe8; --muted:#97a49f; --line:#2a3531;
+  --accent:#4cc3a3; --accent-soft:#1b3029;
+  --hi:#6fd8b8; --hi-bg:#163a30; --md:#f0c16a; --md-bg:#3a2e14; --lo:#a9b5b0; --lo-bg:#26302c; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.55}
+.wrap{max-width:860px;margin:0 auto;padding-block:40px 64px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:40px}
+h1,h2{font-family:var(--display);font-weight:600;text-wrap:balance;margin:0}
+h1{font-size:2.1rem;line-height:1.15}
+h2{font-size:1.35rem}
+.eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+header{display:flex;flex-direction:column;gap:10px}
+header p{margin:0;color:var(--muted);max-width:65ch}
+.legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:.82rem;color:var(--muted)}
+.start{background:var(--accent-soft);border-radius:14px;padding:20px 22px;display:flex;flex-direction:column;gap:12px}
+.start ol{margin:0;padding-left:1.3em;display:flex;flex-direction:column;gap:8px}
+.start li{padding-left:4px}
+.start b{font-weight:600}
+section{display:flex;flex-direction:column;gap:12px}
+.sec-head{display:flex;flex-direction:column;gap:4px;border-bottom:1px solid var(--line);padding-bottom:8px}
+.sec-head p{margin:0;color:var(--muted);font-size:.9rem}
+.list{display:flex;flex-direction:column}
+.idea{display:grid;grid-template-columns:1fr auto;gap:4px 16px;padding:12px 0;border-bottom:1px solid var(--line)}
+.idea:last-child{border-bottom:0}
+.idea h3{margin:0;font-size:1rem;font-weight:600}
+.idea p{margin:0;color:var(--muted);grid-column:1/2;min-width:0;max-width:68ch}
+.chips{grid-row:1/3;grid-column:2;display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+.chip{font-family:var(--mono);font-size:.7rem;padding:2px 8px;border-radius:99px;white-space:nowrap}
+.v-high{background:var(--hi-bg);color:var(--hi)} .v-med{background:var(--md-bg);color:var(--md)} .v-low{background:var(--lo-bg);color:var(--lo)}
+.st-done{background:var(--hi-bg);color:var(--hi);font-weight:600} .st-part,.st-open{background:var(--md-bg);color:var(--md);font-weight:600} .st-todo{background:transparent;color:var(--muted);border:1px dashed var(--line)}
+.e{background:transparent;color:var(--muted);border:1px solid var(--line)}
+.tier{font-family:var(--mono);font-size:.68rem;color:var(--accent);letter-spacing:.06em;text-transform:uppercase}
+code{font-family:var(--mono);font-size:.85em;background:var(--lo-bg);padding:1px 5px;border-radius:5px}
+footer{color:var(--muted);font-size:.85rem;border-top:1px solid var(--line);padding-top:16px;display:flex;flex-direction:column;gap:8px}
+footer p{margin:0;max-width:70ch}
+@media (max-width:560px){.idea{grid-template-columns:1fr}.chips{grid-row:auto;grid-column:1;flex-direction:row;align-items:center;flex-wrap:wrap}}
+</style>
+
+<div class="wrap">
+<header>
+  <span class="eyebrow">Vitality Hub · ideas · 21 Oct 2026</span>
+  <h1>What to build next</h1>
+  <p>Twenty-seven features grouped by area, each scored for value and effort. Every idea builds on data the app already collects (Hevy sets, Withings body comp, Apple Health HRV and sleep, Cronometer intake) and none repeats an open remediation item.</p>
+  <p><strong>Status at the handover to builder, 2026-10-22 06:35.</strong> 17 merged, 1 partly built (bedtime timing), 9 to do. Order for the rest: Kieron's ordering is page order with phone alerts LAST; see <code>handoff.md</code>. Live original: <a href="https://claude.ai/artifact/BvnqazRXJJYEVrVRqEHrKZ">claude.ai artifact</a>. Keep these chips current as items land.</p>
+  <div class="legend"><span><span class="chip st-done">merged</span> <span class="chip st-part">partly built</span> <span class="chip st-todo">to do</span></span></div>
+  <div class="legend"><span><span class="chip v-high">value high</span> <span class="chip v-med">value med</span> <span class="chip v-low">value low</span></span><span><span class="chip e">effort S / M / L</span> S is a day or two, M about a week, L more than that</span></div>
+</header>
+
+<div class="start">
+  <span class="eyebrow">Start here</span>
+  <h2>Five with the best value for effort</h2>
+  <ol>
+    <li><b>Personal baselines for HRV and resting HR.</b> Turns raw numbers into "normal for you" and sharpens readiness.</li>
+    <li><b>Estimated 1RM and personal records.</b> The set-level data from Hevy is already stored and unused for this.</li>
+    <li><b>Adaptive TDEE from intake and weight trend.</b> The single most useful nutrition feature, and both inputs are already here.</li>
+    <li><b>Day tags and chart annotations.</b> Cheap to build, and every chart and AI insight becomes easier to explain.</li>
+    <li><b>Alerts to your phone.</b> Stale feeds, a high BP reading or a low readiness morning, without opening the app. Build this one last, after the other four (Kieron, 21 Oct).</li>
+  </ol>
+</div>
+
+<section>
+  <div class="sec-head"><span class="eyebrow">Recovery and readiness</span><h2>Make readiness personal and explainable</h2><p>Readiness is computed on the fly from HRV, sleep and yesterday's strain, against fixed thresholds.</p></div>
+  <div class="list">
+    <div class="idea"><h3>Personal baselines with normal bands</h3><div class="chips"><span class="chip v-high">value high</span><span class="chip e">effort S</span><span class="chip st-done">merged #38</span></div><p>Rolling 7 and 60 day baselines for HRV, resting HR and sleep, shown as a shaded band on charts; readiness scores the deviation from your own normal instead of a population number.</p></div>
+    <div class="idea"><h3>Readiness history and "why it moved"</h3><div class="chips"><span class="chip v-high">value high</span><span class="chip e">effort S</span><span class="chip st-done">merged #47</span></div><p>Store one readiness snapshot per London day with its components, then chart it and show which component drove today's change. Today the score is recomputed and never kept.</p></div>
+    <div class="idea"><h3>Early illness and overreach warning</h3><div class="chips"><span class="chip v-high">value high</span><span class="chip e">effort M</span><span class="chip st-done">merged #49</span></div><p>Flag two or more mornings of resting HR up and HRV down beyond baseline (plus respiratory rate or wrist temperature if Apple Health supplies them). Often shows a cold a day or two before symptoms.</p></div>
+    <div class="idea"><h3>Sleep debt and timing</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort S</span><span class="chip st-part">debt merged #50 · timing: branch item-90, no PR</span></div><p>A 14-day running sleep debt against your sleep target, and bedtime drift, alongside the existing sleep consistency widget.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="eyebrow">Training</span><h2>Use the set-level data from Hevy and Strava</h2><p><code>workout_sets</code> already holds weight, reps, HR and distance per set, and exercises carry muscle groups.</p></div>
+  <div class="list">
+    <div class="idea"><h3>Estimated 1RM and personal records</h3><div class="chips"><span class="chip v-high">value high</span><span class="chip e">effort S</span><span class="chip st-done">merged #43</span></div><p>Epley or Brzycki e1RM per exercise over time, rep-range PRs (best 3RM, 5RM, 10RM), and a PR badge on the latest workout card.</p></div>
+    <div class="idea"><h3>Plateau detection and overload suggestions</h3><div class="chips"><span class="chip v-high">value high</span><span class="chip e">effort M</span><span class="chip st-done">merged #52 · Hevy push not done</span></div><p>Spot exercises with no e1RM gain in four weeks and propose the next targets; the existing apply-progression route can push them back to the Hevy routine.</p></div>
+    <div class="idea"><h3>Weekly sets per muscle group</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort S</span><span class="chip st-done">merged #51</span></div><p>Hard sets per muscle per week against a target range (for example 10 to 20), extending the muscle heatmap from "recent" to "enough".</p></div>
+    <div class="idea"><h3>Training load: fitness, fatigue and form</h3><div class="chips"><span class="chip v-high">value high</span><span class="chip e">effort M</span><span class="chip st-done">merged #53</span></div><p>Daily load from Strava HR or duration plus Hevy volume, with 7-day and 42-day rolling loads and their ratio. Feeds readiness and gives a clear "deload now" signal.</p></div>
+    <div class="idea"><h3>Cardio trends from Strava</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort M</span><span class="chip st-done">merged #54 · Apple workouts (Strava is a mock)</span></div><p>Pace at a fixed heart rate over time, and VO2 max alongside it, so aerobic fitness shows up even when routes vary.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="eyebrow">Nutrition and body composition</span><h2>Close the loop between intake and the scale</h2><p>Cronometer intake and Withings weight and lean mass sit side by side but are never combined.</p></div>
+  <div class="list">
+    <div class="idea"><h3>Adaptive TDEE</h3><div class="chips"><span class="chip v-high">value high</span><span class="chip e">effort M</span><span class="chip st-done">merged #45</span></div><p>Estimate true daily expenditure from the smoothed weight trend and logged intake over 2 to 4 weeks, then compare it with Apple's active plus basal energy.</p></div>
+    <div class="idea"><h3>Smoothed weight trend and goal date</h3><div class="chips"><span class="chip v-high">value high</span><span class="chip e">effort S</span><span class="chip st-done">merged #55</span></div><p>An exponential moving average line under the daily weigh-ins and a projected date for the weight goal, added to the existing goal progress widget.</p></div>
+    <div class="idea"><h3>Targets that adjust themselves</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort M</span><span class="chip st-done">merged #56 · suggestions only</span></div><p>Weekly calorie target suggestion from adaptive TDEE and the goal rate, and protein set per kg of Withings lean mass. Builds on Smart Adjustments; needs adaptive TDEE first.</p></div>
+    <div class="idea"><h3>Training-day and rest-day targets</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort S</span><span class="chip st-done">merged #60</span></div><p>Two sets of carb and calorie targets, picked automatically from whether a workout is logged or planned that day.</p></div>
+    <div class="idea"><h3>Weekly micronutrient gaps</h3><div class="chips"><span class="chip v-low">value low</span><span class="chip e">effort S</span><span class="chip st-done">merged #57 · food suggestions not done</span></div><p>Which nutrients averaged under 70% of target this week, with the foods you already eat that would close the gap.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="eyebrow">Insights and AI</span><h2>Give the coach better context, and you better questions</h2><p>AI insights are generated from a context bundle; there is no way to mark what happened on a day.</p></div>
+  <div class="list">
+    <div class="idea"><h3>Day tags and chart annotations</h3><div class="chips"><span class="chip v-high">value high</span><span class="chip e">effort S</span><span class="chip st-done">merged #46</span></div><p>Quick tags such as ill, travel, alcohol, late meal, poor sleep environment, shown as markers on every chart and passed to the AI.</p></div>
+    <div class="idea"><h3>Vitality Hub as an MCP server</h3><div class="chips"><span class="chip v-high">value high</span><span class="chip e">effort M</span><span class="chip st-todo">to do · waiting on Kieron&#x27;s pick</span></div><p>Expose read-only tools (metrics, workouts, nutrition, readiness) so Claude can answer questions over your real data. The MCP SDK is already a dependency and service tokens already exist.</p></div>
+    <div class="idea"><h3>Correlation explorer</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort M</span><span class="chip st-done">merged #58</span></div><p>Pick any two metrics with a lag (for example caffeine after 2pm against deep sleep) and see the relationship. An <code>enable_correlations</code> setting exists but nothing uses it.</p></div>
+    <div class="idea"><h3>Weekly and monthly digest</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort M</span><span class="chip st-todo">to do · with alerts</span></div><p>A Sunday summary of training, sleep, intake and weight against the previous week, delivered by the same channel as alerts.</p></div>
+    <div class="idea"><h3>Period comparison</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort S</span><span class="chip st-done">merged #59 · vs previous period only</span></div><p>Overlay this week against last, or this month against the same month last year, on any chart.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="eyebrow">Health records</span><h2>Things a GP would ask about</h2><p>Medications live as a JSON list in settings; there is nowhere for lab results.</p></div>
+  <div class="list">
+    <div class="idea"><h3>Medication and supplement log</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort M</span><span class="chip st-todo">to do</span></div><p>A daily "taken" check per item, adherence over time, and start and stop dates drawn as markers on charts to see effects.</p></div>
+    <div class="idea"><h3>Blood test results</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort M</span><span class="chip st-todo">to do</span></div><p>Manual entry of lipids, HbA1c, ferritin, vitamin D and so on, with reference ranges and trend lines.</p></div>
+    <div class="idea"><h3>Blood pressure categories and averages</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort S</span><span class="chip st-done">merged #61</span></div><p>NICE home-reading bands and a 7-day average in the style of a home BP protocol. Best done after open item 21 sorts out the BP widget.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="eyebrow">Alerts, data and app</span><h2>Reach you, and keep the data trustworthy</h2><p>There is no notification channel, and the service worker clears caches but serves nothing offline.</p></div>
+  <div class="list">
+    <div class="idea"><h3>Alerts to your phone</h3><div class="chips"><span class="chip v-high">value high</span><span class="chip e">effort S</span><span class="chip st-todo">to do · LAST</span></div><p>Telegram or ntfy messages for a feed past its 24h or 72h staleness threshold, a high BP reading, or a low readiness morning. The staleness rules already exist.</p></div>
+    <div class="idea"><h3>Data coverage calendar</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort S</span><span class="chip st-todo">to do</span></div><p>One row per source, one cell per day, coloured by rows received. Gaps like the stalled Apple workouts feed become visible at a glance.</p></div>
+    <div class="idea"><h3>Scheduled backups</h3><div class="chips"><span class="chip v-med">value med</span><span class="chip e">effort S</span><span class="chip st-todo">to do</span></div><p>A nightly compressed export to a NAS folder or S3 bucket with a retention count. Pairs with open item 54 on bounding the CSV export.</p></div>
+    <div class="idea"><h3>Offline-capable PWA</h3><div class="chips"><span class="chip v-low">value low</span><span class="chip e">effort M</span><span class="chip st-todo">to do · low priority</span></div><p>Cache the app shell and the last summary so the dashboard opens with no signal; the current service worker does nothing on fetch.</p></div>
+    <div class="idea"><h3>Progress photos</h3><div class="chips"><span class="chip v-low">value low</span><span class="chip e">effort L</span><span class="chip st-todo">to do · low priority</span></div><p>Private, dated photos side by side with the weight and lean mass for that week.</p></div>
+  </div>
+</section>
+
+<footer>
+  <p>Read from <code>main</code> on 21 Oct 2026: <code>server.ts</code>, <code>src/</code>, <code>modules/</code>, <code>documentation/</code> and <code>docs/remediation/</code>. Effort is a rough estimate from the code, not a plan.</p>
+  <p>Left out on purpose, because they are already open remediation items: 18, 19 and 21 (Apple Health and BP data), 20 (HRV divergence), and 50 to 57 (settings save, API errors, logs params, export size, accessibility, Admin route, AI Insights overflow).</p>
+</footer>
+</div>
