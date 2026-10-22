@@ -98,6 +98,14 @@ unrun") is **stale on all three counts**:
   while its real `check` job is green. Judge the code, not the red mark — and do not
   wait on that job to go green before gating.
 
+**Amendment, 07:10 BST (same run):** the *Feature ideas* thread has kept going past item
+77 — **item 78** (14-day sleep debt, PR #50) merged `0baa08ee` at 07:02 BST and **item 79**
+(weekly hard sets per muscle group, PR #51) merged `1a1c3c3` at 07:04 BST, both gated by
+`vitality-pr-watch-6c6d`, which owns their tracker rows and the deploy. **PR #49 (item 77)
+is still open** and is the odd one out — later PRs overtook it. At 07:10 the `vitality`
+container had been up ~8 h (still on `d08b4ec1`-era code), so items 77-79 are on `main`
+but **not yet deployed**; that deploy is the PR-watch loop's, in flight.
+
 ## Ground rules for patches
 
 - **Do not put `docs/remediation/progress.md` in a code PR** (builder, 2026-10-21 21:28).
