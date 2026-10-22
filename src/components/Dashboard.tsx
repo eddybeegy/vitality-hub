@@ -14,6 +14,7 @@ import { Activity, Moon, Scale, Zap, Utensils, TrendingUp, Target, GripVertical,
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip, AreaChart, Area } from 'recharts';
 import { HealthChart } from './HealthChart';
 import { SortableWidget } from './SortableWidget';
+import { computeSleepDebt, formatHours, sleepTargetHours } from '../lib/sleepDebt';
 import { SyncButton } from './SyncButton';
 import { SyncStatus } from './SyncStatus';
 import { SyncHealthWidget } from './SyncHealthWidget';
@@ -21,7 +22,6 @@ import { DayTagsCard } from './DayTagsCard';
 import { ProgressRing } from './ui/ProgressRing';
 import { CardSkeleton, ChartSkeleton } from './ui/Skeleton';
 import { ReadinessCard } from './ReadinessCard';
-import { computeSleepDebt, formatHours, sleepTargetHours } from '../lib/sleepDebt';
 import { SmartAdjustments } from './SmartAdjustments';
 import { formatWeight, convertWeight, getWeightUnit, getLocalDateString, formatDateWithTimezone, cn } from '../lib/utils';
 import { useSettingsStore } from '../store/useSettingsStore';
