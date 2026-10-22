@@ -741,27 +741,34 @@ export const WorkoutsTab = React.memo(({
           )}
         </div>
 
-        {/* Cardio trends: distance per heartbeat for runs, rides and walks */}
+        {/* Cardio trends: metres per heartbeat where the HR covers the effort, speed where it does not */}
         {cardio.length > 0 && (
           <div className="space-y-4 mt-8">
             <div className="flex justify-between items-baseline gap-2 flex-wrap">
               <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Cardio Fitness</h3>
-              <span className="text-[11px] text-zinc-400 dark:text-zinc-500">Metres per heartbeat, last {CARDIO_WINDOW_DAYS} days &middot; higher is fitter</span>
+              <span className="text-[11px] text-zinc-400 dark:text-zinc-500">Apple, Hevy &amp; Strava sessions, last {CARDIO_WINDOW_DAYS} days &middot; higher is fitter</span>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               {cardio.map(t => {
-                const names: Record<Sport, string> = { run: 'Running', ride: 'Cycling', walk: 'Walking' };
+                const names: Record<Sport, string> = { run: 'Running', ride: 'Cycling', walk: 'Walking', row: 'Rowing' };
                 const last = t.sessions[t.sessions.length - 1];
                 const imperial = settings?.preferred_units === 'imperial';
                 const pace = imperial ? last.pace * 1.609344 : last.pace;
                 const paceSecs = Math.round(pace * 60);
                 const paceLabel = `${Math.floor(paceSecs / 60)}:${String(paceSecs % 60).padStart(2, '0')} /${imperial ? 'mi' : 'km'}`;
+                // The headline is metres per heartbeat only where the session's average HR
+                // actually describes the measured effort; otherwise it is plain speed, and
+                // the label has to say so rather than quietly change units.
+                const speed = imperial ? last.speedKmh / 1.609344 : last.speedKmh;
+                const headline = t.basis === 'efficiency' ? (last.efficiency as number).toFixed(2) : speed.toFixed(1);
+                const unit = t.basis === 'efficiency' ? 'm/beat' : (imperial ? 'mph' : 'km/h');
+                const distance = imperial ? `${(last.km / 1.609344).toFixed(2)} mi` : `${last.km.toFixed(2)} km`;
                 return (
                   <div key={t.sport} className="p-4 bg-white dark:bg-zinc-900 rounded-2xl border border-black/5 dark:border-white/5">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">{names[t.sport]}</p>
                     <div className="flex items-baseline gap-2 mt-1">
-                      <span className="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100">{last.efficiency.toFixed(2)}</span>
-                      <span className="text-[11px] text-zinc-400 dark:text-zinc-500">m/beat</span>
+                      <span className="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100">{headline}</span>
+                      <span className="text-[11px] text-zinc-400 dark:text-zinc-500">{unit}</span>
                       {t.change !== null && (
                         <span className={t.change >= 0 ? "text-xs font-bold text-emerald-600 dark:text-emerald-400" : "text-xs font-bold text-rose-600 dark:text-rose-400"}>
                           {t.change >= 0 ? '▲' : '▼'} {Math.abs(t.change * 100).toFixed(1)}%
@@ -769,9 +776,18 @@ export const WorkoutsTab = React.memo(({
                       )}
                     </div>
                     <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1">
-                      Latest {paceLabel} at {Math.round(last.avgHr)} bpm &middot; {t.sessions.length} sessions
+                      Latest {distance} at {paceLabel}
+                      {last.avgHr != null && t.basis === 'efficiency' ? ` and ${Math.round(last.avgHr)} bpm` : ''}
+                      {' '}&middot; {t.sessions.length} sessions
                       {t.change === null && ' · trend after 6'}
                     </p>
+                    {t.basis === 'speed' && (
+                      <p className="text-[10px] text-zinc-400 dark:text-zinc-500 mt-1">
+                        Speed, not metres per heartbeat: {last.from === 'exercise'
+                          ? 'the heart rate is averaged over the whole session, not just this block.'
+                          : 'these sessions have no usable average heart rate.'}
+                      </p>
+                    )}
                   </div>
                 );
               })}
