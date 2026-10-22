@@ -2,10 +2,10 @@ import React from 'react';
 import { motion } from 'motion/react';
 import { Dumbbell, Activity, ChevronUp, ChevronDown, SearchX, Search, Trophy } from 'lucide-react';
 import { SyncButton } from './SyncButton';
+import { cardioTrends, WINDOW_DAYS as CARDIO_WINDOW_DAYS, type Sport } from '../lib/cardioTrends';
 import { SyncStatus } from './SyncStatus';
 import { EmptyState } from './ui/EmptyState';
 import { HealthChart } from './HealthChart';
-import { cardioTrends, WINDOW_DAYS as CARDIO_WINDOW_DAYS, type Sport } from '../lib/cardioTrends';
 import { formatWorkoutWeight, formatWeight, convertWeight, getWeightUnit, convertDistance, getDistanceUnit, formatPaceAndSpeed, formatDateWithTimezone, getLocalDateString } from '../lib/utils';
 import { analyseStrength, estimate1RM, isWeightedExercise, isWorkingSet, prKindLabel, REP_RANGES } from '../lib/strength';
 
