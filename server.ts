@@ -40,6 +40,7 @@ import { pairNights, TIMING_TYPES } from "./src/lib/sleepTiming";
 import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toSnapshot, historyForAIContext, parseStoredComponents, READINESS_ALGO_VERSION, DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, type ReadinessSnapshot } from "./src/lib/readinessHistory";
 import { validateDayTagInput, normaliseTag, tagsForAIContext, todayIn, addDays, daysBetween, MAX_RANGE_DAYS, type DayTag } from "./src/lib/dayTags";
 import { validateMedicationInput, validateDoseInput, adherence as medicationAdherence, dueOn as medicationsDueOn, isActiveOn as medicationActiveOn, FREQUENCY_LABELS, MAX_ITEMS as MAX_MEDICATION_ITEMS, MAX_ADHERENCE_DAYS, type Medication, type DoseRow } from "./src/lib/medications";
+import { validateLabInput, validatePanelInput, trends as labTrends, panelDates as labPanelDates, outOfRange as labsOutOfRange, sexOf, ANALYTES, type LabRow } from "./src/lib/labs";
 import { zonedTimeToInstant } from './src/lib/tzPoint';
 import { mountMcpServer, MCP_PATH } from './src/mcp/server.js';
 import { tools as mcpTools } from './src/mcp/tools.js';
@@ -659,6 +660,24 @@ async function ensureSchema() {
       dose_date: "VARCHAR(10)",
       taken: "INTEGER DEFAULT 1",
       created_at: "DATETIME DEFAULT CURRENT_TIMESTAMP"
+    },
+    // Blood test results, entered by hand. `taken_on` is the day of the draw as a
+    // bare YYYY-MM-DD (VARCHAR for the MySQL UNIQUE key, as in day_tags), because a
+    // blood draw belongs to a day, not an instant. `ref_low`/`ref_high` are the range
+    // printed on the user's own report: labs differ, so the row's range is the
+    // authority and src/lib/labs.ts only falls back to a typical adult range.
+    lab_results: {
+      id: "INTEGER PRIMARY KEY AUTOINCREMENT",
+      user_id: "INTEGER",
+      taken_on: "VARCHAR(10)",
+      analyte: "VARCHAR(40)",
+      value: "REAL",
+      unit: "VARCHAR(16)",
+      ref_low: "REAL",
+      ref_high: "REAL",
+      lab: "VARCHAR(60)",
+      notes: "TEXT",
+      created_at: "DATETIME DEFAULT CURRENT_TIMESTAMP"
     }
   };
 
@@ -678,6 +697,7 @@ async function ensureSchema() {
     if (tableName === 'readiness_snapshots') createSql += `, UNIQUE(user_id, snapshot_date)`;
     if (tableName === 'medications') createSql += `, UNIQUE(user_id, name)`;
     if (tableName === 'medication_doses') createSql += `, UNIQUE(user_id, medication_id, dose_date)`;
+    if (tableName === 'lab_results') createSql += `, UNIQUE(user_id, taken_on, analyte)`;
     createSql += `)`;
     
     try {
@@ -2491,6 +2511,44 @@ async function checkScheduledRegeneration(userId: number) {
     }
   }
 
+  async function labsForAIContext(userId: number, user: any): Promise<any> {
+    try {
+      const rows = await db.prepare(
+        "SELECT id, taken_on, analyte, value, unit, ref_low, ref_high, lab, notes FROM lab_results WHERE user_id = ? ORDER BY taken_on ASC"
+      ).all(userId) as any[];
+      if (!rows.length) return { latest_panel: null, results: [] };
+      const typed = rows.map(r => ({
+        ...r,
+        value: Number(r.value),
+        ref_low: r.ref_low === null || r.ref_low === undefined ? null : Number(r.ref_low),
+        ref_high: r.ref_high === null || r.ref_high === undefined ? null : Number(r.ref_high),
+      }));
+      const sex = sexOf(user?.gender);
+      const latest = labPanelDates(typed)[0];
+      return {
+        latest_panel: latest ? { taken_on: latest.taken_on, results_count: latest.count, lab: latest.lab } : null,
+        out_of_range: labsOutOfRange(typed, sex),
+        results: labTrends(typed, sex).map(t => ({
+          analyte: t.analyte,
+          label: t.label,
+          value: t.latest.value,
+          unit: t.unit,
+          taken_on: t.latest.taken_on,
+          reference_low: t.range.low,
+          reference_high: t.range.high,
+          reference_source: t.range.source,
+          flag: t.flag,
+          previous_value: t.previous?.value ?? null,
+          previous_taken_on: t.previous?.taken_on ?? null,
+        })),
+      };
+    } catch (e: any) {
+      // A missing table must not take the AI context down, as with day tags.
+      logEvent('warn', `Could not read lab results: ${e?.message || e}`, 'ai', userId);
+      return { latest_panel: null, results: [] };
+    }
+  }
+
   async function buildAIContext(userId: number, user: any): Promise<{ combinedContext: string; targets: any[]; previousInsights: any[] }> {
       // Fetch data for context
       // Limit to 30 days for metrics, 14 days for workouts
@@ -2657,7 +2715,11 @@ async function checkScheduledRegeneration(userId: number) {
         // Now read from the medications table (the users.medications JSON is only a
         // legacy import source). Adherence is included because "prescribed" and
         // "actually taken" are different facts and only the second explains a trend.
-        medications: await medicationsForAIContext(userId, user)
+        medications: await medicationsForAIContext(userId, user),
+        // Latest blood test per analyte, with the range it was judged against and
+        // where that range came from. Facts only: a value, a range, and which side
+        // of it - the model is not being handed an interpretation to repeat.
+        lab_results: await labsForAIContext(userId, user)
       });
 
       logEvent('debug', `Combined context constructed: ${Math.round(combinedContext.length / 1024)} KB`, 'ai', userId);
@@ -4558,6 +4620,104 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     } catch (e: any) {
       logEvent('error', `Failed to delete day tag: ${e?.message || e}`, 'App', req.user.id);
       res.status(500).json({ error: 'Failed to delete day tag' });
+    }
+  });
+
+  // --- Blood test results ------------------------------------------------
+  // Manual entry; all the range and trend arithmetic is in src/lib/labs.ts.
+  // Results are small in number and read whole, so there is no windowing here.
+
+  const LAB_COLUMNS = "id, taken_on, analyte, value, unit, ref_low, ref_high, lab, notes";
+
+  const listLabs = async (userId: number): Promise<LabRow[]> => {
+    const rows = await db.prepare(
+      `SELECT ${LAB_COLUMNS} FROM lab_results WHERE user_id = ? ORDER BY taken_on ASC, analyte ASC`
+    ).all(userId) as any[];
+    // SQLite hands back numbers, Postgres hands back strings for REAL columns.
+    return rows.map(r => ({
+      ...r,
+      value: Number(r.value),
+      ref_low: r.ref_low === null || r.ref_low === undefined ? null : Number(r.ref_low),
+      ref_high: r.ref_high === null || r.ref_high === undefined ? null : Number(r.ref_high),
+    })) as LabRow[];
+  };
+
+  const sexFor = async (userId: number) => {
+    const row = await db.prepare("SELECT gender FROM users WHERE id = ?").get(userId) as any;
+    return sexOf(row?.gender);
+  };
+
+  // Writes one result, replacing the value already stored for that analyte on that
+  // day. Update-then-insert, as elsewhere: translateSql turns INSERT OR REPLACE into
+  // DO NOTHING on Postgres, which would keep a value the user had just corrected.
+  const saveLab = async (userId: number, r: ReturnType<typeof validateLabInput>['value']) => {
+    const v = r!;
+    const upd = await db.prepare(
+      "UPDATE lab_results SET value = ?, unit = ?, ref_low = ?, ref_high = ?, lab = ?, notes = ? WHERE user_id = ? AND taken_on = ? AND analyte = ?"
+    ).run(v.value, v.unit, v.ref_low, v.ref_high, v.lab, v.notes, userId, v.taken_on, v.analyte);
+    if (!upd.changes) {
+      await db.prepare(
+        "INSERT OR IGNORE INTO lab_results (user_id, taken_on, analyte, value, unit, ref_low, ref_high, lab, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run(userId, v.taken_on, v.analyte, v.value, v.unit, v.ref_low, v.ref_high, v.lab, v.notes);
+    }
+  };
+
+  // The analyte catalogue, so the form can offer units and ranges without a copy
+  // of the list in the client drifting from the one the server judges against.
+  app.get("/api/labs/catalogue", requireAuth, async (_req: any, res) => {
+    res.json({ analytes: ANALYTES });
+  });
+
+  await app.get("/api/labs", requireAuth, async (req: any, res) => {
+    try {
+      const rows = await listLabs(req.user.id);
+      const sex = await sexFor(req.user.id);
+      res.json({ results: rows, panels: labPanelDates(rows), trends: labTrends(rows, sex), out_of_range: labsOutOfRange(rows, sex) });
+    } catch (e: any) {
+      logEvent('error', `Failed to read lab results: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to read lab results' });
+    }
+  });
+
+  // One result, or a whole panel in one post (`{ taken_on, lab, results: [...] }`).
+  app.post("/api/labs", requireAuth, async (req: any, res) => {
+    const isPanel = req.body && typeof req.body === 'object' && Array.isArray((req.body as any).results);
+    const parsed = isPanel ? validatePanelInput(req.body) : validateLabInput(req.body);
+    if (parsed.error !== undefined) return res.status(400).json({ error: parsed.error });
+    const list = Array.isArray(parsed.value) ? parsed.value : [parsed.value!];
+    try {
+      for (const r of list) await saveLab(req.user.id, r);
+      res.json({ saved: list.length, results: list });
+    } catch (e: any) {
+      logEvent('error', `Failed to save lab results: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to save lab results' });
+    }
+  });
+
+  // Deletes one of the caller's own results; `?taken_on=` removes a whole panel.
+  app.delete("/api/labs/:id", requireAuth, async (req: any, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' });
+    try {
+      const r = await db.prepare("DELETE FROM lab_results WHERE id = ? AND user_id = ?").run(id, req.user.id);
+      if (!r.changes) return res.status(404).json({ error: 'Not found' });
+      res.json({ deleted: r.changes });
+    } catch (e: any) {
+      logEvent('error', `Failed to delete lab result: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to delete lab result' });
+    }
+  });
+
+  app.delete("/api/labs", requireAuth, async (req: any, res) => {
+    const dateP = parseDayParam('taken_on', req.query.taken_on);
+    if (dateP.error !== undefined) return res.status(400).json({ error: dateP.error });
+    if (!dateP.value) return res.status(400).json({ error: 'Missing taken_on' });
+    try {
+      const r = await db.prepare("DELETE FROM lab_results WHERE user_id = ? AND taken_on = ?").run(req.user.id, dateP.value);
+      res.json({ deleted: r.changes || 0 });
+    } catch (e: any) {
+      logEvent('error', `Failed to delete panel: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to delete panel' });
     }
   });
 
