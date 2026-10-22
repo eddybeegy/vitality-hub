@@ -30,6 +30,8 @@ import { parseLogsQuery, zonedDayBounds, resolveTimeZone, logTimestampToIso, toS
 import { parseExportWindow, windowConditions, type ExportWindow } from "./src/lib/exportWindow";
 import { parseLogLevel, parseSourceList, createLogFilter } from "./src/lib/logLevel";
 import { planRefresh, refreshStartMessage, refreshFinishMessage, RefreshModuleResult } from "./src/lib/refreshPlan";
+import { derivedWorkoutHrSql, mergeDerivedHeartRate } from "./src/lib/workoutHeartRate";
+import { WINDOW_DAYS as CARDIO_WINDOW_DAYS } from "./src/lib/cardioTrends";
 import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/lib/aggregatedMetrics";
 import { calculateReadinessScore, type ReadinessResult } from "./src/lib/readiness";
 import { chooseSource, type SourceCounts } from "./src/lib/sourcePriority";
@@ -3414,6 +3416,19 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       ORDER BY w.timestamp DESC 
       LIMIT 1000
     `).all(userId);
+
+    // `workouts.heart_rate_avg` has never been populated by any source, so the
+    // cardio-efficiency card had nothing to score. Derive it from the `heart_rate`
+    // metrics for the sessions that card can actually use. See
+    // src/lib/workoutHeartRate.ts for why the scope is this narrow.
+    const cardioWindowStart = new Date(Date.now() - (CARDIO_WINDOW_DAYS + 1) * 86400000).toISOString();
+    const derivedHr = await db.prepare(derivedWorkoutHrSql(
+      db.type,
+      db.type === 'sqlite' ? 'w.timestamp' : readingInstant('workouts', 'w.timestamp', 'w.source'),
+      db.type === 'sqlite' ? 'm.timestamp' : readingInstant('metrics', 'm.timestamp', 'm.source'),
+    )).all(userId, cardioWindowStart);
+    mergeDerivedHeartRate(workouts as any[], derivedHr as any[]);
+
     const routines = await db.prepare("SELECT * FROM routines WHERE user_id = ? ORDER BY id DESC").all(userId);
     const routineExercises = await db.prepare("SELECT * FROM routine_exercises WHERE routine_id IN (SELECT id FROM routines WHERE user_id = ?)").all(userId);
 
