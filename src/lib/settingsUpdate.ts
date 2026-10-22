@@ -168,6 +168,12 @@ const FIELDS: Record<string, Check> = {
   font_size: oneOf(['small', 'medium', 'large']),
   dashboard_widgets: nullable(widgets),
   readiness_recovery_days: int(1, 30),
+  // Scheduled backups. `backup_last_day` is NOT here on purpose: it is the
+  // scheduler's own record of what it has already done, and a client that could
+  // write it could suppress every future backup.
+  backup_enabled: flag,
+  backup_hour: int(0, 23),
+  backup_keep: int(1, 60),
 };
 
 // Credentials: GET /api/settings never returns hevy_api_key or withings_client_secret,
