@@ -39,6 +39,7 @@ import { BpSummary } from './BpSummary';
 import { BodyDiagram } from './BodyDiagram';
 import { computeReadiness } from '../lib/bodyDiagram';
 import { isTargetSet } from '../lib/targets';
+import { dayTypeFor, hasRestTargets, loadOverride, targetForDay } from '../lib/dayTargets';
 import { toDateStr, addDays } from '../lib/dayWalk';
 
 const BodyDiagramWidget: React.FC<{ workouts: any[]; recoveryDays: number }> = ({ workouts, recoveryDays }) => {
@@ -171,6 +172,21 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
     const target = targets.find((t: any) => t.type === type);
     return target && isTargetSet(target.value) ? Number(target.value) : undefined;
   };
+
+  // Item 88 added rest-day variants of the calories and carbs targets, but only the
+  // Nutrition tab read them -- the Dashboard kept comparing against the training-day
+  // value, so on a rest day this card and the macro widget showed the wrong goal.
+  // The day type is derived here rather than passed in: `dayTypeFor` reads the same
+  // workouts and the same localStorage override key App.tsx uses, so the two agree.
+  const todayLocal = getLocalDateString(settings?.timezone);
+  const dayType = dayTypeFor(
+    summaryData.workouts,
+    todayLocal,
+    settings?.timezone || 'UTC',
+    loadOverride(todayLocal),
+  );
+  const showsRestDay = dayType.type === 'rest' && hasRestTargets(getTargetValue);
+  const getDayTargetValue = (type: string) => targetForDay(type, dayType.type, getTargetValue);
 
   const getTodayTotal = (type: string) => {
     const today = getLocalDateString(settings.timezone);
@@ -575,6 +591,9 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                                     <Target className="text-indigo-500" size={20} />
                                 </div>
                                 <p className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest italic font-serif">Today's Targets</p>
+                                {showsRestDay && (
+                                    <span className="text-[10px] font-semibold text-zinc-400 dark:text-zinc-500 px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800">rest day</span>
+                                )}
                             </div>
                             {(() => {
                                 // Mirrors TargetsTab.tsx's verified TARGET_METRIC_MAP (2026-09-14): metric
@@ -612,7 +631,8 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                                     if (!latest || latest.value == null) return null;
                                     const rawCurrent = Number(latest.value);
                                     const current = meta.convert ? meta.convert(rawCurrent) : rawCurrent;
-                                    const goal = Number(target.value);
+                                    // Rest-day variant when one is set for this type, else the base target.
+                                    const goal = getDayTargetValue(type) ?? Number(target.value);
                                     const pct = (current / goal) * 100;
                                     const fmt = (v: number) => meta.isWeight ? formatWeight(v, settings?.preferred_units) : `${v.toFixed(meta.decimals ?? 0)}${meta.unit ? ' ' + meta.unit : ''}`;
                                     return { type, label: meta.label, pct, currentLabel: fmt(current), goalLabel: fmt(goal) };
@@ -742,7 +762,7 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                             {(() => {
                               const macroTargets: Record<string, number> = {
                                 protein: getTargetValue('protein') || 150,
-                                carbs: getTargetValue('carbs') || 250,
+                                carbs: getDayTargetValue('carbs') || 250,
                                 fat: getTargetValue('fat') || 70,
                                 fiber: getTargetValue('fiber') || 30,
                                 unsaturated_fat: getTargetValue('unsaturated_fat') || 25,
