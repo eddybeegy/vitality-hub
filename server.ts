@@ -39,6 +39,7 @@ import { latestBpReadings, BP_TYPES } from "./src/lib/bpLatest";
 import { pairNights, TIMING_TYPES } from "./src/lib/sleepTiming";
 import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toSnapshot, historyForAIContext, parseStoredComponents, READINESS_ALGO_VERSION, DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, type ReadinessSnapshot } from "./src/lib/readinessHistory";
 import { validateDayTagInput, normaliseTag, tagsForAIContext, todayIn, addDays, daysBetween, MAX_RANGE_DAYS, type DayTag } from "./src/lib/dayTags";
+import { buildCoverage, DEFAULT_DAYS as DEFAULT_COVERAGE_DAYS, MAX_DAYS as MAX_COVERAGE_DAYS } from "./src/lib/coverage";
 import { validateMedicationInput, validateDoseInput, adherence as medicationAdherence, dueOn as medicationsDueOn, isActiveOn as medicationActiveOn, FREQUENCY_LABELS, MAX_ITEMS as MAX_MEDICATION_ITEMS, MAX_ADHERENCE_DAYS, type Medication, type DoseRow } from "./src/lib/medications";
 import { validateLabInput, validatePanelInput, trends as labTrends, panelDates as labPanelDates, outOfRange as labsOutOfRange, sexOf, ANALYTES, type LabRow } from "./src/lib/labs";
 import { zonedTimeToInstant } from './src/lib/tzPoint';
@@ -4931,6 +4932,51 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     } catch (e: any) {
       logEvent('error', `Failed to compute adherence: ${e?.message || e}`, 'App', req.user.id);
       res.status(500).json({ error: 'Failed to compute adherence' });
+    }
+  });
+
+  // ── Data coverage calendar ────────────────────────────────────────────────
+  // Row counts per source per day, for `metrics` and `workouts` SEPARATELY. The two
+  // feeds of one source fail independently -- apple_health has written 1.6M metric
+  // rows while its workouts feed has been dead since 2026-10-13 -- and a combined
+  // count hides exactly the failure this card exists to show.
+  await app.get("/api/coverage", requireAuth, async (req: any, res) => {
+    const daysP = parseIntParam('days', req.query.days, { min: 1, max: MAX_COVERAGE_DAYS, fallback: DEFAULT_COVERAGE_DAYS });
+    if (daysP.error !== undefined) return res.status(400).json({ error: daysP.error });
+    const days = daysP.value ?? DEFAULT_COVERAGE_DAYS;
+    try {
+      const tzRow = await db.prepare("SELECT timezone FROM users WHERE id = ?").get(req.user.id) as any;
+      const tz = resolveTimeZone(tzRow?.timezone);
+      // resolveTimeZone already round-trips through Intl, so a quote cannot survive it;
+      // the regex is here because this value is interpolated into SQL, not bound.
+      const safeTz = /^[A-Za-z0-9_+\-\/]+$/.test(tz) ? tz : 'Europe/London';
+      const today = todayIn(safeTz);
+      const from = addDays(today, -(days - 1));
+      // A day of slack: the cutoff is compared against a naive column whose zone
+      // varies by source (healthsync stamps `metrics` in London), so trimming to the
+      // exact instant would drop real rows at the edge. buildCoverage discards
+      // anything outside the window, so the slack cannot leak into a cell.
+      const cutoff = `${addDays(from, -1)} 00:00:00`;
+      // `row_count`, not `rows`: ROWS is a reserved word in postgres.
+      const countsFor = (table: 'metrics' | 'workouts') => `
+        SELECT source,
+               to_char((${readingInstant(table)} AT TIME ZONE '${safeTz}')::date, 'YYYY-MM-DD') AS day,
+               COUNT(*)::int AS row_count
+        FROM ${table}
+        WHERE user_id = ? AND timestamp >= ?
+        GROUP BY 1, 2
+      `;
+      const shape = (rows: any[]) => rows.map(r => ({ source: r.source, day: r.day, rows: r.row_count }));
+      const metricRows = await db.prepare(countsFor('metrics')).all(req.user.id, cutoff) as any[];
+      const workoutRows = await db.prepare(countsFor('workouts')).all(req.user.id, cutoff) as any[];
+      res.json({
+        from, to: today, days,
+        metrics: buildCoverage(shape(metricRows), today, days),
+        workouts: buildCoverage(shape(workoutRows), today, days),
+      });
+    } catch (e: any) {
+      logEvent('error', `Failed to build coverage calendar: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to build coverage calendar' });
     }
   });
 

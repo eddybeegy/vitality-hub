@@ -30,6 +30,7 @@ import { SmartAdjustments } from './SmartAdjustments';
 import { DigestCard } from './DigestCard';
 import { MedicationsCard } from './MedicationsCard';
 import { LabResultsCard } from './LabResultsCard';
+import { CoverageCalendarCard } from './CoverageCalendarCard';
 import { GAP_PCT, MICRO_TARGETS, microLabel, weeklyMicroGaps } from '../lib/microGaps';
 import { formatWeight, convertWeight, getWeightUnit, getLocalDateString, formatDateWithTimezone, cn } from '../lib/utils';
 import { useSettingsStore } from '../store/useSettingsStore';
@@ -833,6 +834,9 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                     )}
                     {widgetId === 'labs' && (
                       <LabResultsCard />
+                    )}
+                    {widgetId === 'coverage_calendar' && (
+                      <CoverageCalendarCard />
                     )}
                     {widgetId === 'medications' && (
                       <MedicationsCard />
