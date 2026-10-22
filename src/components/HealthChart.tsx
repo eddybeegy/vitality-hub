@@ -10,6 +10,8 @@ import { useHealthStore } from '../store/useHealthStore';
 import { readChartRows, asRows } from '../lib/chartRows';
 import { useDayTagsStore } from '../store/useDayTagsStore';
 import { markersForBuckets, tagsOnBucket, tagLabel } from '../lib/dayTags';
+import { useMedicationsStore } from '../store/useMedicationsStore';
+import { medicationMarkers } from '../lib/medications';
 import { periodDays, shiftPrevious, mergePrevious, percentChange, formatChange } from '../lib/periodCompare';
 
 interface ReferenceLineProps {
@@ -370,16 +372,35 @@ export const HealthChart = ({
     () => markersForBuckets(dayTags, processedData.map(d => d.date), granularity),
     [dayTags, processedData, granularity],
   );
+
+  // The same mechanism for medication start and stop dates, in amber rather than
+  // purple: "started X" is a different kind of fact from "was ill on X", and a
+  // shared colour would make a course change look like a tagged day.
+  const medications = useMedicationsStore(state => state.items);
+  const ensureMedications = useMedicationsStore(state => state.ensureLoaded);
+  useEffect(() => { ensureMedications(); }, [ensureMedications]);
+  const medMarkers = useMemo(
+    () => medicationMarkers(medications, processedData.map(d => d.date), granularity),
+    [medications, processedData, granularity],
+  );
+
+  const allMarkers = useMemo(
+    () => [
+      ...tagMarkers.map(m => ({ ...m, colour: '#8b5cf6' })),
+      ...medMarkers.map(m => ({ ...m, colour: '#f59e0b' })),
+    ],
+    [tagMarkers, medMarkers],
+  );
   // Labels alternate between two rows so markers on neighbouring days don't print
   // over each other, and read leftwards in the right third so they aren't clipped.
-  const renderTagMarkers = () => tagMarkers.map((m, i) => {
+  const renderTagMarkers = () => allMarkers.map((m, i) => {
     const idx = processedData.findIndex(d => d.date === m.x);
     const anchorEnd = processedData.length > 1 && idx / (processedData.length - 1) > 0.66;
     return (
       <ReferenceLine
-        key={`tag-${m.x}`}
+        key={`mark-${m.colour}-${m.x}`}
         x={m.x}
-        stroke="#8b5cf6"
+        stroke={m.colour}
         strokeOpacity={0.6}
         strokeDasharray="2 3"
         label={isMini ? undefined : ({ viewBox }: any) => (
@@ -388,7 +409,7 @@ export const HealthChart = ({
             y={(viewBox?.y ?? 0) + 9 + (i % 2) * 10}
             textAnchor={anchorEnd ? 'end' : 'start'}
             fontSize={8}
-            fill="#8b5cf6"
+            fill={m.colour}
           >
             {m.label}
           </text>
