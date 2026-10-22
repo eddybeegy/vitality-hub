@@ -162,7 +162,12 @@ export interface Adherence {
   skipped_days: number;
   /** Scheduled days with neither a tick nor a skip. */
   unlogged_days: number;
-  /** taken / scheduled as a whole percent, null when nothing was scheduled. */
+  /**
+   * taken / scheduled as a whole percent. Null when nothing was scheduled AND
+   * null when the window holds no tick or skip at all: an item nobody has
+   * started logging has no adherence to report, and 0% would read as a failed
+   * course rather than an empty one.
+   */
   percent: number | null;
   /** Consecutive scheduled days ticked, counting back from the window's last day. */
   current_streak: number;
@@ -238,7 +243,12 @@ export function adherence(
       taken_days: taken,
       skipped_days: skipped,
       unlogged_days: scheduled.length - taken - skipped,
-      percent: scheduled.length ? Math.round((taken / scheduled.length) * 100) : null,
+      // Unlogged days still count against the percentage once the user has
+      // started logging - a day never ticked is not a day the dose was taken.
+      // But a window with nothing said at all reports null, not 0%.
+      percent: scheduled.length && taken + skipped > 0
+        ? Math.round((taken / scheduled.length) * 100)
+        : null,
       current_streak: streak,
     };
   });

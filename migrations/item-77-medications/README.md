@@ -36,10 +36,17 @@ that item rather than adding a second one.
 
 `UNIQUE (user_id, medication_id, dose_date)`: one entry per item per day.
 
-**No row means nothing was said about that day.** `adherence()` counts it as
-*unlogged*, not missed — an empty log is not a failed course, and a card that showed
-0% for a user who simply has not started ticking would be worse than showing nothing.
-That is why clearing a day deletes the row instead of writing `taken = 0`.
+**No row means nothing was said about that day.** It is reported as *unlogged*,
+separately from *skipped*, and clearing a day deletes the row instead of writing
+`taken = 0`.
+
+The adherence percentage is `taken / scheduled`, so once the user has started
+logging, a scheduled day they never ticked does count against it — a day never
+ticked is not a day the dose was taken. But a window with **no tick or skip at all**
+reports `percent: null`, not 0%: an item nobody has begun logging has no adherence
+to report, and 0% would read as a failed course rather than an empty one. (The first
+version of this did return 0% there, which the live check caught on a freshly added
+item.)
 
 ## Why the days are strings
 
