@@ -3,6 +3,7 @@ import { HeartPulse, Activity } from 'lucide-react';
 import { motion } from 'motion/react';
 import { HealthChart } from './HealthChart';
 import { SyncButton } from './SyncButton';
+import { CorrelationExplorer } from './CorrelationExplorer';
 import { formatDateWithTimezone, getWeightUnit } from '../lib/utils';
 
 import { getBloodPressureData, getSleepDurationData } from '../services/healthDataService';
@@ -311,6 +312,10 @@ export const ActivityTab = React.memo(({
           />
         </div>
       </div>
+
+      {settings?.enable_correlations !== false && (
+        <CorrelationExplorer metrics={summaryData?.metrics || []} timezone={settings?.timezone} />
+      )}
     </motion.div>
   );
 });
