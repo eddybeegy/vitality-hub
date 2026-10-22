@@ -16,6 +16,7 @@
 
 import { pairNights, summariseTiming, TIMING_TYPES, formatClock, type TimingSummary } from '../lib/sleepTiming.js';
 import { aggregateDailyValues, NUTRITION_METRICS, type DailyRow, type MetricRow } from '../lib/metricAggregation.js';
+import { buildDigest, renderDigestText, isDigestPeriod, PERIOD_DAYS, type DigestPeriod } from '../lib/digest.js';
 
 type NaiveTsTable = 'metrics' | 'workouts' | 'meal_items';
 
@@ -55,6 +56,10 @@ const tsExpr = (ctx: McpContext, table: NaiveTsTable): string =>
 
 const user = async (ctx: McpContext): Promise<{ timezone?: string; metric_priorities: string | null }> =>
   (await ctx.db.prepare('SELECT timezone, metric_priorities FROM users WHERE id = ?').get(ctx.userId)) || { metric_priorities: null };
+
+/** Today as a bare day in `zone` -- the last day of a digest or timing window. */
+const todayIn = (zone: string): string =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 
 const resolvedZone = (tz?: string): string => tz || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
@@ -207,7 +212,7 @@ export const tools = {
          FROM metrics WHERE user_id = ? AND type IN (${TIMING_TYPES.map(() => '?').join(', ')}) AND timestamp >= ?`
     ).all(ctx.userId, ...TIMING_TYPES, cutoffIso(days, 1))) as any[];
 
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const today = todayIn(zone);
     const summary: TimingSummary | null = summariseTiming(pairNights(timingRows), today, zone, days);
 
     return {
@@ -249,6 +254,32 @@ export const tools = {
         return { date: String(r.snapshot_date).slice(0, 10), score: r.score, algo_version: r.algo_version, components };
       }),
     };
+  },
+
+  /**
+   * The weekly/monthly digest: one period against the one before it.
+   *
+   * The API's GET /api/digest calls this same function, so the dashboard card
+   * and an agent reading over MCP cannot report different numbers for the week.
+   */
+  async getDigest(ctx: McpContext, args: { period?: string }) {
+    const period: DigestPeriod = isDigestPeriod(args?.period) ? args.period : 'week';
+    const days = PERIOD_DAYS[period];
+    const u = await user(ctx);
+    const zone = resolvedZone(u.timezone);
+    // Both windows plus a day of slack: a reading stamped near midnight in
+    // another zone still lands in the window it belongs to once grouped locally.
+    const window = days * 2 + 1;
+
+    const { rows } = await dailyMetrics(ctx, window);
+    const workouts = (await ctx.db.prepare(
+      `SELECT name, duration, volume, source, ${tsExpr(ctx, 'workouts')} AS timestamp
+         FROM workouts WHERE user_id = ? AND timestamp >= ?`
+    ).all(ctx.userId, cutoffIso(window))) as any[];
+    const targets = (await ctx.db.prepare('SELECT type, value, unit FROM targets WHERE user_id = ?').all(ctx.userId)) as any[];
+
+    const digest = buildDigest({ period, today: todayIn(zone), timezone: zone, daily: rows, workouts, targets });
+    return { ...digest, text: renderDigestText(digest) };
   },
 
   /** The user's configured targets. */

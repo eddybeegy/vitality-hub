@@ -41,7 +41,7 @@ const rpcError = (res: any, status: number, message: string) =>
 export function createMcpServer(ctx: McpContext): McpServer {
   const server = new McpServer(
     { name: MCP_SERVER_NAME, version: '1.0.0' },
-    { instructions: 'Read-only access to one vitality-hub account: metrics, workouts, nutrition, sleep, readiness and targets. Call list_metric_types first to see which metric types this account actually holds.' }
+    { instructions: 'Read-only access to one vitality-hub account: metrics, workouts, nutrition, sleep, readiness, targets and the weekly/monthly digest. Call list_metric_types first to see which metric types this account actually holds.' }
   );
 
   // Every tool is read-only; say so in the annotations so a client never has to
@@ -95,6 +95,15 @@ export function createMcpServer(ctx: McpContext): McpServer {
     inputSchema: { days: daysArg(14) },
     annotations: readOnly,
   }, async (args) => reply(await tools.getReadiness(ctx, args)));
+
+  server.registerTool('get_digest', {
+    title: 'Get digest',
+    description: 'A weekly or monthly digest: training, sleep, intake, body and activity for the trailing period against the period before it. Each line carries both numbers, the percent change and a ready-made sentence; `text` is the whole digest as plain text, and `headlines` the few lines worth leading with.',
+    inputSchema: {
+      period: z.enum(['week', 'month']).optional().describe('week = the trailing 7 days, month = the trailing 30 (default week).'),
+    },
+    annotations: readOnly,
+  }, async (args) => reply(await tools.getDigest(ctx, args)));
 
   server.registerTool('get_targets', {
     title: 'Get targets',

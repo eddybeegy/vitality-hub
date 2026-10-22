@@ -222,6 +222,59 @@ describe('getReadiness', () => {
   });
 });
 
+describe('getDigest', () => {
+  const rows = (type: string, values: Array<[string, number]>) =>
+    values.map(([date, value]) => ({ type, value, timestamp: `${date}T12:00:00Z` }));
+
+  it('defaults to a week and compares it with the previous week', async () => {
+    const { db } = fakeDb([
+      [/FROM users/, USER],
+      [/FROM metrics/, rows('steps', [['2026-10-18', 10000]])],
+      [/FROM workouts/, []],
+      [/FROM targets/, []],
+    ]);
+    const out: any = await tools.getDigest(ctx(db), {});
+    expect(out.period).toBe('week');
+    expect(out.days).toBe(7);
+    // Trailing windows, so the current one ends today and the previous abuts it.
+    expect(out.previous.to < out.current.from).toBe(true);
+    expect(typeof out.text).toBe('string');
+  });
+
+  it('accepts month and rejects anything else by falling back to week', async () => {
+    const answers: Array<[RegExp, any]> = [[/FROM users/, USER], [/FROM metrics/, []], [/FROM workouts/, []], [/FROM targets/, []]];
+    expect((await tools.getDigest(ctx(fakeDb(answers).db), { period: 'month' }) as any).days).toBe(30);
+    expect((await tools.getDigest(ctx(fakeDb(answers).db), { period: 'decade' }) as any).days).toBe(7);
+  });
+
+  it('asks for both windows plus a day of slack, scoped to the context user', async () => {
+    const { db, calls } = fakeDb([[/FROM users/, USER], [/FROM metrics/, []], [/FROM workouts/, []], [/FROM targets/, []]]);
+    await tools.getDigest(ctx(db), { period: 'week', userId: 99 } as any);
+    const metricsCall = calls.find((c) => /FROM metrics/.test(c.sql))!;
+    const cutoff = new Date(metricsCall.params[1] as string).getTime();
+    const daysBack = (Date.now() - cutoff) / 86_400_000;
+    expect(daysBack).toBeGreaterThan(14);
+    expect(daysBack).toBeLessThan(16);
+    for (const c of calls) expect(c.params).toContain(7);
+    expect(JSON.stringify(calls)).not.toContain('99');
+  });
+
+  it('passes workouts and targets through to the digest', async () => {
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const { db } = fakeDb([
+      [/FROM users/, USER],
+      [/FROM metrics/, []],
+      [/FROM workouts/, [{ name: 'Push', duration: 49, volume: 4000, timestamp: `${today}T09:00:00Z` }]],
+      [/FROM targets/, [{ type: 'protein', value: 180, unit: 'g' }]],
+    ]);
+    const out: any = await tools.getDigest(ctx(db), { period: 'week' });
+    const lines = out.sections.flatMap((s: any) => s.lines);
+    expect(lines.find((l: any) => l.key === 'sessions').current).toBe(1);
+    expect(lines.find((l: any) => l.key === 'training_minutes').current).toBe(49);
+    expect(lines.find((l: any) => l.key === 'protein').target).toBe(180);
+  });
+});
+
 describe('getTargets', () => {
   it('returns the stored targets for the context user', async () => {
     const { db, calls } = fakeDb([[/FROM targets/, [{ type: 'protein', value: 170, unit: 'g' }]]]);
