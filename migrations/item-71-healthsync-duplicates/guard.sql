@@ -17,6 +17,13 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+-- Every row the trigger removes is copied here first, the same audit table up.sql
+-- fills, so nothing it removes is unrecorded and down.sql restores it too. A row's
+-- item71_removed_at is its insert transaction's start time; up.sql's rows share one
+-- value per run.
+CREATE TABLE IF NOT EXISTS item71_removed_metrics AS
+  SELECT m.*, now() AS item71_removed_at FROM metrics m WHERE false;
+
 CREATE TABLE IF NOT EXISTS item71_dedupe_scope (type text PRIMARY KEY, kind text NOT NULL);
 TRUNCATE item71_dedupe_scope;
 INSERT INTO item71_dedupe_scope (type, kind)
@@ -28,9 +35,17 @@ INSERT INTO item71_dedupe_scope (type, kind)
 --   single : one row is one reading; copies match on value and unit on the same day.
 -- Only add a type here when preflight section 2 says it looks like re-sync copies.
 -- Never a summed or nutrition type: up.sql and guard.sql refuse them.
+-- The six singles were measured on live by builder, 2026-10-21 (PR #44): every one is
+-- ~1 value a day with the same worst group of 8 copies as BP (one sync event).
 SELECT * FROM (VALUES
   ('blood_pressure_systolic',  'bp'),
-  ('blood_pressure_diastolic', 'bp')
+  ('blood_pressure_diastolic', 'bp'),
+  ('body_fat',                 'single'),
+  ('bmi',                      'single'),
+  ('lean_body_mass',           'single'),
+  ('height',                   'single'),
+  ('respiratory_rate',         'single'),
+  ('heart_rate_recovery',      'single')
 ) AS s(type, kind)
 -- END scope
 ;
@@ -85,7 +100,9 @@ BEGIN
                   AND o.value = NEW.value AND o.unit IS NOT DISTINCT FROM NEW.unit
                   AND CAST(o.timestamp AS date) = CAST(NEW.timestamp AS date)
                   AND (o.timestamp, o.id) < (NEW.timestamp, NEW.id)) THEN
+      INSERT INTO item71_removed_metrics SELECT m.*, now() FROM metrics m WHERE m.id = NEW.id;
       DELETE FROM metrics WHERE id = NEW.id;
+      RAISE LOG 'item71 guard: removed healthsync % copy, metrics id %', NEW.type, NEW.id;
     END IF;
     RETURN NULL;
   END IF;
@@ -122,7 +139,9 @@ BEGIN
        AND CAST(s.timestamp AS date) = CAST(first_ts AS date)
        AND s.value = sys_v AND s.unit IS NOT DISTINCT FROM sys_u
        AND d.value = dia_v AND d.unit IS NOT DISTINCT FROM dia_u) THEN
+    INSERT INTO item71_removed_metrics SELECT m.*, now() FROM metrics m WHERE m.id IN (NEW.id, p.id);
     DELETE FROM metrics WHERE id IN (NEW.id, p.id);
+    RAISE LOG 'item71 guard: removed healthsync bp copy, metrics ids % and %', NEW.id, p.id;
   END IF;
   RETURN NULL;
 END

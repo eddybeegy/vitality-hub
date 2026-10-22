@@ -27,8 +27,10 @@ the day" resolves to the last *sync* on a healthsync day.
 | `down.sql` | drops the guard, restores every removed row with its original id | yes |
 | `selftest.sh` | all of the above against a throwaway database | throwaway only |
 
-**Rule.** Only `source = 'healthsync'`, only the types in the `scope` block (today:
-`blood_pressure_systolic` and `blood_pressure_diastolic`). A blood-pressure *reading*
+**Rule.** Only `source = 'healthsync'`, only the types in the `scope` block:
+`blood_pressure_systolic` and `blood_pressure_diastolic` (kind `bp`), and, since the
+follow-up PR, `body_fat`, `bmi`, `lean_body_mass`, `height`, `respiratory_rate` and
+`heart_rate_recovery` (kind `single`; see "Other healthsync types"). A blood-pressure *reading*
 is a systolic and a diastolic stamped within 2 s of each other (healthsync writes
 them 1-8 ms apart; same window as `src/lib/bpLatest.ts`). Two readings are copies
 when both numbers and units match on the same London day (healthsync metrics are
@@ -42,16 +44,41 @@ are shown in preflight section 5 for information only), any type outside the sco
 any summed or nutrition type (`up.sql` and `guard.sql` refuse to run if one is ever
 put in the scope).
 
-**Accepted trade-off.** Two genuinely separate cuff readings with the same two
-numbers on the same day count as one. Kieron's decision accepts that.
+**Accepted trade-off.** Two genuinely separate readings with the same value(s) on the
+same London day count as one. Kieron's decision accepts that. It is weakest for two of
+the single types: `heart_rate_recovery` is per workout, so two workouts on one day
+with the same recovery value collapse to one, and `respiratory_rate` the same if it is
+ever written per sleep session rather than per night. Both are in scope on the live
+evidence (below), and every row either script removes is kept in
+`item71_removed_metrics`, so a misjudged one can be found and put back.
 
 ## Other healthsync types
 
-From the repo alone I cannot tell whether other healthsync types carry copies.
+builder ran preflight on live (2026-10-21, PR #44) and Kieron said to widen it. Six
+types showed the BP shape:
+
+| type | rows | days | copies | values/day | worst group |
+|---|---|---|---|---|---|
+| respiratory_rate | 117 | 57 | 54 | 1.1 | 8 |
+| body_fat | 80 | 39 | 39 | 1.1 | 8 |
+| bmi | 78 | 38 | 38 | 1.1 | 8 |
+| lean_body_mass | 78 | 38 | 38 | 1.1 | 8 |
+| heart_rate_recovery | 65 | 31 | 34 | 1.0 | 8 |
+| height | 65 | 31 | 34 | 1.0 | 8 |
+
+The worst group is 8 for every one of them and for BP: one sync event (2026-09-09)
+re-stamped every type eight times. That makes the copies sync artefacts, not data,
+and `height` (which does not change) carrying the same 34 copies over 31 days as
+`heart_rate_recovery` is the cleanest proof of it. `heart_rate_recovery` at exactly 1.0
+values a day has never held two different values on one day, so there is no sign of
+two workouts a day being recorded; `respiratory_rate`'s 1.1 means a few days do hold a
+second, different value, which the rule keeps (only an equal value is a copy). Both
+go in, with the trade-off above.
+
 Preflight section 1 lists every healthsync type with its copy count, the number of
 distinct values on an average day, and a verdict:
 
-- `IN SCOPE` — handled by this run.
+- `IN SCOPE` — handled.
 - `looks like re-sync copies - candidate` — about one value a day and copies > 0;
   the spot-measurement shape (weight, body fat, a daily resting HR). To include one,
   add `('<type>', 'single')` to the `scope` block in **all three** files (selftest
@@ -88,10 +115,21 @@ and kb-health's `ON CONFLICT` turn every re-sync into a no-op, and item 69's
 (NEW.source = 'healthsync')`, so the apple_health bulk pushes never call it. For a
 BP half it waits until the partner half is stored, then removes the new pair if an
 earlier pair that day has the same two numbers. It reads its scope from the small
-table `item71_dedupe_scope`, so a type can be added without redeploying. Two things
-to know: kb-health's `INSERT ... RETURNING` (if it uses one) still gets an id back
+table `item71_dedupe_scope`, so a type can be added without redeploying. Every row it
+removes is first copied into `item71_removed_metrics` (the table `up.sql` fills,
+created by `guard.sql` if it is missing) and logged at `LOG` level, so nothing the
+trigger removes goes unrecorded, and `down.sql` restores those rows too. Re-running
+`guard.sql` picks up a changed scope block. Two things to know: kb-health's `INSERT ... RETURNING` (if it uses one) still gets an id back
 for a row the trigger then removes, and a copy is removed rather than refused, so
 kb-health sees success either way.
+
+## Time zone
+
+On live, `metrics.timestamp` is `timestamptz` (item 13). The day rule is the London
+date: `preflight.sql` and `up.sql` `SET LOCAL TIME ZONE 'Europe/London'` before
+`CAST(... AS date)`, and the guard function carries `SET timezone = 'Europe/London'`,
+so a writer session in UTC still gets London days. On a naive `timestamp` column
+(the app's own DDL) the stored value already is London wall-clock for healthsync.
 
 ## Self-test
 
@@ -99,12 +137,17 @@ kb-health sees success either way.
 PGHOST=... PGPORT=... PGUSER=... ./selftest.sh
 ```
 
-Seeds the live 09-09 case (8 copies), a day with two real readings sharing a
+Runs twice, with `metrics.timestamp` as `timestamp` and as `timestamptz`. Seeds the
+live 09-09 case (8 copies), a day with two real readings sharing a
 diastolic, the same reading on the next day, a second user, apple_health and
-withings copies, a half with no partner, an ambiguous half, heart-rate repeats,
+withings copies, a half with no partner, an ambiguous half, single-type copies (height re-synced,
+respiratory_rate with a second real value, body_fat on two days, bmi either side of
+London midnight), heart-rate repeats,
 summed steps and apple_health nutrition. Checks preflight writes nothing; `up`
 removes exactly the 22 copy rows, keeps the earliest, orphans nothing and touches
 nothing else; `up` again is a no-op; `down` restores the table byte for byte;
 `up` refuses a summed or nutrition type in scope; the guard removes copies written
 as one or two statements, keeps a new reading that shares one number, a new day,
-other sources and out-of-scope types; `down` removes the guard.
+other sources and out-of-scope types, respects London midnight for a UTC writer
+session, and copies every row it removes into `item71_removed_metrics`; `down`
+restores those too and removes the guard.
