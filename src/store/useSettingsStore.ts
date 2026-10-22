@@ -69,8 +69,44 @@ interface SettingsState {
   fetchTargets: () => Promise<void>;
   handleSaveSettings: () => Promise<void>;
   handleSaveTargets: () => Promise<void>;
+  /**
+   * Write specific target values, leaving the rest alone. The suggested-targets
+   * Apply button uses this; local state only changes once the server has taken it.
+   */
+  applyTargetValues: (values: Record<string, number>) => Promise<boolean>;
   updateAISetting: (updates: Partial<Settings>) => void;
   updateSettings: (updates: Partial<Settings>) => void;
+}
+
+/**
+ * POST the whole target set. Returns false (having shown the reason) when the
+ * server refused it, so a caller never reports a write that did not land.
+ */
+async function postTargets(list: Target[]): Promise<boolean> {
+  try {
+    const res = await fetch('/api/targets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targets: list.map(t => ({ ...t, value: toApiTargetValue(t.value) })) }),
+    });
+    if (res.ok) return true;
+    if (res.status === 401) {
+      useUIStore.getState().showToast("Your session has expired \u2014 please log in again.", "error");
+      return false;
+    }
+    let message = "Failed to save targets.";
+    try {
+      const body = await res.json();
+      if (body?.error) message = body.error;
+    } catch {
+      // non-JSON error body, fall back to the default message
+    }
+    useUIStore.getState().showToast(message, "error");
+    return false;
+  } catch {
+    useUIStore.getState().showToast("Failed to save targets.", "error");
+    return false;
+  }
 }
 
 const defaultSettings: Settings = {
@@ -284,31 +320,31 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       console.warn("Attempted to save targets before they were loaded. Skipping.");
       return;
     }
-    try {
-      const res = await fetch('/api/targets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          targets: targets.map(t => ({ ...t, value: toApiTargetValue(t.value) }))
-        })
-      });
-      if (res.ok) {
-        useUIStore.getState().showToast("Targets saved successfully!", "success");
-      } else if (res.status === 401) {
-        useUIStore.getState().showToast("Your session has expired — please log in again.", "error");
-      } else {
-        let message = "Failed to save targets.";
-        try {
-          const body = await res.json();
-          if (body?.error) message = body.error;
-        } catch {
-          // non-JSON error body, fall back to the default message
-        }
-        useUIStore.getState().showToast(message, "error");
-      }
-    } catch (err) {
-      useUIStore.getState().showToast("Failed to save targets.", "error");
+    if (await postTargets(targets)) {
+      useUIStore.getState().showToast("Targets saved successfully!", "success");
     }
+  },
+  applyTargetValues: async (values) => {
+    const { targets, targetsLoaded } = get();
+    // Same guard as handleSaveTargets: POST /api/targets replaces the whole set,
+    // so applying before the real rows have loaded would write defaultTargets
+    // over them.
+    if (!targetsLoaded) {
+      useUIStore.getState().showToast("Your targets haven't loaded, so nothing was changed. Reload the page and try again.", "error");
+      return false;
+    }
+    const next = targets.map(t => (t.type in values ? { ...t, value: normaliseTargetValue(values[t.type]) } : t));
+    const unknown = Object.keys(values).filter(type => !targets.some(t => t.type === type));
+    if (unknown.length > 0) {
+      // A caller naming a target type the store doesn't carry would otherwise be
+      // silently dropped and reported as applied.
+      console.error('applyTargetValues: unknown target types', unknown);
+      useUIStore.getState().showToast("Couldn't apply: unknown target type.", "error");
+      return false;
+    }
+    if (!(await postTargets(next))) return false;
+    set({ targets: next });
+    return true;
   },
   updateAISetting: (updates) => {
     set((state) => {
