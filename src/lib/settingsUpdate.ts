@@ -153,6 +153,10 @@ const FIELDS: Record<string, Check> = {
   meal_suggestion_lunch: flag,
   meal_suggestion_dinner: flag,
   show_debug_logs: flag,
+  // Sweep item 86: the column, the store default and the ActivityTab gate all existed,
+  // but the column was never in FIELDS, so POST /api/settings dropped it silently and
+  // there was no way to switch the Correlation Explorer back on once it was off.
+  enable_correlations: flag,
   ai_model: nullable(text(200)),
   medications: nullable(medications),
   preferred_units: oneOf(['metric', 'imperial', 'stone']),

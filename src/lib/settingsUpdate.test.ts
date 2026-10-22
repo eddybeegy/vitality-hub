@@ -151,3 +151,26 @@ describe('buildSettingsUpdate — credentials', () => {
     expect(buildSettingsUpdate({ ai_api_key: 'sk-1' }).columns).toEqual([['ai_api_key', 'sk-1']]);
   });
 });
+
+// Sweep item 86: `enable_correlations` existed as a column, a store default and an
+// ActivityTab gate, but was absent from FIELDS -- POST /api/settings accepted the body
+// and silently dropped it, so once the flag was 0 nothing in the product could set it
+// back to 1.
+describe('enable_correlations', () => {
+  it('writes the column for true, false and the raw 0/1 a GET round-trips', () => {
+    for (const [sent, stored] of [[true, 1], [false, 0], [1, 1], [0, 0]] as const) {
+      const r = buildSettingsUpdate({ enable_correlations: sent });
+      expect(r.error).toBeUndefined();
+      expect(Object.fromEntries(r.columns!)).toEqual({ enable_correlations: stored });
+    }
+  });
+
+  it('rejects a non-boolean rather than coercing it', () => {
+    expect(buildSettingsUpdate({ enable_correlations: 'yes' }).error).toMatch(/enable_correlations/);
+  });
+
+  it('leaves the column alone when the body does not mention it', () => {
+    const r = buildSettingsUpdate({ font_size: 'large' });
+    expect(Object.keys(Object.fromEntries(r.columns!))).toEqual(['font_size']);
+  });
+});

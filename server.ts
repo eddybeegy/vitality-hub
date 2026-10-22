@@ -38,6 +38,7 @@ import { chooseSource, type SourceCounts } from "./src/lib/sourcePriority";
 import { latestBpReadings, BP_TYPES } from "./src/lib/bpLatest";
 import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toSnapshot, historyForAIContext, parseStoredComponents, READINESS_ALGO_VERSION, DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, type ReadinessSnapshot } from "./src/lib/readinessHistory";
 import { validateDayTagInput, normaliseTag, tagsForAIContext, todayIn, addDays, daysBetween, MAX_RANGE_DAYS, type DayTag } from "./src/lib/dayTags";
+import { zonedTimeToInstant } from './src/lib/tzPoint';
 
 // Increase MaxListeners limit to prevent TLSSocket warnings during concurrent API sync chunks
 EventEmitter.defaultMaxListeners = 50;
@@ -135,25 +136,10 @@ function getTodayInTimezone(timezone: string, date: Date = new Date()) {
 }
 
 function getDateTimeInTimezone(timezone: string, dateStr: string, timeStr: string): Date {
-  const parts = `${dateStr}T${timeStr}:00`;
-  const tempDate = new Date(parts + 'Z'); // Treat it as UTC first
-  
-  try {
-    const tzDateStr = tempDate.toLocaleString('en-US', { timeZone: timezone });
-    const utcDateStr = tempDate.toLocaleString('en-US', { timeZone: 'UTC' });
-    
-    const tzTime = new Date(tzDateStr).getTime();
-    const utcTime = new Date(utcDateStr).getTime();
-    
-    if (!isNaN(tzTime) && !isNaN(utcTime)) {
-      const offsetMs = tzTime - utcTime;
-      return new Date(tempDate.getTime() - offsetMs);
-    }
-  } catch (e) {
-    console.error(`Error calculating local time offset for timezone ${timezone}:`, e);
-  }
-  
-  return new Date(parts);
+  // Was a `toLocaleString` round-trip re-parsed with `new Date(...)`, i.e. in the
+  // PROCESS zone; see src/lib/tzPoint.ts for why that is unsound on transition days
+  // and why the fallback path was outright wrong.
+  return zonedTimeToInstant(timezone, dateStr, timeStr);
 }
 
 /**

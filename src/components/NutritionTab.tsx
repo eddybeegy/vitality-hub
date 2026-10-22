@@ -7,6 +7,7 @@ import { SyncButton } from './SyncButton';
 import { FrequentMealsModal } from './FrequentMealsModal';
 import { AdaptiveTdeeCard } from './AdaptiveTdeeCard';
 import type { DayTypeOverride, DayTypeResult } from '../lib/dayTargets';
+import { takeRecent } from '../lib/recentWindow';
 
 interface NutritionTabProps {
   settings: any;
@@ -36,7 +37,12 @@ export const NutritionTab = React.memo(({
 
   const weeklyAverages = React.useMemo(() => {
     const avgOf = (type: string, dataKey: string) => {
-      const days = getChartData(type, dataKey).slice(0, 7);
+      // `getChartData` reads the store's standardized metrics, and `standardizeMetrics`
+      // (src/services/healthDataService.ts) returns them sorted OLDEST-first. `.slice(0, 7)`
+      // therefore averaged the seven oldest logged days -- 2026-01-20..30, 1,495 kcal /
+      // 74 g protein -- and labelled it "7d avg", against a real last-seven of 2,632 / 218.
+      // `takeRecent` picks the newest end whatever order the caller hands us.
+      const days = takeRecent(getChartData(type, dataKey), 7);
       if (days.length === 0) return null;
       const sum = days.reduce((s: number, d: any) => s + (Number(d[dataKey]) || 0), 0);
       return sum / days.length;
