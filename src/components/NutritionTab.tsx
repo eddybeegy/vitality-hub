@@ -6,6 +6,7 @@ import { HealthChart } from './HealthChart';
 import { SyncButton } from './SyncButton';
 import { FrequentMealsModal } from './FrequentMealsModal';
 import { AdaptiveTdeeCard } from './AdaptiveTdeeCard';
+import type { DayTypeOverride, DayTypeResult } from '../lib/dayTargets';
 
 interface NutritionTabProps {
   settings: any;
@@ -15,6 +16,9 @@ interface NutritionTabProps {
   getTodayTotal: (type: string) => number;
   getTargetValue: (type: string) => number | undefined;
   getChartData: (type: string, dataKey: string) => any[];
+  /** Item 88: today's training/rest day, when the user has rest-day targets set. */
+  dayType?: DayTypeResult | null;
+  onDayTypeChange?: (override: DayTypeOverride) => void;
 }
 
 export const NutritionTab = React.memo(({
@@ -24,7 +28,9 @@ export const NutritionTab = React.memo(({
   isSyncing,
   getTodayTotal,
   getTargetValue,
-  getChartData
+  getChartData,
+  dayType,
+  onDayTypeChange
 }: NutritionTabProps) => {
   const [isFrequentMealsOpen, setIsFrequentMealsOpen] = useState(false);
 
@@ -146,6 +152,29 @@ export const NutritionTab = React.memo(({
             />
         </div>
       </div>
+
+      {dayType && onDayTypeChange && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+          <span>Today's targets:</span>
+          <div className="flex bg-zinc-100 dark:bg-zinc-800 p-1 rounded-lg" role="group" aria-label="Training or rest day">
+            {(['training', 'rest'] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => onDayTypeChange(dayType.source === 'manual' && dayType.type === t ? null : t)}
+                aria-pressed={dayType.type === t}
+                className={`px-2 py-1 text-[10px] font-bold uppercase rounded-md transition-all ${dayType.type === t ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300'}`}
+              >
+                {t} day
+              </button>
+            ))}
+          </div>
+          <span className="text-[10px] text-zinc-400">
+            {dayType.source === 'manual'
+              ? 'set by you (tap again to go back to automatic)'
+              : dayType.type === 'training' ? 'workout logged today' : 'no workout logged yet today'}
+          </span>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 rounded-3xl p-4 sm:p-6 shadow-sm flex flex-col items-center justify-center text-center min-w-0">

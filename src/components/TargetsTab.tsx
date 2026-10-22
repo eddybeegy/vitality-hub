@@ -27,6 +27,8 @@ const TARGET_METRIC_MAP: Record<string, { metricType: string; convert?: (v: numb
   protein: { metricType: 'protein' },
   carbs: { metricType: 'carbs' },
   fat: { metricType: 'fat' },
+  calories_rest: { metricType: 'calories_in' },
+  carbs_rest: { metricType: 'carbs' },
   water: { metricType: 'water' },
   sleep: { metricType: 'sleep', convert: (v: number) => v / 3600 },
   resting_heart_rate: { metricType: 'resting_heart_rate' },

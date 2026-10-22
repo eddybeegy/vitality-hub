@@ -76,6 +76,7 @@ import { useUIStore } from './store/useUIStore';
 import { fetchJson, signOut } from './lib/apiFetch';
 import { getLocalDateString, formatDateWithTimezone, parseUTCDate, cn } from './lib/utils';
 import { isTargetSet } from './lib/targets';
+import { dayTypeFor, targetForDay, hasRestTargets, loadOverride, saveOverride, type DayTypeOverride } from './lib/dayTargets';
 import { useRefreshOnFocus } from './lib/useRefreshOnFocus';
 
 export default function App() {
@@ -265,6 +266,18 @@ export default function App() {
     if (!targets) return undefined;
     const target = targets.find((t: any) => t.type === type);
     return target && isTargetSet(target.value) ? Number(target.value) : undefined;
+  };
+
+  // Item 88: on a rest day the Nutrition tab uses the rest-day calorie and carb
+  // targets when they are set. The override is per day and per browser.
+  const todayLocal = getLocalDateString(settings?.timezone);
+  const [dayTypeOverride, setDayTypeOverride] = useState<{ day: string; value: DayTypeOverride }>(() => ({ day: todayLocal, value: loadOverride(todayLocal) }));
+  const currentOverride = dayTypeOverride.day === todayLocal ? dayTypeOverride.value : loadOverride(todayLocal);
+  const dayType = dayTypeFor(summaryData?.workouts, todayLocal, settings?.timezone || 'UTC', currentOverride);
+  const getDayTargetValue = (type: string) => targetForDay(type, dayType.type, getTargetValue);
+  const changeDayType = (value: DayTypeOverride) => {
+    saveOverride(todayLocal, value);
+    setDayTypeOverride({ day: todayLocal, value });
   };
 
   // Shared by every "last synced" badge: HH:MM if the timestamp falls on today in the
@@ -663,8 +676,10 @@ export default function App() {
                   syncAllModules={syncAllModules}
                   isSyncing={isSyncing}
                   getTodayTotal={getTodayTotal}
-                  getTargetValue={getTargetValue}
+                  getTargetValue={getDayTargetValue}
                   getChartData={getChartData}
+                  dayType={hasRestTargets(getTargetValue) ? dayType : null}
+                  onDayTypeChange={changeDayType}
                 />
               )}
 
