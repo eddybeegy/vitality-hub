@@ -151,3 +151,24 @@ as one or two statements, keeps a new reading that shares one number, a new day,
 other sources and out-of-scope types, respects London midnight for a UTC writer
 session, and copies every row it removes into `item71_removed_metrics`; `down`
 restores those too and removes the guard.
+
+## Retired 2026-10-22 (guard only)
+
+Kieron's call on his Telegram line: **retire the dedupe trigger.** The trigger
+`item71_healthsync_copy_guard` and its function `item71_skip_healthsync_copy()` were
+dropped in one transaction and verified absent. The *cleanup* (`up.sql`) stands — the
+duplicates it removed stay removed.
+
+Deliberately **not** run: `down.sql`. It drops the guard *and* restores all 305
+quarantined rows into `metrics`, which would undo item 71's cleanup. To reinstall the
+guard alone, run `guard.sql`.
+
+Kept as the reversal path: `item71_removed_metrics` (305 rows) and
+`item71_dedupe_scope`, plus a `pg_dump` of both at
+`/opt/build/vh-backups/item71-tables-20261022-2145.sql` on ser5.
+
+Note for the record: the retirement gate written into item 94 (7 clear days of zero
+firings while the feed is demonstrably writing) was **not** met — the guard last fired
+at 06:42 on the day it was retired. The evidence that existed was ~11 h clean since the
+kb-health websocket keepalive restart. Nothing guards duplicates now; a reappearance is
+a writer-side bug (kb-health stamps sync time, not reading time) to fix at the source.
