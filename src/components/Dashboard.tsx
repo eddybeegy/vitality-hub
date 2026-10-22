@@ -31,6 +31,7 @@ import { formatWeight, convertWeight, getWeightUnit, getLocalDateString, formatD
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useHealthStore } from '../store/useHealthStore';
 import { getSleepStagesData, getBloodPressureData, getSleepDurationData } from '../services/healthDataService';
+import { BpSummary } from './BpSummary';
 import { BodyDiagram } from './BodyDiagram';
 import { computeReadiness } from '../lib/bodyDiagram';
 import { isTargetSet } from '../lib/targets';
@@ -898,10 +899,11 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                            rangeKeys={['diastolic', 'systolic']} color="#8b5cf6" type="rangeBar" unit=" mmHg" barSize={8}
                            preferredUnits={settings?.preferred_units}
                            referenceLines={[
-                             { value: 120, label: 'Sys High', color: '#ef4444' },
-                             { value: 80, label: 'Dia High', color: '#ef4444' }
+                             { value: 135, label: 'Sys 135', color: '#ef4444' },
+                             { value: 85, label: 'Dia 85', color: '#ef4444' }
                            ]}
                         />
+                        <BpSummary rows={getBloodPressureData(summaryData.metrics || [])} today={getLocalDateString(settings?.timezone)} />
                       </div>
                     )}
                     {widgetId === 'carbs_chart' && (
