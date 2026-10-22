@@ -12,6 +12,102 @@ Deploy target is a private host (`ser5`) you do not have access to. **Produce
 branches + PRs, do not expect to verify at runtime.** builder deploys and verifies.
 
 
+## Handover to builder (cloud, 2026-10-22 06:35) — read this first
+
+Kieron (06:30): **all further development goes to builder until he says
+otherwise.** The cloud project session has stopped starting work. Work may be
+handed back later, so keep this file, `README.md` and `progress.md` current enough
+for a fresh session to resume from them alone (see the ownership note in
+`README.md`).
+
+### PR and branch state at handover
+
+- **Merged since the last update:** roadmap items 77–88. These are #49 (illness
+  warning), #50 (sleep debt), #51 (weekly sets), #52 (plateaus), #53 (training
+  load), #54 (cardio trend), #55 (weight trend and goal date), #56 (suggested
+  kcal/protein targets), #57 (micronutrient gaps), #58 (correlation explorer),
+  #59 (period comparison on charts) and #60 (training-day and rest-day targets).
+  Each PR body carries its tracker-row text for `progress.md`.
+- **Open: #61, item 89, BP bands and 7-day average.** It adds NICE home bands
+  (135/85, 150/95, 180/120, low under 90/60), a 7-day average that needs 4 days,
+  and a `BpSummary` card under the Dashboard BP chart. The chart's reference
+  lines move to 135/85. It is client-only, and its body has the tracker row. It
+  was not seen in a browser.
+- **Pushed, NO PR: `fix/item-90-bedtime-timing`, a half-built item 90 (bedtime
+  and wake-time consistency).** It touches `server.ts`.
+  - Done: the Apple Health ingest stores HAE `sleepStart`/`sleepEnd`, falling
+    back to `inBedStart`/`inBedEnd`, as `bedtime`/`wake_time` metric rows. The
+    value is **seconds from the row's own timestamp**, not an epoch, because
+    `metrics.value` is float4 and would round an epoch to about 2 minutes. The
+    names avoid the `sleep%` prefix on purpose.
+  - Done: the ingest logs the first sleep data point's keys once per sync.
+  - Done: `GET /api/sleep/timing?days=N` returns paired nights, the timing rows
+    are kept out of the AI context, and `src/lib/sleepTiming.ts` has 9 tests.
+  - Not done: the Dashboard card in the `sleep_consistency` widget, which should
+    use `summariseTiming` and `formatClock`.
+  - Not done: checking that the live HAE payload really uses those key names.
+    After one sync, read the "Sleep data point keys" log line.
+  - Whoever resumes it: rebase it on `main` and open a draft PR as the claim.
+
+### Remaining roadmap, in order
+
+The source is the feature-ideas page <https://claude.ai/artifact/BvnqazRXJJYEVrVRqEHrKZ>.
+Kieron's ordering: the rest of the page in page order, with **phone alerts LAST**.
+
+1. **Item 90, bedtime timing.** Finish the branch above.
+2. **Medication and supplement log.** Medications today are a JSON list in
+   `users.medications` (Settings). The idea is a daily "taken" check per item,
+   adherence over time, and start/stop dates as chart markers (reuse the
+   day-tag marker path). It needs a new table and `server.ts`.
+3. **Blood test results.** Manual entry of lipids, HbA1c, ferritin, vitamin D
+   and so on, with reference ranges and trend lines. It needs a new table and
+   `server.ts`.
+4. **Data coverage calendar.** One row per source, one cell per day, coloured by
+   rows received. No coverage endpoint exists yet, so this needs `server.ts`.
+5. **Scheduled backups.** A nightly compressed export with retention. It pairs
+   with item 54's bounded CSV export and is host-side.
+6. **Offline PWA.** `public/sw.js` is a deliberate kill-switch that caches
+   nothing. Caching the shell risks a stale `index.html` after deploys, and
+   caching API data must be cleared on logout (it is per-user). Low value; do it
+   late.
+7. **Progress photos.** Low value, large effort.
+8. **Vitality Hub as an MCP server.** This is **waiting on Kieron's pick** of
+   route inside the app, local stdio, or skip. Do not open a PR before he
+   chooses.
+9. **Weekly digest, then phone alerts, LAST.** The digest uses the alerts'
+   delivery channel. The alerts spec (Telegram or ntfy; stale feed, high BP, low
+   readiness) should come from Kieron.
+
+Small follow-ups noted while building:
+- The Dashboard still compares calories against the base target, not the
+  training-day or rest-day target from #60. It has its own `getTargetValue`.
+- #52's plateau suggestions do not push targets to Hevy (`apply-progression`).
+  That wants Kieron's OK.
+- #56's suggested targets have no Apply button. Writing targets wants Kieron's
+  OK.
+
+### Rules and traps that cost time
+
+- **Tracker rule:** code PRs change code and tests only and never touch
+  `progress.md`. Put the desired tracker-row text in the PR body, and apply it on
+  `main` after merge.
+- **`server.ts`: one open branch at a time.** Parallel branches conflicted
+  repeatedly. Dashboard.tsx and WorkoutsTab.tsx imports also conflict between
+  parallel PRs, so anchor new imports at different lines and test-merge all open
+  branches before marking ready.
+- **Strava is a placeholder.** `modules/strava.ts` is a mock that stores
+  nothing. Cardio trends (#54) use Apple workouts. A real Strava sync would be
+  its own item.
+- **Days are bare `YYYY-MM-DD` in the user's zone** (Europe/London). Use
+  `addDays` (`src/lib/dayTags.ts`) and `metricDay`/`dailySeries`
+  (`src/lib/baselines.ts`). Never reparse a locale string. Workout timestamps
+  are UTC for every source.
+- **The local test baseline:** in a container without a built `better-sqlite3`,
+  `aggregatedMetrics` (sqlite path) and the `dayTags` file load fail on `main`
+  too. They are not regressions.
+- **The Gemini "review / review" check** always times out at 7 minutes. It is
+  noise.
+
 ## Thread status (builder, 2026-10-21 21:52)
 
 **The claude.ai project thread that produced #38, #40, #41 and #42 marked itself
