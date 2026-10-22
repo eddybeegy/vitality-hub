@@ -5233,6 +5233,8 @@ Answer in Markdown. Be specific and cite actual values from the data. Keep it co
     'weight', 'body_fat', 'muscle_mass', 'steps', 'vo2_max', 'calories', 'protein',
     'carbs', 'fat', 'water', 'sleep', 'resting_heart_rate', 'exercise_time',
     'stand_time', 'fiber', 'active_energy', 'blood_oxygen_saturation',
+    // Item 88: optional rest-day variants of calories and carbs.
+    'calories_rest', 'carbs_rest',
   ]);
   const TARGET_VALUE_MAX = 1_000_000;
 
