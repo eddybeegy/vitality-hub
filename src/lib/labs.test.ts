@@ -199,7 +199,7 @@ describe('trends', () => {
 });
 
 describe('outOfRange', () => {
-  it('reports only the latest panel and says which range it used', () => {
+  it('reports the latest value per analyte and says which range it used', () => {
     const out = outOfRange([
       row({ id: 1, analyte: 'vitamin_d', taken_on: '2026-04-01', value: 30 }),
       row({ id: 2, analyte: 'vitamin_d', taken_on: '2026-10-01', value: 80 }),
@@ -209,6 +209,18 @@ describe('outOfRange', () => {
     expect(out.map((o) => o.analyte).sort()).toEqual(['alt', 'ferritin']);
     expect(out.find((o) => o.analyte === 'ferritin')).toMatchObject({ flag: 'low', low: 30, source: 'catalogue' });
     expect(out.find((o) => o.analyte === 'alt')).toMatchObject({ flag: 'high', high: 60, source: 'row' });
+  });
+
+  it('keeps an out-of-range value a newer panel did not retest', () => {
+    // The October panel only retested LDL. The September ferritin is still the most
+    // recent ferritin there is, so it stays an exception - with its own date.
+    const out = outOfRange([
+      row({ id: 1, analyte: 'ferritin', taken_on: '2026-09-01', value: 12 }),
+      row({ id: 2, analyte: 'ldl', taken_on: '2026-09-01', value: 4.2 }),
+      row({ id: 3, analyte: 'ldl', taken_on: '2026-10-01', value: 2.1 }),
+    ], 'male');
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ analyte: 'ferritin', flag: 'low', taken_on: '2026-09-01' });
   });
 
   it('is empty when everything sits inside its range', () => {

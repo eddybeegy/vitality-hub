@@ -226,7 +226,13 @@ export function LabResultsCard() {
 
       {outOfRange.length > 0 && (
         <div className="text-xs p-2 rounded-xl bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300">
-          Outside range on the latest panel: {outOfRange.map(o => `${o.label} ${o.value}${o.unit ? ' ' + o.unit : ''} (${FLAG_LABEL[o.flag]})`).join(', ')}.
+          Outside range: {outOfRange.map(o => {
+            // The date is shown only when this is not the newest panel's own reading:
+            // an analyte nothing has retested since stays an exception, but it should
+            // not look fresher than it is.
+            const stale = panels.length > 0 && o.taken_on !== panels[0].taken_on;
+            return `${o.label} ${o.value}${o.unit ? ' ' + o.unit : ''} (${FLAG_LABEL[o.flag]}${stale ? `, as of ${o.taken_on}` : ''})`;
+          }).join(', ')}.
         </div>
       )}
 

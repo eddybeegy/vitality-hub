@@ -53,8 +53,13 @@ results; it is not advice, and the app says nothing about what any value means.
 * `change` is latest minus previous in the row's own unit; `movement` is `better` /
   `worse` / `flat`, and `null` for an analyte whose catalogue direction is `within`
   (where neither direction is an improvement) or one with no previous result.
-* `outOfRange()` reports exceptions from the **latest panel only** — a value that was
-  high two years ago and normal since is not a current exception.
+* `outOfRange()` reports the **latest value for each analyte** that falls outside its
+  range — not "everything on the newest panel". A follow-up retesting one analyte must
+  not hide a low ferritin from the panel before it: nothing has been measured since, so
+  it is still the current reading. A value that was high and has since been retested
+  normal does drop off, because the newer result for that analyte replaces it.
+  Every exception carries its own `taken_on`, and the card prints that date whenever it
+  is older than the newest panel, so an exception never looks fresher than it is.
 
 ## Dates
 
