@@ -26,6 +26,7 @@ import { ReadinessCard } from './ReadinessCard';
 import { computeSleepDebt, formatHours, sleepTargetHours } from '../lib/sleepDebt';
 import { DEFAULT_RANGE as DEFAULT_SET_RANGE, weeklySetsByMuscle } from '../lib/weeklySets';
 import { SmartAdjustments } from './SmartAdjustments';
+import { GAP_PCT, MICRO_TARGETS, microLabel, weeklyMicroGaps } from '../lib/microGaps';
 import { formatWeight, convertWeight, getWeightUnit, getLocalDateString, formatDateWithTimezone, cn } from '../lib/utils';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useHealthStore } from '../store/useHealthStore';
@@ -652,15 +653,7 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                           <div className="h-56 w-full relative">
                             {(() => {
                               // Define standard targets for micronutrients if not explicitly provided
-                              const microTargets: Record<string, number> = {
-                                vitamin_d: 20, // mcg
-                                magnesium: 400, // mg
-                                zinc: 11, // mg
-                                vitamin_c: 90, // mg
-                                iron: 14, // mg
-                                calcium: 1000, // mg
-                                fiber: 30, // g
-                              };
+                              const microTargets = MICRO_TARGETS;
                               
                               const today = getLocalDateString(settings.timezone);
                               const metrics = summaryData.metrics || [];
@@ -680,7 +673,7 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                                 const percentage = Math.min((val / target) * 100, 100);
                                 totalPercentage += percentage;
                                 return {
-                                  subject: key.replace('vitamin_', 'Vit ').replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                                  subject: microLabel(key),
                                   A: percentage,
                                   fullMark: 100,
                                   val: val
@@ -711,6 +704,18 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                               );
                             })()}
                           </div>
+                          {(() => {
+                            const week = weeklyMicroGaps(summaryData.metrics || [], getLocalDateString(settings?.timezone));
+                            if (!week) return null;
+                            return (
+                              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-2">
+                                <span className="font-semibold">Last 7 days</span> ({week.loggedDays} logged):{' '}
+                                {week.gaps.length === 0
+                                  ? <span className="text-emerald-600 dark:text-emerald-400">every nutrient averaged at least {GAP_PCT}% of target</span>
+                                  : <>under {GAP_PCT}% on <span className="text-amber-600 dark:text-amber-400 font-medium">{week.gaps.map(g => `${g.label} ${Math.round(g.pct)}%`).join(', ')}</span></>}
+                              </p>
+                            );
+                          })()}
                         </div>
                       </div>
                     )}
