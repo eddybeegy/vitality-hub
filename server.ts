@@ -4457,6 +4457,22 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     });
   });
 
+  /**
+   * Keys Hevy's routine GET returns but its PUT refuses. `index` is the set's
+   * position, which the API assigns itself; `rpe` belongs to logged workout
+   * sets, not routine sets. Either one in the body fails the whole request
+   * with a 400, so they are dropped rather than echoed back.
+   */
+  const HEVY_SET_READ_ONLY_KEYS = ['index', 'rpe'];
+
+  function stripHevyReadOnlySetKeys(set: any): any {
+    const out: any = {};
+    for (const [key, value] of Object.entries(set || {})) {
+      if (!HEVY_SET_READ_ONLY_KEYS.includes(key)) out[key] = value;
+    }
+    return out;
+  }
+
   async function updateHevyRoutine(userId: number, routine_external_id: string, routine_title: string, progressions: any[]) {
     const userSettings = await db.prepare("SELECT hevy_api_key FROM users WHERE id = ?").get(userId) as any;
     const apiKey = (userSettings?.hevy_api_key || "").trim();
@@ -4594,14 +4610,19 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
           // progression's own fields differ: building this object from a fixed
           // whitelist dropped `rep_range` and `custom_metric`, so pushing one
           // exercise's new weight would have wiped the rep ranges off all five.
+          // Minus HEVY_SET_READ_ONLY_KEYS: PUT /v1/routines/{id} validates the
+          // set object strictly and 400s on a key it does not own, and GET
+          // returns `index` on every set ("Unrecognized key(s) in object:
+          // 'index', 'rpe'" — measured 2026-10-22). `rpe` is not part of the
+          // routine set schema at all; the explicit `rpe: null` this used to
+          // send was itself half the rejection.
           sets: ex.sets.map((s: any) => ({
-            ...s,
+            ...stripHevyReadOnlySetKeys(s),
             type: s.type || 'normal',
             weight_kg: s.weight_kg !== undefined ? s.weight_kg : 0,
             reps: s.reps !== undefined ? s.reps : null,
             distance_meters: s.distance_meters ?? null,
-            duration_seconds: s.duration_seconds ?? null,
-            rpe: s.rpe ?? null
+            duration_seconds: s.duration_seconds ?? null
           }))
         }))
       }
