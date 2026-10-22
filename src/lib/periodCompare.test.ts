@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatChange, mergePrevious, percentChange, periodDays, previousWindow, shiftPrevious } from './periodCompare';
+import { availableBaselines, baselineOffset, formatChange, mergePrevious, percentChange, periodDays, previousWindow, shiftPrevious } from './periodCompare';
 
 describe('periodDays', () => {
   it('knows the comparable periods and refuses the rest', () => {
@@ -73,5 +73,57 @@ describe('percentChange / formatChange', () => {
     expect(formatChange(4.24)).toBe('+4.2%');
     expect(formatChange(-0.84)).toBe('-0.8%');
     expect(formatChange(0.01)).toBe('0%');
+  });
+});
+
+describe('baselineOffset / availableBaselines', () => {
+  it('makes "prev" the adjacent window whatever the length', () => {
+    expect(baselineOffset('prev', 7)).toBe(7);
+    expect(baselineOffset('prev', 365)).toBe(365);
+  });
+
+  it('uses the fixed offset when it clears the window', () => {
+    expect(baselineOffset('month', 7)).toBe(30);
+    expect(baselineOffset('month', 30)).toBe(30);
+    expect(baselineOffset('year', 90)).toBe(365);
+  });
+
+  it('refuses an offset that would overlap the current window', () => {
+    // 90 days "vs 1mo" would share 60 days with itself.
+    expect(baselineOffset('month', 90)).toBeNull();
+    expect(baselineOffset('month', 365)).toBeNull();
+    expect(baselineOffset('year', 365)).toBe(365);
+  });
+
+  it('offers only the non-overlapping baselines', () => {
+    expect(availableBaselines(7)).toEqual(['prev', 'month', 'year']);
+    expect(availableBaselines(30)).toEqual(['prev', 'month', 'year']);
+    expect(availableBaselines(90)).toEqual(['prev', 'year']);
+    expect(availableBaselines(365)).toEqual(['prev', 'year']);
+  });
+});
+
+describe('previousWindow / shiftPrevious with an explicit offset', () => {
+  it('keeps the window length and moves only its start', () => {
+    expect(previousWindow('2026-10-15', 7, 30)).toEqual({ from: '2026-09-15', to: '2026-09-22' });
+    expect(previousWindow('2026-10-15', 7, 365)).toEqual({ from: '2025-10-15', to: '2025-10-22' });
+  });
+
+  it('defaults the offset to the window length', () => {
+    expect(previousWindow('2026-10-15', 7, 7)).toEqual(previousWindow('2026-10-15', 7));
+  });
+
+  it('shifts rows forward by the offset, not the window length', () => {
+    const rows = [
+      { date: '2025-10-14', v: 1 },   // one day before the window
+      { date: '2025-10-15', v: 2 },   // first day of it
+      { date: '2025-10-21', v: 3 },   // last day of it
+      { date: '2025-10-22', v: 4 },   // one day after
+    ];
+    const shifted = shiftPrevious(rows, r => r.date, '2026-10-15', 7, 365);
+    expect(shifted).toEqual([
+      { date: '2026-10-15', v: 2 },
+      { date: '2026-10-21', v: 3 },
+    ]);
   });
 });
