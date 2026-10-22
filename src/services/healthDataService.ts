@@ -38,6 +38,8 @@ export interface StandardizedWorkout {
   distance?: number | null;
   distanceUnit?: string | null;
   avgHeartRate?: number | null;
+  /** Hevy routine this session was logged against, when it was linked to one. */
+  routineExternalId?: string | null;
   exercises: StandardizedExercise[];
 }
 
@@ -176,6 +178,10 @@ export const standardizeWorkout = (w: any, exercises: any[] = [], sets: any[] = 
     distance: w.distance ?? null,
     distanceUnit: w.distance_unit ?? null,
     avgHeartRate: w.heart_rate_avg ?? null,
+    // Kept so a progression can be pushed back to the routine it came from
+    // (src/lib/progressionPlan.ts) - without it an exercise that appears in
+    // two routines has no tiebreak.
+    routineExternalId: w.routine_external_id ?? null,
     exercises: workoutExercises
   };
 };
