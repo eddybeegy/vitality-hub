@@ -5,8 +5,9 @@ import { SyncButton } from './SyncButton';
 import { SyncStatus } from './SyncStatus';
 import { EmptyState } from './ui/EmptyState';
 import { HealthChart } from './HealthChart';
-import { formatWorkoutWeight, formatWeight, convertWeight, getWeightUnit, convertDistance, getDistanceUnit, formatPaceAndSpeed, formatDateWithTimezone } from '../lib/utils';
+import { formatWorkoutWeight, formatWeight, convertWeight, getWeightUnit, convertDistance, getDistanceUnit, formatPaceAndSpeed, formatDateWithTimezone, getLocalDateString } from '../lib/utils';
 import { analyseStrength, estimate1RM, isWeightedExercise, isWorkingSet, prKindLabel, REP_RANGES } from '../lib/strength';
+import { classifyProgress, RECENT_DAYS } from '../lib/plateaus';
 
 interface WorkoutsTabProps {
   summaryData: any;
@@ -98,6 +99,15 @@ export const WorkoutsTab = React.memo(({
     const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: settings?.timezone || undefined, year: 'numeric', month: '2-digit', day: '2-digit' });
     return analyseStrength(summaryData.workouts, (ts) => dayFormat.format(new Date(ts)));
   }, [summaryData.workouts, settings?.timezone]);
+
+  // Lifts that have stalled or slipped over the last four weeks, from the same
+  // per-session e1RM the progress chart plots.
+  const progress = React.useMemo(
+    () => classifyProgress(strength.exercises, getLocalDateString(settings?.timezone)),
+    [strength.exercises, settings?.timezone]
+  );
+  const stalled = progress.filter(p => p.status !== 'progressing');
+  const progressingCount = progress.length - stalled.length;
 
   const [progressExercise, setProgressExercise] = React.useState('');
   const selectedStrength = strength.exercises.find(e => e.title === progressExercise) ?? strength.exercises[0];
@@ -713,6 +723,43 @@ export const WorkoutsTab = React.memo(({
             })()}
           </div>
         </div>
+
+        {/* Progress check: plateaus and regressions */}
+        {progress.length > 0 && (
+          <div className="space-y-4 mt-8">
+            <div className="flex justify-between items-baseline gap-2 flex-wrap">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Progress Check</h3>
+              <span className="text-[11px] text-zinc-400 dark:text-zinc-500">
+                Best est. 1RM, last {RECENT_DAYS} days vs the 8 weeks before &middot; {progressingCount} of {progress.length} lifts progressing
+              </span>
+            </div>
+            {stalled.length === 0 ? (
+              <p className="text-sm text-emerald-600 dark:text-emerald-400 font-medium">Every lift you're training is still moving up.</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-3">
+                {stalled.map(p => (
+                  <div key={p.title} className="p-4 bg-white dark:bg-zinc-900 rounded-2xl border border-black/5 dark:border-white/5">
+                    <div className="flex justify-between items-baseline gap-2 flex-wrap">
+                      <p className="font-bold text-sm text-zinc-900 dark:text-zinc-100">{p.title}</p>
+                      <span className={
+                        p.status === 'regressing'
+                          ? "text-[10px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400"
+                          : "text-[10px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400"
+                      }>
+                        {p.status === 'regressing' ? 'Going backwards' : 'Plateau'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                      {formatWorkoutWeight(p.recentBest, settings?.preferred_units)} now vs {formatWorkoutWeight(p.priorBest, settings?.preferred_units)} before
+                      ({p.change >= 0 ? '+' : ''}{(p.change * 100).toFixed(1)}%, {p.recentSessions} sessions)
+                    </p>
+                    <p className="text-xs text-zinc-600 dark:text-zinc-300 mt-2">{p.suggestion}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Recent Personal Records */}
         <div className="space-y-6 mt-8">
