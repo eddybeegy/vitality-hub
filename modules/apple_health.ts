@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { DataSourceModule } from "./types";
 import { METRIC_MAP, NUTRITION_METRICS, BODY_METRICS } from '../src/constants';
+import { offsetSeconds } from '../src/lib/sleepTiming';
 
 // Sweep item 47: the Logs tab's "Raw Metrics Received" table reads
 // `last_apple_health_sync_<userId>.json`, and nothing in the repo had ever written
@@ -97,6 +98,9 @@ export const AppleHealthModule: DataSourceModule = {
     // record them and surface one warn per sync.
     const skippedNames = new Set<string>();
     const noValueNames = new Set<string>();
+    // Item 90: the keys of the first main-sleep data point, logged once per sync, so
+    // the payload's start/end field names can be checked against the live feed.
+    let sleepKeys: string | null = null;
     // Item 47: per-raw-name resolution for the Logs tab. The view used to re-derive
     // "Mapped To"/"Status" from METRIC_MAP itself, which only tried two of the five
     // name candidates this module tries -- a second copy of the mapping logic that
@@ -220,6 +224,26 @@ export const AppleHealthModule: DataSourceModule = {
               if (remVal !== undefined && remVal !== null) await insertStmt.run(userId, 'sleep_rem', Number(remVal) * multiplier, sleepUnit, ts);
               if (awakeVal !== undefined && awakeVal !== null) await insertStmt.run(userId, 'sleep_awake', Number(awakeVal) * multiplier, sleepUnit, ts);
               if (inBedVal !== undefined && inBedVal !== null) await insertStmt.run(userId, 'sleep_in_bed', Number(inBedVal) * multiplier, sleepUnit, ts);
+
+              // Item 90: when the night started and ended. Stored as seconds from this
+              // row's own timestamp (see src/lib/sleepTiming.ts for why not an epoch).
+              // Asleep start/end is preferred; in-bed start/end is the fallback pair.
+              const startRaw = dp.sleepStart ?? dp.sleep_start;
+              const endRaw = dp.sleepEnd ?? dp.sleep_end;
+              const pair = startRaw && endRaw ? [startRaw, endRaw]
+                : (dp.inBedStart ?? dp.in_bed_start) && (dp.inBedEnd ?? dp.in_bed_end) ? [dp.inBedStart ?? dp.in_bed_start, dp.inBedEnd ?? dp.in_bed_end]
+                : null;
+              if (pair) {
+                const bedOff = offsetSeconds(ts, normalizeTimestamp(pair[0]));
+                const wakeOff = offsetSeconds(ts, normalizeTimestamp(pair[1]));
+                if (bedOff !== null && wakeOff !== null && wakeOff > bedOff) {
+                  await insertStmt.run(userId, 'bedtime', bedOff, 's_from_ts', ts);
+                  await insertStmt.run(userId, 'wake_time', wakeOff, 's_from_ts', ts);
+                }
+              }
+              if (sleepKeys === null && dp && typeof dp === 'object') {
+                sleepKeys = `${Object.keys(dp).sort().join(', ')}${pair ? '' : ' (no start/end pair found)'}`;
+              }
             }
 
             if (cleanName === 'height') {
@@ -232,6 +256,9 @@ export const AppleHealthModule: DataSourceModule = {
 
     if (skippedNames.size > 0) {
       logEvent('warn', `Unmapped metric names dropped (not in METRIC_MAP): ${[...skippedNames].sort().join(', ')}`, 'apple_health');
+    }
+    if (sleepKeys !== null) {
+      logEvent('info', `Sleep data point keys: ${sleepKeys}`, 'apple_health');
     }
     if (noValueNames.size > 0) {
       logEvent('warn', `Mapped metrics with no recognised value key: ${[...noValueNames].sort().join(', ')}`, 'apple_health');
