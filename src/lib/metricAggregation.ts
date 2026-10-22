@@ -31,7 +31,9 @@ export const NUTRITION_METRICS = [
 
 export const SUMMED_METRICS = [
   'steps', 'active_energy', 'basal_energy', 'flights', 'exercise_time', 'stand_time',
-  'sleep', 'sleep_in_bed', 'sleep_core', 'sleep_deep', 'sleep_rem', 'sleep_awake',
+  // 'sleep_total' is this schema's nightly total; 'sleep' is kept because the
+  // server.ts lists this mirrors still name it.
+  'sleep', 'sleep_total', 'sleep_in_bed', 'sleep_core', 'sleep_deep', 'sleep_rem', 'sleep_awake',
   'time_in_daylight', 'walking_running_distance',
 ] as const;
 

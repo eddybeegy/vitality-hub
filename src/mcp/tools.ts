@@ -60,6 +60,27 @@ const resolvedZone = (tz?: string): string => tz || Intl.DateTimeFormat().resolv
 
 const round = (n: number, dp = 2): number => Math.round(n * 10 ** dp) / 10 ** dp;
 
+/**
+ * Sleep metric types, and the name each gets in a tool response.
+ *
+ * The stored values are SECONDS, whatever `metrics.unit` says -- 260 rows per
+ * stage are labelled 'hr' while holding the same magnitudes as the 432 labelled
+ * 's' (sleep_total averages ~21,000 either way, which is 5.9 h, not 21,000 h).
+ * Nothing reads the unit column, so the mislabel is cosmetic, but it is why this
+ * converts by a fixed /3600 rather than trusting the label.
+ *
+ * There is no bare `sleep` type in this schema: the total is `sleep_total`.
+ * `sleep_in_bed` is present but has only ever been written as 0.
+ */
+const SLEEP_KEYS: Record<string, string> = {
+  sleep_total: 'total_hours',
+  sleep_core: 'core_hours',
+  sleep_deep: 'deep_hours',
+  sleep_rem: 'rem_hours',
+  sleep_awake: 'awake_hours',
+  sleep_in_bed: 'in_bed_hours',
+};
+
 /** Metric rows for a window, one source per day per type, timing rows excluded. */
 async function dailyMetrics(ctx: McpContext, days: number, types?: string[]): Promise<{ timezone: string; rows: DailyRow[] }> {
   const u = await user(ctx);
@@ -163,7 +184,9 @@ export const tools = {
       workouts: workouts.map((w) => ({
         name: w.name,
         timestamp: w.timestamp instanceof Date ? w.timestamp.toISOString() : w.timestamp,
-        duration_minutes: w.duration == null ? null : round(Number(w.duration) / 60, 1),
+        // `duration` is already MINUTES, not seconds -- the workouts tab renders it
+        // as `{workout.duration} min` raw, and hevy's sessions average 45 of them.
+        duration_minutes: w.duration == null ? null : round(Number(w.duration), 1),
         volume: w.volume == null ? null : round(Number(w.volume)),
         source: w.source,
         exercises: byWorkout.get(w.id) || [],
@@ -176,7 +199,7 @@ export const tools = {
     const days = clampDays(args.days, 28);
     const u = await user(ctx);
     const zone = resolvedZone(u.timezone);
-    const { rows } = await dailyMetrics(ctx, days, ['sleep', 'sleep_in_bed', 'sleep_core', 'sleep_deep', 'sleep_rem', 'sleep_awake']);
+    const { rows } = await dailyMetrics(ctx, days, Object.keys(SLEEP_KEYS));
 
     // One extra day so a night anchored just before the window still pairs.
     const timingRows = (await ctx.db.prepare(
@@ -190,14 +213,13 @@ export const tools = {
     return {
       days,
       timezone: zone,
-      // Hours, not the stored minutes: every consumer so far converted it anyway.
       nights: rows
         .filter((r) => Object.keys(r).length > 1)
         .map((r) => {
           const out: Record<string, any> = { date: r.date };
           for (const [k, v] of Object.entries(r)) {
-            if (k === 'date') continue;
-            out[k === 'sleep' ? 'asleep_hours' : k.replace('sleep_', '') + '_hours'] = round(Number(v) / 60, 2);
+            if (k === 'date' || !SLEEP_KEYS[k]) continue;
+            out[SLEEP_KEYS[k]] = round(Number(v) / 3600, 2);
           }
           return out;
         }),
