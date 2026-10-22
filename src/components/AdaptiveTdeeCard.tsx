@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Flame, Info } from 'lucide-react';
+import { Check, Flame, Info, RefreshCw } from 'lucide-react';
 import { fetchJson } from '../lib/apiFetch';
 import { getLocalDateString } from '../lib/utils';
 import { useRefreshOnFocus } from '../lib/useRefreshOnFocus';
 import { estimateTdee, seriesOf, tdeeWindow, MIN_LOGGED_KCAL, type TdeeResult } from '../lib/tdee';
 import { suggestTargets } from '../lib/adaptiveTargets';
+import { useSettingsStore } from '../store/useSettingsStore';
 
 interface AdaptiveTdeeCardProps {
   timezone?: string;
@@ -29,6 +30,8 @@ const CONFIDENCE_STYLE: Record<string, string> = {
 // wants the day's mean and energy wants the day's total; the server has already
 // chosen one source per (day, type) and placed each reading on its local day.
 export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({ timezone, preferredUnits, weightGoalKg, calorieTarget, proteinTarget }) => {
+  const applyTargetValues = useSettingsStore(s => s.applyTargetValues);
+  const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<TdeeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [leanMassKg, setLeanMassKg] = useState<number | null>(null);
@@ -156,8 +159,35 @@ export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({ timezone, pr
                   </div>
                 </div>
                 <p className="text-[11px] text-zinc-400 mt-2">
-                  Calories: {goalLabel}. Protein: {s.proteinBasis === 'lean_mass' ? '2.2 g per kg of lean mass' : '1.8 g per kg of body weight (no lean mass reading)'}. Change them in Targets if they suit you.
+                  Calories: {goalLabel}. Protein: {s.proteinBasis === 'lean_mass' ? '2.2 g per kg of lean mass' : '1.8 g per kg of body weight (no lean mass reading)'}.
                 </p>
+                {(() => {
+                  // Already-applied is judged on both values, so the button stays
+                  // live while either one still differs from the stored target.
+                  const matches = Math.round(calorieTarget || 0) === s.calories && Math.round(proteinTarget || 0) === s.protein;
+                  return (
+                    <div className="mt-3 flex items-center gap-3">
+                      <button
+                        onClick={async () => {
+                          setApplying(true);
+                          try {
+                            await applyTargetValues({ calories: s.calories, protein: s.protein });
+                          } finally {
+                            setApplying(false);
+                          }
+                        }}
+                        disabled={applying || matches}
+                        className="px-3 py-1.5 rounded-xl text-[11px] font-bold uppercase tracking-wider bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+                      >
+                        {applying ? <RefreshCw size={11} className="animate-spin" /> : matches ? <Check size={11} /> : null}
+                        {applying ? 'Applying' : matches ? 'Applied' : 'Apply to targets'}
+                      </button>
+                      <span className="text-[11px] text-zinc-400">
+                        {matches ? 'Your calorie and protein targets match this suggestion.' : 'Writes the calorie and protein targets. Nothing else changes.'}
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}
