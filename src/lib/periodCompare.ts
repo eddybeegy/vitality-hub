@@ -1,9 +1,15 @@
 /**
  * Period comparison for charts (roadmap: "Compare this period with the last one").
  *
- * With the toggle on, a chart showing the last N days also shows the N days
- * before that, shifted forward by N days so both periods share one x-axis: the
- * first day of the previous period sits on the first day of the current one.
+ * With the toggle on, a chart showing the last N days also shows an EARLIER N-day
+ * window, shifted forward onto the current one so both share a single x-axis: the
+ * first day of the baseline window sits on the first day of the current one.
+ *
+ * Which earlier window is the "baseline" is chosen by the user. The immediately
+ * preceding N days is the default, but "the same N days a month ago" and "a year
+ * ago" answer a different question -- a 7-day step average against last week says
+ * whether this week was busy, against last year it says whether the year changed.
+ * The offset is a separate number from the window length for exactly that reason.
  *
  * Days are bare YYYY-MM-DD in the user's zone. Shifting uses addDays (Date.UTC
  * on a bare day), so a DST change inside either window cannot move a point.
@@ -20,27 +26,68 @@ export function periodDays(period: string): number | null {
   return (DAYS as Record<string, number>)[period] ?? null;
 }
 
-/** The previous window for a current window starting on `currentFrom`: [from, to). */
-export function previousWindow(currentFrom: string, days: number): { from: string; to: string } {
-  return { from: addDays(currentFrom, -days), to: currentFrom };
+/** Baseline choices offered in the UI, in order. */
+export const BASELINES = [
+  { key: 'prev', label: 'vs prev', days: 0, title: 'Compare with the period of the same length immediately before this one' },
+  { key: 'month', label: 'vs 1mo', days: 30, title: 'Compare with the same length window 30 days earlier' },
+  { key: 'year', label: 'vs 1yr', days: 365, title: 'Compare with the same length window a year earlier' },
+] as const;
+
+export type BaselineKey = typeof BASELINES[number]['key'];
+
+/**
+ * How far back the baseline window starts, in days, or null when that baseline is
+ * not offered for this period length.
+ *
+ * An offset shorter than the window would make the baseline overlap the current
+ * period -- a 90-day chart "vs 1mo" would compare two windows sharing 60 days and
+ * report a change that is mostly the data compared against itself. Rather than
+ * silently clamping it to something the label no longer describes, that combination
+ * is not offered at all: `baselineOffset('month', 90)` is null and the UI omits
+ * the button.
+ */
+export function baselineOffset(key: BaselineKey, days: number): number | null {
+  const baseline = BASELINES.find(b => b.key === key);
+  if (!baseline) return null;
+  if (baseline.days === 0) return days;             // "prev" is always adjacent
+  return baseline.days >= days ? baseline.days : null;
+}
+
+/** The baselines that are meaningful for a window of `days` days. */
+export function availableBaselines(days: number): BaselineKey[] {
+  return BASELINES.filter(b => baselineOffset(b.key, days) !== null).map(b => b.key);
 }
 
 /**
- * Rows of the previous window, each moved forward by `days` and given a bare
- * day as its date. `dayOf` turns a row's date into its local day ('' to skip).
+ * The baseline window for a current window starting on `currentFrom`: [from, to).
+ * `offset` defaults to the window length, which is the adjacent previous period.
+ */
+export function previousWindow(currentFrom: string, days: number, offset: number = days): { from: string; to: string } {
+  const from = addDays(currentFrom, -offset);
+  return { from, to: addDays(from, days) };
+}
+
+/**
+ * Rows of the baseline window, each moved forward by `offset` and given a bare day
+ * as its date. `dayOf` turns a row's date into its local day ('' to skip).
+ *
+ * Rows are shifted by the OFFSET, not by the window length: with a 7-day window a
+ * year ago, the two differ, and shifting by the length would land the baseline 358
+ * days away from the current period instead of on top of it.
  */
 export function shiftPrevious<T extends { date?: unknown }>(
   rows: T[],
   dayOf: (row: T) => string,
   currentFrom: string,
   days: number,
+  offset: number = days,
 ): Array<T & { date: string }> {
-  const { from, to } = previousWindow(currentFrom, days);
+  const { from, to } = previousWindow(currentFrom, days, offset);
   const out: Array<T & { date: string }> = [];
   for (const row of rows) {
     const day = dayOf(row);
     if (!day || day < from || day >= to) continue;
-    out.push({ ...row, date: addDays(day, days) });
+    out.push({ ...row, date: addDays(day, offset) });
   }
   return out;
 }

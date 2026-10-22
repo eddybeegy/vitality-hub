@@ -53,7 +53,13 @@ describe('getMetrics', () => {
     const { db, calls } = fakeDb([[/FROM users/, USER], [/FROM metrics/, []]]);
     await tools.getMetrics(ctx(db), { days: 5, userId: 99 } as any);
     for (const c of calls) expect(c.params).toContain(7);
-    expect(JSON.stringify(calls)).not.toContain('99');
+    // Structural, not a substring search over the JSON: the cutoff is an ISO
+    // instant and its milliseconds contain '99' a few times an hour, which made
+    // the stringified form flake (seen 2026-10-22 with ...T19:33:17.996Z).
+    for (const c of calls) {
+      expect(c.params).not.toContain(99);
+      expect(c.params).not.toContain('99');
+    }
   });
 
   it('excludes bedtime/wake_time rows, whose values are offsets not quantities', async () => {
@@ -256,7 +262,13 @@ describe('getDigest', () => {
     expect(daysBack).toBeGreaterThan(14);
     expect(daysBack).toBeLessThan(16);
     for (const c of calls) expect(c.params).toContain(7);
-    expect(JSON.stringify(calls)).not.toContain('99');
+    // Structural, not a substring search over the JSON: the cutoff is an ISO
+    // instant and its milliseconds contain '99' a few times an hour, which made
+    // the stringified form flake (seen 2026-10-22 with ...T19:33:17.996Z).
+    for (const c of calls) {
+      expect(c.params).not.toContain(99);
+      expect(c.params).not.toContain('99');
+    }
   });
 
   it('passes workouts and targets through to the digest', async () => {
