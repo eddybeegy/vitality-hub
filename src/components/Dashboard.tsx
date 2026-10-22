@@ -28,6 +28,7 @@ import { SleepTimingCard } from './SleepTimingCard';
 import { DEFAULT_RANGE as DEFAULT_SET_RANGE, weeklySetsByMuscle } from '../lib/weeklySets';
 import { SmartAdjustments } from './SmartAdjustments';
 import { DigestCard } from './DigestCard';
+import { MedicationsCard } from './MedicationsCard';
 import { GAP_PCT, MICRO_TARGETS, microLabel, weeklyMicroGaps } from '../lib/microGaps';
 import { formatWeight, convertWeight, getWeightUnit, getLocalDateString, formatDateWithTimezone, cn } from '../lib/utils';
 import { useSettingsStore } from '../store/useSettingsStore';
@@ -808,6 +809,9 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                           </div>
                         </div>
                       </div>
+                    )}
+                    {widgetId === 'medications' && (
+                      <MedicationsCard />
                     )}
                     {widgetId === 'digest' && (
                       <DigestCard />

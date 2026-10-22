@@ -39,6 +39,7 @@ import { latestBpReadings, BP_TYPES } from "./src/lib/bpLatest";
 import { pairNights, TIMING_TYPES } from "./src/lib/sleepTiming";
 import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toSnapshot, historyForAIContext, parseStoredComponents, READINESS_ALGO_VERSION, DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, type ReadinessSnapshot } from "./src/lib/readinessHistory";
 import { validateDayTagInput, normaliseTag, tagsForAIContext, todayIn, addDays, daysBetween, MAX_RANGE_DAYS, type DayTag } from "./src/lib/dayTags";
+import { validateMedicationInput, validateDoseInput, adherence as medicationAdherence, dueOn as medicationsDueOn, isActiveOn as medicationActiveOn, FREQUENCY_LABELS, MAX_ITEMS as MAX_MEDICATION_ITEMS, MAX_ADHERENCE_DAYS, type Medication, type DoseRow } from "./src/lib/medications";
 import { zonedTimeToInstant } from './src/lib/tzPoint';
 import { mountMcpServer, MCP_PATH } from './src/mcp/server.js';
 import { tools as mcpTools } from './src/mcp/tools.js';
@@ -630,6 +631,34 @@ async function ensureSchema() {
       components: "TEXT",
       algo_version: "INTEGER",
       created_at: "DATETIME DEFAULT CURRENT_TIMESTAMP"
+    },
+    // Medication and supplement log. `start_date`/`end_date` are the user's calendar
+    // days as bare YYYY-MM-DD strings (as in day_tags) because a course starts on a
+    // day, not at an instant; end_date NULL means still being taken. `name` is
+    // VARCHAR for the MySQL UNIQUE key. Replaces the old users.medications JSON blob,
+    // which is left on disk untouched so the change is reversible.
+    medications: {
+      id: "INTEGER PRIMARY KEY AUTOINCREMENT",
+      user_id: "INTEGER",
+      name: "VARCHAR(80)",
+      kind: "VARCHAR(16)",
+      dose: "VARCHAR(40)",
+      frequency: "VARCHAR(24)",
+      start_date: "VARCHAR(10)",
+      end_date: "VARCHAR(10)",
+      notes: "TEXT",
+      created_at: "DATETIME DEFAULT CURRENT_TIMESTAMP"
+    },
+    // One row per item per day the user said something about it: taken = 1 or
+    // skipped = 0. No row means nothing was said, which adherence() counts as
+    // unlogged rather than missed - an empty log is not a failed course.
+    medication_doses: {
+      id: "INTEGER PRIMARY KEY AUTOINCREMENT",
+      user_id: "INTEGER",
+      medication_id: "INTEGER",
+      dose_date: "VARCHAR(10)",
+      taken: "INTEGER DEFAULT 1",
+      created_at: "DATETIME DEFAULT CURRENT_TIMESTAMP"
     }
   };
 
@@ -647,6 +676,8 @@ async function ensureSchema() {
     if (tableName === 'ai_configs') createSql += `, UNIQUE(user_id, provider)`;
     if (tableName === 'day_tags') createSql += `, UNIQUE(user_id, tag_date, tag)`;
     if (tableName === 'readiness_snapshots') createSql += `, UNIQUE(user_id, snapshot_date)`;
+    if (tableName === 'medications') createSql += `, UNIQUE(user_id, name)`;
+    if (tableName === 'medication_doses') createSql += `, UNIQUE(user_id, medication_id, dose_date)`;
     createSql += `)`;
     
     try {
@@ -2623,14 +2654,10 @@ async function checkScheduledRegeneration(userId: number) {
           }))
         })),
         targets: targets,
-        medications: (() => {
-          try {
-            const parsed = user.medications ? JSON.parse(user.medications) : [];
-            return Array.isArray(parsed) ? parsed.slice(0, 10) : [];
-          } catch (e) {
-            return [];
-          }
-        })()
+        // Now read from the medications table (the users.medications JSON is only a
+        // legacy import source). Adherence is included because "prescribed" and
+        // "actually taken" are different facts and only the second explains a trend.
+        medications: await medicationsForAIContext(userId, user)
       });
 
       logEvent('debug', `Combined context constructed: ${Math.round(combinedContext.length / 1024)} KB`, 'ai', userId);
@@ -4531,6 +4558,214 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     } catch (e: any) {
       logEvent('error', `Failed to delete day tag: ${e?.message || e}`, 'App', req.user.id);
       res.status(500).json({ error: 'Failed to delete day tag' });
+    }
+  });
+
+  // --- Medication and supplement log -------------------------------------
+  // Items and their per-day log live in two tables; everything the numbers are
+  // derived from is in src/lib/medications.ts, which is pure and unit-tested.
+
+  const MED_COLUMNS = "id, name, kind, dose, frequency, start_date, end_date, notes";
+
+  const listMedications = async (userId: number): Promise<Medication[]> =>
+    await db.prepare(`SELECT ${MED_COLUMNS} FROM medications WHERE user_id = ? ORDER BY kind ASC, name ASC`).all(userId) as Medication[];
+
+  const dosesBetween = async (userId: number, from: string, to: string): Promise<DoseRow[]> =>
+    await db.prepare(
+      "SELECT medication_id, dose_date, taken FROM medication_doses WHERE user_id = ? AND dose_date >= ? AND dose_date <= ?"
+    ).all(userId, from, to) as DoseRow[];
+
+  // One-time lift of the old users.medications JSON ([{name, dose, frequency}] of
+  // free text) into the table, the first time the user has no rows. The old
+  // frequency strings were never constrained, so an unrecognised one becomes
+  // as_needed - which scores no adherence percentage - and the original text is
+  // kept in notes. Guessing "daily" instead would invent a denominator and report
+  // a confident, false adherence number. The JSON column is not cleared.
+  async function importLegacyMedications(userId: number, user: any): Promise<number> {
+    let parsed: any[] = [];
+    try {
+      const raw = user?.medications ? JSON.parse(user.medications) : [];
+      if (Array.isArray(raw)) parsed = raw;
+    } catch { return 0; }
+    const freqKey = (v: unknown): string | null => {
+      if (typeof v !== 'string') return null;
+      const t = v.trim().toLowerCase();
+      if (!t) return null;
+      for (const [key, label] of Object.entries(FREQUENCY_LABELS)) {
+        if (t === key || t === label.toLowerCase()) return key;
+      }
+      if (t === 'once daily' || t === 'once a day' || t === 'every day' || t === 'od') return 'daily';
+      if (t === 'bd' || t === 'twice a day' || t === '2x daily') return 'twice_daily';
+      if (t === 'tds' || t === 'three times a day' || t === '3x daily') return 'three_times_daily';
+      if (t === 'once weekly' || t === 'once a week') return 'weekly';
+      if (t === 'prn' || t === 'when needed' || t === 'as required') return 'as_needed';
+      return null;
+    };
+    let imported = 0;
+    for (const m of parsed.slice(0, MAX_MEDICATION_ITEMS)) {
+      const name = typeof m?.name === 'string' ? m.name.trim().slice(0, 80) : '';
+      if (!name) continue;
+      const matched = freqKey(m?.frequency);
+      const notes = matched || typeof m?.frequency !== 'string' || !m.frequency.trim()
+        ? null
+        : `Imported frequency: ${m.frequency.trim().slice(0, 150)}`;
+      const r = await db.prepare(
+        "INSERT OR IGNORE INTO medications (user_id, name, kind, dose, frequency, start_date, end_date, notes) VALUES (?, ?, 'medication', ?, ?, NULL, NULL, ?)"
+      ).run(userId, name, typeof m?.dose === 'string' ? m.dose.trim().slice(0, 40) || null : null, matched || 'as_needed', notes);
+      imported += r.changes || 0;
+    }
+    if (imported) logEvent('info', `Imported ${imported} medication(s) from legacy settings`, 'App', userId);
+    return imported;
+  }
+
+  // Shape used in the AI context: what is being taken now, plus how reliably.
+  async function medicationsForAIContext(userId: number, user: any): Promise<any[]> {
+    try {
+      let meds = await listMedications(userId);
+      if (!meds.length) {
+        if (await importLegacyMedications(userId, user)) meds = await listMedications(userId);
+      }
+      if (!meds.length) return [];
+      const today = todayIn(resolveTimeZone(user?.timezone));
+      const from = addDays(today, -29);
+      const scores = medicationAdherence(meds, await dosesBetween(userId, from, today), from, today);
+      const byId = new Map(scores.map(a => [a.medication_id, a]));
+      return meds.filter(m => medicationActiveOn(m, today)).slice(0, 20).map(m => ({
+        name: m.name,
+        kind: m.kind,
+        dose: m.dose,
+        frequency: FREQUENCY_LABELS[m.frequency] ?? m.frequency,
+        started: m.start_date,
+        adherence_30d_percent: byId.get(m.id)?.percent ?? null
+      }));
+    } catch (e: any) {
+      // A missing table must not take the whole AI context down, as with day tags.
+      logEvent('warn', `Could not read medications: ${e?.message || e}`, 'ai', userId);
+      return [];
+    }
+  }
+
+  await app.get("/api/medications", requireAuth, async (req: any, res) => {
+    const dateP = parseDayParam('date', req.query.date);
+    if (dateP.error !== undefined) return res.status(400).json({ error: dateP.error });
+    try {
+      let items = await listMedications(req.user.id);
+      if (!items.length) {
+        const u = await db.prepare("SELECT medications, timezone FROM users WHERE id = ?").get(req.user.id) as any;
+        if (await importLegacyMedications(req.user.id, u)) items = await listMedications(req.user.id);
+      }
+      const tzRow = await db.prepare("SELECT timezone FROM users WHERE id = ?").get(req.user.id) as any;
+      const day = dateP.value || todayIn(resolveTimeZone(tzRow?.timezone));
+      const doses = await dosesBetween(req.user.id, day, day);
+      res.json({ date: day, items, due: medicationsDueOn(items, doses, day) });
+    } catch (e: any) {
+      logEvent('error', `Failed to read medications: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to read medications' });
+    }
+  });
+
+  app.post("/api/medications", requireAuth, async (req: any, res) => {
+    const parsed = validateMedicationInput(req.body);
+    if (parsed.error !== undefined) return res.status(400).json({ error: parsed.error });
+    const m = parsed.value;
+    try {
+      const existing = await db.prepare("SELECT id FROM medications WHERE user_id = ? AND name = ?").get(req.user.id, m.name) as any;
+      if (existing) {
+        // Same name = the same item, so this edits it rather than failing: the UNIQUE
+        // key would reject the insert anyway and a 409 would be a dead end in the UI.
+        await db.prepare(
+          "UPDATE medications SET kind = ?, dose = ?, frequency = ?, start_date = ?, end_date = ?, notes = ? WHERE id = ? AND user_id = ?"
+        ).run(m.kind, m.dose, m.frequency, m.start_date, m.end_date, m.notes, existing.id, req.user.id);
+        return res.json({ id: existing.id, ...m, updated: true });
+      }
+      const count = await db.prepare("SELECT COUNT(*) AS n FROM medications WHERE user_id = ?").get(req.user.id) as any;
+      if ((count?.n || 0) >= MAX_MEDICATION_ITEMS) {
+        return res.status(400).json({ error: `Limited to ${MAX_MEDICATION_ITEMS} items` });
+      }
+      const r = await db.prepare(
+        "INSERT INTO medications (user_id, name, kind, dose, frequency, start_date, end_date, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      ).run(req.user.id, m.name, m.kind, m.dose, m.frequency, m.start_date, m.end_date, m.notes);
+      res.json({ id: r.lastInsertRowid ?? null, ...m, updated: false });
+    } catch (e: any) {
+      logEvent('error', `Failed to save medication: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to save medication' });
+    }
+  });
+
+  // Deletes one of the caller's own items and its dose log; no other table.
+  app.delete("/api/medications/:id", requireAuth, async (req: any, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' });
+    try {
+      const owned = await db.prepare("SELECT id FROM medications WHERE id = ? AND user_id = ?").get(id, req.user.id) as any;
+      if (!owned) return res.status(404).json({ error: 'Not found' });
+      await db.prepare("DELETE FROM medication_doses WHERE user_id = ? AND medication_id = ?").run(req.user.id, id);
+      const r = await db.prepare("DELETE FROM medications WHERE id = ? AND user_id = ?").run(id, req.user.id);
+      res.json({ deleted: r.changes || 0 });
+    } catch (e: any) {
+      logEvent('error', `Failed to delete medication: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to delete medication' });
+    }
+  });
+
+  app.post("/api/medications/:id/doses", requireAuth, async (req: any, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' });
+    const parsed = validateDoseInput(req.body);
+    if (parsed.error !== undefined) return res.status(400).json({ error: parsed.error });
+    const { date, taken } = parsed.value;
+    try {
+      const owned = await db.prepare("SELECT id FROM medications WHERE id = ? AND user_id = ?").get(id, req.user.id) as any;
+      if (!owned) return res.status(404).json({ error: 'Not found' });
+      // Update-then-insert, as in day-tags: INSERT OR REPLACE translates to
+      // DO NOTHING on Postgres, which would silently keep the old taken flag.
+      const upd = await db.prepare(
+        "UPDATE medication_doses SET taken = ? WHERE user_id = ? AND medication_id = ? AND dose_date = ?"
+      ).run(taken ? 1 : 0, req.user.id, id, date);
+      if (!upd.changes) {
+        await db.prepare(
+          "INSERT OR IGNORE INTO medication_doses (user_id, medication_id, dose_date, taken) VALUES (?, ?, ?, ?)"
+        ).run(req.user.id, id, date, taken ? 1 : 0);
+      }
+      res.json({ medication_id: id, date, taken });
+    } catch (e: any) {
+      logEvent('error', `Failed to log dose: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to log dose' });
+    }
+  });
+
+  // Clears a day's entry so it goes back to unlogged, which is not the same as
+  // skipped: undoing a mis-tap must not leave a recorded miss behind.
+  app.delete("/api/medications/:id/doses", requireAuth, async (req: any, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' });
+    const dateP = parseDayParam('date', req.query.date);
+    if (dateP.error !== undefined) return res.status(400).json({ error: dateP.error });
+    if (!dateP.value) return res.status(400).json({ error: 'Missing date' });
+    try {
+      const r = await db.prepare(
+        "DELETE FROM medication_doses WHERE user_id = ? AND medication_id = ? AND dose_date = ?"
+      ).run(req.user.id, id, dateP.value);
+      res.json({ deleted: r.changes || 0 });
+    } catch (e: any) {
+      logEvent('error', `Failed to clear dose: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to clear dose' });
+    }
+  });
+
+  await app.get("/api/medications/adherence", requireAuth, async (req: any, res) => {
+    const daysP = parseIntParam('days', req.query.days, { min: 1, max: MAX_ADHERENCE_DAYS, fallback: 30 });
+    if (daysP.error !== undefined) return res.status(400).json({ error: daysP.error });
+    const days = daysP.value ?? 30;
+    try {
+      const tzRow = await db.prepare("SELECT timezone FROM users WHERE id = ?").get(req.user.id) as any;
+      const to = todayIn(resolveTimeZone(tzRow?.timezone));
+      const from = addDays(to, -(days - 1));
+      const items = await listMedications(req.user.id);
+      res.json({ from, to, days, items: medicationAdherence(items, await dosesBetween(req.user.id, from, to), from, to) });
+    } catch (e: any) {
+      logEvent('error', `Failed to compute adherence: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to compute adherence' });
     }
   });
 
