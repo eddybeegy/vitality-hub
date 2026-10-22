@@ -28,6 +28,8 @@ import { validateClientLog, formatLogLine, escapeLogFields } from "./src/lib/log
 import { jsonParseErrorResponse } from "./src/lib/bodyParseError";
 import { parseLogsQuery, zonedDayBounds, resolveTimeZone, logTimestampToIso, toSqliteTimestamp } from "./src/lib/logsQuery";
 import { parseExportWindow, windowConditions, type ExportWindow } from "./src/lib/exportWindow";
+import { backupName, parseBackupName, sortBackups, expired, backupDue, DEFAULT_BACKUP_HOUR, DEFAULT_BACKUP_KEEP, MAX_BACKUP_KEEP, BACKUP_TICK_MINUTES, type BackupFile } from "./src/lib/backups";
+import { createGzip } from "zlib";
 import { parseLogLevel, parseSourceList, createLogFilter } from "./src/lib/logLevel";
 import { planRefresh, refreshStartMessage, refreshFinishMessage, RefreshModuleResult } from "./src/lib/refreshPlan";
 import { derivedWorkoutHrSql, mergeDerivedHeartRate } from "./src/lib/workoutHeartRate";
@@ -456,7 +458,15 @@ async function ensureSchema() {
       metric_priorities: "TEXT",
       font_size: "TEXT DEFAULT 'medium'",
       dashboard_widgets: "TEXT",
-      readiness_recovery_days: "INTEGER DEFAULT 3"
+      readiness_recovery_days: "INTEGER DEFAULT 3",
+      // Scheduled backups. backup_last_day is the user's LOCAL day of the last
+      // successful run and is written only by the server, so it is deliberately
+      // not in SETTINGS_COLUMNS -- a client that could set it could make the
+      // scheduler believe a backup had happened.
+      backup_enabled: "INTEGER DEFAULT 0",
+      backup_hour: "INTEGER DEFAULT 3",
+      backup_keep: "INTEGER DEFAULT 7",
+      backup_last_day: "TEXT"
     },
     ai_configs: {
       id: "INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -3952,8 +3962,80 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     } catch (e) { failMidStream(res, req.user?.id, 'workouts.csv', e); }
   });
 
+  // The full export, written to any sink that quacks like a stream (`write`, plus
+  // `drain`/`error` events). The HTTP route passes the response; the scheduled backup
+  // passes a gzip stream over a file. One implementation, so a backup on disk and a
+  // downloaded backup can never drift apart in shape or in which rows they contain.
+  async function streamFullExport(sink: any, userId: number): Promise<void> {
+    await writeChunk(sink, `{"exportedAt":${JSON.stringify(new Date().toISOString())}`);
+
+    const streamArray = async (key: string, table: NaiveTsTable, columns: string[]) => {
+      await writeChunk(sink, `,${JSON.stringify(key)}:[`);
+      let first = true;
+      await forEachExportBatch(table, columns, userId, async rows => {
+        const body = rows.map(r => {
+          const out: Record<string, any> = {};
+          for (const c of columns) out[c] = r[c];
+          return JSON.stringify(out);
+        }).join(',');
+        await writeChunk(sink, (first ? '' : ',') + body);
+        first = false;
+      });
+      await writeChunk(sink, ']');
+    };
+
+    await streamArray('metrics', 'metrics', ['type', 'value', 'unit', 'timestamp', 'source']);
+
+    // Workouts carry nested exercises and sets, so they stream per batch with
+    // their children fetched per batch. The previous version built one
+    // `workout_id IN (?, ?, ...)` with a placeholder per workout and then one
+    // `exercise_id IN (...)` per exercise: over 65535 of either, postgres
+    // rejects the statement outright, so a big enough history broke the
+    // backup entirely. Here the workout batch is deliberately small (500) and
+    // the sets query reaches its ids through a subquery rather than a second
+    // placeholder list, so the parameter count is bounded by the batch size
+    // and never by how much history the user has.
+    await writeChunk(sink, ',"workouts":[');
+    let firstWorkout = true;
+    await forEachExportBatch('workouts', ['name', 'duration', 'volume', 'timestamp', 'source', 'external_id'], userId, async rows => {
+      const ids = rows.map(w => w.id);
+      const ph = ids.map(() => '?').join(',');
+      const exercises = await db.prepare(
+        `SELECT * FROM workout_exercises WHERE workout_id IN (${ph})`
+      ).all(...ids) as any[];
+      const setsByExercise: Record<number, any[]> = {};
+      if (exercises.length) {
+        const sets = await db.prepare(
+          `SELECT * FROM workout_sets WHERE exercise_id IN (SELECT id FROM workout_exercises WHERE workout_id IN (${ph}))`
+        ).all(...ids) as any[];
+        for (const st of sets) (setsByExercise[st.exercise_id] ||= []).push(st);
+      }
+      const byWorkout: Record<number, any[]> = {};
+      for (const ex of exercises) (byWorkout[ex.workout_id] ||= []).push({ ...ex, sets: setsByExercise[ex.id] || [] });
+      const body = rows.map(w => JSON.stringify({
+        id: w.id, name: w.name, duration: w.duration, volume: w.volume,
+        timestamp: w.timestamp, source: w.source, external_id: w.external_id,
+        exercises: byWorkout[w.id] || [],
+      })).join(',');
+      await writeChunk(sink, (firstWorkout ? '' : ',') + body);
+      firstWorkout = false;
+    }, 500);
+    await writeChunk(sink, ']');
+
+    // Small tables: a single read is fine and keeps the diff honest about
+    // where the size actually was.
+    const targets = await db.prepare("SELECT type, value, unit FROM targets WHERE user_id = ?").all(userId);
+    await writeChunk(sink, `,"targets":${JSON.stringify(targets)}`);
+
+    await streamArray('mealItems', 'meal_items', ['name', 'calories', 'protein', 'carbs', 'fat', 'fiber', 'timestamp', 'source']);
+
+    const routines = await db.prepare("SELECT name, description, folder_name FROM routines WHERE user_id = ?").all(userId);
+    await writeChunk(sink, `,"routines":${JSON.stringify(routines)}`);
+
+    await writeChunk(sink, '}');
+  }
+
   await app.get("/api/export/all.json", requireAuth, async (req: any, res) => {
-    const userId = req.user.id;
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${exportFilename('backup', 'json')}"`);
     res.setHeader('Cache-Control', 'no-store');
@@ -3962,74 +4044,190 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       // one string first, which for this install was ~170 MB resident on top of
       // the row arrays themselves. The shape emitted here is byte-compatible
       // with what res.json() produced, so existing restore tooling is unaffected.
-      await writeChunk(res, `{"exportedAt":${JSON.stringify(new Date().toISOString())}`);
-
-      const streamArray = async (key: string, table: NaiveTsTable, columns: string[]) => {
-        await writeChunk(res, `,${JSON.stringify(key)}:[`);
-        let first = true;
-        await forEachExportBatch(table, columns, userId, async rows => {
-          const body = rows.map(r => {
-            const out: Record<string, any> = {};
-            for (const c of columns) out[c] = r[c];
-            return JSON.stringify(out);
-          }).join(',');
-          await writeChunk(res, (first ? '' : ',') + body);
-          first = false;
-        });
-        await writeChunk(res, ']');
-      };
-
-      await streamArray('metrics', 'metrics', ['type', 'value', 'unit', 'timestamp', 'source']);
-
-      // Workouts carry nested exercises and sets, so they stream per batch with
-      // their children fetched per batch. The previous version built one
-      // `workout_id IN (?, ?, ...)` with a placeholder per workout and then one
-      // `exercise_id IN (...)` per exercise: over 65535 of either, postgres
-      // rejects the statement outright, so a big enough history broke the
-      // backup entirely. Here the workout batch is deliberately small (500) and
-      // the sets query reaches its ids through a subquery rather than a second
-      // placeholder list, so the parameter count is bounded by the batch size
-      // and never by how much history the user has.
-      await writeChunk(res, ',"workouts":[');
-      let firstWorkout = true;
-      await forEachExportBatch('workouts', ['name', 'duration', 'volume', 'timestamp', 'source', 'external_id'], userId, async rows => {
-        const ids = rows.map(w => w.id);
-        const ph = ids.map(() => '?').join(',');
-        const exercises = await db.prepare(
-          `SELECT * FROM workout_exercises WHERE workout_id IN (${ph})`
-        ).all(...ids) as any[];
-        const setsByExercise: Record<number, any[]> = {};
-        if (exercises.length) {
-          const sets = await db.prepare(
-            `SELECT * FROM workout_sets WHERE exercise_id IN (SELECT id FROM workout_exercises WHERE workout_id IN (${ph}))`
-          ).all(...ids) as any[];
-          for (const st of sets) (setsByExercise[st.exercise_id] ||= []).push(st);
-        }
-        const byWorkout: Record<number, any[]> = {};
-        for (const ex of exercises) (byWorkout[ex.workout_id] ||= []).push({ ...ex, sets: setsByExercise[ex.id] || [] });
-        const body = rows.map(w => JSON.stringify({
-          id: w.id, name: w.name, duration: w.duration, volume: w.volume,
-          timestamp: w.timestamp, source: w.source, external_id: w.external_id,
-          exercises: byWorkout[w.id] || [],
-        })).join(',');
-        await writeChunk(res, (firstWorkout ? '' : ',') + body);
-        firstWorkout = false;
-      }, 500);
-      await writeChunk(res, ']');
-
-      // Small tables: a single read is fine and keeps the diff honest about
-      // where the size actually was.
-      const targets = await db.prepare("SELECT type, value, unit FROM targets WHERE user_id = ?").all(userId);
-      await writeChunk(res, `,"targets":${JSON.stringify(targets)}`);
-
-      await streamArray('mealItems', 'meal_items', ['name', 'calories', 'protein', 'carbs', 'fat', 'fiber', 'timestamp', 'source']);
-
-      const routines = await db.prepare("SELECT name, description, folder_name FROM routines WHERE user_id = ?").all(userId);
-      await writeChunk(res, `,"routines":${JSON.stringify(routines)}`);
-
-      await writeChunk(res, '}');
+      await streamFullExport(res, req.user.id);
       res.end();
     } catch (e) { failMidStream(res, req.user?.id, 'all.json', e); }
+  });
+
+  // ── Scheduled backups ─────────────────────────────────────────────────────
+  // A nightly gzipped full export into BACKUP_DIR, oldest deleted past the
+  // retention count. The directory is inside the bind-mounted ./data, which the
+  // host's hourly restic job already copies off-box to the NAS -- so this gets a
+  // real off-site copy without this process holding any NAS or S3 credential.
+  // An S3 destination would need a new credential and is deliberately not here.
+  const BACKUP_DIR = process.env.BACKUP_DIR || path.join(process.env.SQLITE_PATH ? path.dirname(process.env.SQLITE_PATH) : '/app/data', 'backups');
+
+  // One backup at a time per process. The ticker and the "back up now" button can
+  // both fire, and two concurrent full exports is how the pre-streaming version
+  // used to OOM the container.
+  let backupRunning = false;
+
+  const listBackups = async (): Promise<BackupFile[]> => {
+    let names: string[];
+    try {
+      names = await fs.promises.readdir(BACKUP_DIR);
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return [];
+      throw e;
+    }
+    const out: BackupFile[] = [];
+    for (const name of names) {
+      const parsed = parseBackupName(name);
+      if (!parsed) continue;   // .part files from an interrupted run are skipped here
+      try {
+        const st = await fs.promises.stat(path.join(BACKUP_DIR, name));
+        if (st.isFile()) out.push({ name, day: parsed.day, bytes: st.size });
+      } catch { /* vanished under us (a concurrent prune) -- not an error */ }
+    }
+    return sortBackups(out);
+  };
+
+  /**
+   * Writes one backup and applies retention. Returns the file written.
+   *
+   * The export goes to `<name>.part` and is renamed only after the gzip stream has
+   * flushed and closed. A crash or a full disk mid-export therefore leaves a .part
+   * that `listBackups` ignores, rather than a truncated file that the UI would
+   * present as a good backup -- the failure mode that makes a backup system worse
+   * than none.
+   */
+  const runBackup = async (userId: number, day: string): Promise<BackupFile> => {
+    if (backupRunning) throw new Error('A backup is already running');
+    backupRunning = true;
+    const name = backupName(day, new Date());
+    const finalPath = path.join(BACKUP_DIR, name);
+    const partPath = `${finalPath}.part`;
+    try {
+      await fs.promises.mkdir(BACKUP_DIR, { recursive: true });
+      const file = fs.createWriteStream(partPath);
+      const gzip = createGzip();
+      gzip.pipe(file);
+      try {
+        await streamFullExport(gzip, userId);
+        await new Promise<void>((resolve, reject) => {
+          file.once('finish', resolve);
+          file.once('error', reject);
+          gzip.once('error', reject);
+          gzip.end();
+        });
+      } catch (e) {
+        gzip.destroy();
+        file.destroy();
+        await fs.promises.unlink(partPath).catch(() => {});
+        throw e;
+      }
+      await fs.promises.rename(partPath, finalPath);
+      const st = await fs.promises.stat(finalPath);
+      const written: BackupFile = { name, day, bytes: st.size };
+
+      // Retention runs after the new file is in place, never before: pruning first
+      // would leave a window where the oldest backup is gone and the new one does
+      // not exist yet.
+      const keepRow = await db.prepare("SELECT backup_keep FROM users WHERE id = ?").get(userId) as any;
+      const keep = Number(keepRow?.backup_keep) || DEFAULT_BACKUP_KEEP;
+      for (const old of expired(await listBackups(), keep)) {
+        await fs.promises.unlink(path.join(BACKUP_DIR, old.name)).catch(err =>
+          logEvent('warn', `Could not delete expired backup ${old.name}: ${err?.message || err}`, 'backup', userId));
+      }
+
+      await db.prepare("UPDATE users SET backup_last_day = ? WHERE id = ?").run(day, userId);
+      logEvent('info', `Backup written: ${name} (${st.size} bytes), keeping ${keep}`, 'backup', userId);
+      return written;
+    } finally {
+      backupRunning = false;
+    }
+  };
+
+  // The ticker asks a cheap question rather than arming a timer for 03:00 -- the
+  // container is redeployed several times a day and an armed timer would be lost
+  // every time. See src/lib/backups.ts.
+  const backupTick = async () => {
+    if (backupRunning) return;
+    try {
+      const users = await db.prepare(
+        "SELECT id, timezone, backup_hour, backup_keep, backup_last_day FROM users WHERE backup_enabled = 1"
+      ).all() as any[];
+      for (const u of users) {
+        const tz = resolveTimeZone(u.timezone);
+        const today = todayIn(tz);
+        const hourNow = Number(new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: 'numeric', hour12: false }).format(new Date()));
+        const due = backupDue({
+          enabled: true,
+          hour: Number.isInteger(u.backup_hour) ? u.backup_hour : DEFAULT_BACKUP_HOUR,
+          today,
+          hourNow,
+          lastDay: u.backup_last_day ?? null,
+        });
+        if (due) await runBackup(u.id, today);
+      }
+    } catch (e: any) {
+      logEvent('error', `Scheduled backup failed: ${e?.message || e}`, 'backup');
+    }
+  };
+  setInterval(backupTick, BACKUP_TICK_MINUTES * 60 * 1000);
+  // One check shortly after boot, so enabling it and restarting does not wait a tick.
+  setTimeout(() => { void backupTick(); }, 30 * 1000);
+
+  await app.get("/api/backups", requireAuth, async (req: any, res) => {
+    try {
+      const u = await db.prepare(
+        "SELECT timezone, backup_enabled, backup_hour, backup_keep, backup_last_day FROM users WHERE id = ?"
+      ).get(req.user.id) as any;
+      const files = await listBackups();
+      res.json({
+        config: {
+          enabled: !!u?.backup_enabled,
+          hour: Number.isInteger(u?.backup_hour) ? u.backup_hour : DEFAULT_BACKUP_HOUR,
+          keep: Number.isInteger(u?.backup_keep) ? u.backup_keep : DEFAULT_BACKUP_KEEP,
+          max_keep: MAX_BACKUP_KEEP,
+          directory: BACKUP_DIR,
+          timezone: resolveTimeZone(u?.timezone),
+        },
+        last_day: u?.backup_last_day ?? null,
+        running: backupRunning,
+        files,
+      });
+    } catch (e: any) {
+      logEvent('error', `Failed to list backups: ${e?.message || e}`, 'backup', req.user.id);
+      res.status(500).json({ error: 'Failed to list backups' });
+    }
+  });
+
+  await app.post("/api/backups/run", requireAuth, async (req: any, res) => {
+    if (backupRunning) return res.status(409).json({ error: 'A backup is already running' });
+    try {
+      const u = await db.prepare("SELECT timezone FROM users WHERE id = ?").get(req.user.id) as any;
+      const file = await runBackup(req.user.id, todayIn(resolveTimeZone(u?.timezone)));
+      res.json({ file });
+    } catch (e: any) {
+      logEvent('error', `Manual backup failed: ${e?.message || e}`, 'backup', req.user.id);
+      res.status(500).json({ error: 'Backup failed' });
+    }
+  });
+
+  // `name` is validated by parseBackupName, which only accepts the exact generated
+  // shape -- so no path separator, `..` or absolute path can reach path.join here.
+  await app.get("/api/backups/:name", requireAuth, async (req: any, res) => {
+    if (!parseBackupName(req.params.name)) return res.status(400).json({ error: 'Not a backup file name' });
+    const full = path.join(BACKUP_DIR, req.params.name);
+    if (!fs.existsSync(full)) return res.status(404).json({ error: 'No such backup' });
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Disposition', `attachment; filename="${req.params.name}"`);
+    fs.createReadStream(full).pipe(res);
+  });
+
+  await app.delete("/api/backups/:name", requireAuth, async (req: any, res) => {
+    if (!parseBackupName(req.params.name)) return res.status(400).json({ error: 'Not a backup file name' });
+    try {
+      await fs.promises.unlink(path.join(BACKUP_DIR, req.params.name));
+      logEvent('info', `Backup deleted: ${req.params.name}`, 'backup', req.user.id);
+      res.json({ deleted: req.params.name });
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return res.status(404).json({ error: 'No such backup' });
+      logEvent('error', `Failed to delete backup: ${e?.message || e}`, 'backup', req.user.id);
+      res.status(500).json({ error: 'Failed to delete backup' });
+    }
   });
 
   app.post("/api/debug/deduplicate", requireAuth, async (req: any, res) => {
