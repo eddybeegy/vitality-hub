@@ -36,6 +36,7 @@ import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/l
 import { calculateReadinessScore, type ReadinessResult } from "./src/lib/readiness";
 import { chooseSource, type SourceCounts } from "./src/lib/sourcePriority";
 import { latestBpReadings, BP_TYPES } from "./src/lib/bpLatest";
+import { pairNights, TIMING_TYPES } from "./src/lib/sleepTiming";
 import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toSnapshot, historyForAIContext, parseStoredComponents, READINESS_ALGO_VERSION, DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, type ReadinessSnapshot } from "./src/lib/readinessHistory";
 import { validateDayTagInput, normaliseTag, tagsForAIContext, todayIn, addDays, daysBetween, MAX_RANGE_DAYS, type DayTag } from "./src/lib/dayTags";
 import { zonedTimeToInstant } from './src/lib/tzPoint';
@@ -2445,7 +2446,11 @@ async function checkScheduledRegeneration(userId: number) {
 
       const rawMetrics = await db.prepare(`SELECT type, value, unit, source, ${ db.type === 'sqlite' ? 'timestamp' : readingInstant('metrics') } AS timestamp FROM metrics WHERE user_id = ? AND timestamp >= ?`).all(userId, cutoffStr);
       const timezone = user.timezone || undefined;
-      const filteredMetrics = filterMetricsByPriority(rawMetrics, user.metric_priorities, timezone);
+      // Item 90: bedtime/wake_time values are offsets from their row's timestamp, which
+      // would read as nonsense numbers in the coach's context, so they are left out.
+      const filteredMetrics = filterMetricsByPriority(
+        (rawMetrics as any[]).filter(m => !(TIMING_TYPES as readonly string[]).includes(m.type)),
+        user.metric_priorities, timezone);
       const metrics = filteredMetrics;
       
       const targets = await db.prepare("SELECT * FROM targets WHERE user_id = ?").all(userId);
@@ -4396,6 +4401,27 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     } catch (e: any) {
       logEvent('error', `Failed to build readiness history: ${e?.message || e}`, 'App', req.user.id);
       res.status(500).json({ error: 'Failed to build readiness history' });
+    }
+  });
+
+  // Item 90: each night's bedtime and wake time as instants, oldest first, from the
+  // 'bedtime'/'wake_time' rows the Apple Health ingest writes (offsets from the row's
+  // timestamp; see src/lib/sleepTiming.ts). The client puts them in the user's zone.
+  await app.get("/api/sleep/timing", requireAuth, async (req: any, res) => {
+    const daysP = parseIntParam('days', req.query.days, { min: 7, max: 366, fallback: 28 });
+    if (daysP.error !== undefined) return res.status(400).json({ error: daysP.error });
+    // One extra day so a night anchored the day before the window still pairs.
+    const cutoff = new Date(Date.now() - (daysP.value + 1) * 86_400_000).toISOString();
+    try {
+      const rows = await db.prepare(`
+        SELECT type, value, ${ db.type === 'sqlite' ? 'timestamp' : readingInstant('metrics') } AS timestamp
+        FROM metrics
+        WHERE user_id = ? AND type IN (${TIMING_TYPES.map(() => '?').join(', ')}) AND timestamp >= ?
+      `).all(req.user.id, ...TIMING_TYPES, cutoff) as any[];
+      res.json({ nights: pairNights(rows) });
+    } catch (e: any) {
+      logEvent('error', `Failed to read sleep timing: ${e?.message || e}`, 'App', req.user.id);
+      res.status(500).json({ error: 'Failed to read sleep timing' });
     }
   });
 

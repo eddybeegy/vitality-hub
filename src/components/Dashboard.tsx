@@ -24,6 +24,7 @@ import { CardSkeleton, ChartSkeleton } from './ui/Skeleton';
 import { projectGoal, weightTrend } from '../lib/weightTrend';
 import { ReadinessCard } from './ReadinessCard';
 import { computeSleepDebt, formatHours, sleepTargetHours } from '../lib/sleepDebt';
+import { SleepTimingCard } from './SleepTimingCard';
 import { DEFAULT_RANGE as DEFAULT_SET_RANGE, weeklySetsByMuscle } from '../lib/weeklySets';
 import { SmartAdjustments } from './SmartAdjustments';
 import { GAP_PCT, MICRO_TARGETS, microLabel, weeklyMicroGaps } from '../lib/microGaps';
@@ -525,6 +526,7 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                                     </div>
                                 );
                             })()}
+                            <SleepTimingCard />
                         </div>
                     )}
                     {widgetId === 'water_intake' && (
