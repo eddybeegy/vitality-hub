@@ -4477,7 +4477,12 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
           "accept": "application/json"
         }
       });
-      routine = resp.data;
+      // GET /v1/routines/{id} answers { routine: { ... } }, not the routine
+      // itself. Assigning resp.data left `exercises` undefined and the update
+      // died on "Cannot read properties of undefined (reading 'map')" - which
+      // is exactly what happened the first time this button was ever pressed
+      // (2026-10-22 21:37). Accept either shape.
+      routine = resp.data?.routine ?? resp.data;
       logEvent('info', `Directly fetched Hevy routine ${routine_external_id} details`, 'hevy', userId);
     } catch (e) {
       logEvent('debug', `Direct fetch failed for routine ${routine_external_id}, falling back to list search`, 'hevy', userId);
@@ -4516,7 +4521,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
                 "accept": "application/json"
               }
             });
-            routine = detailRes.data;
+            routine = detailRes.data?.routine ?? detailRes.data;
             logEvent('info', `Fetched full details for routine found in list: ${routine.title}`, 'hevy', userId);
           } catch (e) {
             logEvent('warn', `Failed to fetch routine details for ${found.id}, using list summary data`, 'hevy', userId);
@@ -4538,6 +4543,10 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       throw new Error(`Routine ${routine_external_id} not found in Hevy routines list.`);
     }
 
+    if (!Array.isArray(routine.exercises)) {
+      throw new Error(`Hevy returned routine ${routine_external_id} without an exercises list; nothing was changed.`);
+    }
+
     // 2. Update the routine with suggested progressions
     const updatedRoutine = { ...routine };
     updatedRoutine.exercises = updatedRoutine.exercises.map((ex: any) => {
@@ -4556,7 +4565,10 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
               const newSet = { ...originalSet };
               
               if (s.weight_kg !== undefined) newSet.weight_kg = s.weight_kg;
-              if (s.reps !== undefined) newSet.reps = s.reps;
+              // Hevy sets carry EITHER reps OR a rep_range (reps null). Writing
+              // an explicit rep count over a range would silently replace the
+              // programmed range, so a ranged set only takes the new weight.
+              if (s.reps !== undefined && !(originalSet?.rep_range && originalSet?.reps == null)) newSet.reps = s.reps;
               if (s.distance_meters !== undefined) newSet.distance_meters = s.distance_meters;
               if (s.duration_seconds !== undefined) newSet.duration_seconds = s.duration_seconds;
               
@@ -4578,13 +4590,18 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
           superset_id: ex.superset_id !== undefined ? ex.superset_id : null,
           rest_seconds: ex.rest_seconds !== undefined ? ex.rest_seconds : (ex.rest_seconds || 0),
           notes: ex.notes || null,
+          // Pass through everything the GET returned and only let the
+          // progression's own fields differ: building this object from a fixed
+          // whitelist dropped `rep_range` and `custom_metric`, so pushing one
+          // exercise's new weight would have wiped the rep ranges off all five.
           sets: ex.sets.map((s: any) => ({
+            ...s,
             type: s.type || 'normal',
             weight_kg: s.weight_kg !== undefined ? s.weight_kg : 0,
-            reps: s.reps !== undefined ? s.reps : 0,
-            distance_meters: s.distance_meters || null,
-            duration_seconds: s.duration_seconds || null,
-            rpe: s.rpe || null
+            reps: s.reps !== undefined ? s.reps : null,
+            distance_meters: s.distance_meters ?? null,
+            duration_seconds: s.duration_seconds ?? null,
+            rpe: s.rpe ?? null
           }))
         }))
       }
