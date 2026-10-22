@@ -22,6 +22,7 @@ import { ProgressRing } from './ui/ProgressRing';
 import { CardSkeleton, ChartSkeleton } from './ui/Skeleton';
 import { ReadinessCard } from './ReadinessCard';
 import { computeSleepDebt, formatHours, sleepTargetHours } from '../lib/sleepDebt';
+import { DEFAULT_RANGE as DEFAULT_SET_RANGE, weeklySetsByMuscle } from '../lib/weeklySets';
 import { SmartAdjustments } from './SmartAdjustments';
 import { formatWeight, convertWeight, getWeightUnit, getLocalDateString, formatDateWithTimezone, cn } from '../lib/utils';
 import { useSettingsStore } from '../store/useSettingsStore';
@@ -1412,55 +1413,58 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                               <Flame className="text-rose-500" size={20} />
                             </div>
                           </div>
-                          <p className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mb-1 italic font-serif">Muscle Group Load (7d)</p>
-                          <div className="h-56 w-full relative">
-                            {(() => {
-                              const now = Date.now();
-                              const cutoff = now - 7 * 86400000;
-                              const loadByGroup: Record<string, number> = {};
+                          <p className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mb-1 italic font-serif">Weekly Sets per Muscle (7d)</p>
+                          {(() => {
+                            const weekly = weeklySetsByMuscle(summaryData.workouts || [], getLocalDateString(settings?.timezone), settings?.timezone);
+                            if (weekly.length === 0) {
+                              return <p className="text-xs text-zinc-400">No muscle group data yet — sync Hevy to populate.</p>;
+                            }
 
-                              (summaryData.workouts || []).forEach((w: any) => {
-                                if (new Date(w.timestamp).getTime() < cutoff) return;
-                                (w.exercises || []).forEach((ex: any) => {
-                                  const setCount = (ex.sets || []).length;
-                                  if (!setCount) return;
-                                  if (ex.primaryMuscleGroup) {
-                                    loadByGroup[ex.primaryMuscleGroup] = (loadByGroup[ex.primaryMuscleGroup] || 0) + setCount;
-                                  }
-                                  (ex.secondaryMuscleGroups || []).forEach((g: string) => {
-                                    loadByGroup[g] = (loadByGroup[g] || 0) + setCount * 0.5;
-                                  });
-                                });
-                              });
+                            const max = Math.max(DEFAULT_SET_RANGE.high, ...weekly.map(m => m.sets));
+                            const data = weekly.slice(0, 8).map(m => ({
+                              subject: m.label,
+                              A: Math.round(m.sets * 10) / 10,
+                              fullMark: max
+                            }));
+                            const byStatus = (status: string) => weekly.filter(m => m.status === status);
+                            const fmtSets = (n: number) => (Math.round(n * 10) / 10).toString();
 
-                              const entries = Object.entries(loadByGroup).sort((a, b) => b[1] - a[1]);
-                              if (entries.length === 0) {
-                                return <p className="text-xs text-zinc-400">No muscle group data yet — sync Hevy to populate.</p>;
-                              }
-
-                              const max = Math.max(...entries.map(([, v]) => v));
-                              const data = entries.slice(0, 8).map(([group, v]) => ({
-                                subject: group.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-                                A: Math.round(v * 10) / 10,
-                                fullMark: max
-                              }));
-
-                              return (
-                                <ResponsiveContainer width="100%" height="100%">
-                                  <RadarChart cx="50%" cy="50%" outerRadius="70%" data={data}>
-                                    <PolarGrid stroke="#e4e4e7" strokeDasharray="3 3" />
-                                    <PolarAngleAxis dataKey="subject" tick={{ fill: '#71717a', fontSize: 9, fontWeight: 600 }} />
-                                    <PolarRadiusAxis domain={[0, max]} tick={false} axisLine={false} />
-                                    <Radar name="Sets" dataKey="A" stroke="#f43f5e" fill="#f43f5e" fillOpacity={0.5} />
-                                    <Tooltip
-                                      formatter={(value: any) => [`${Number(value).toFixed(1)} sets`, 'Load']}
-                                      contentStyle={{ borderRadius: '12px', border: '1px solid rgba(0,0,0,0.05)', fontSize: '12px', fontWeight: 'bold' }}
-                                    />
-                                  </RadarChart>
-                                </ResponsiveContainer>
-                              );
-                            })()}
-                          </div>
+                            return (
+                              <>
+                                <div className="h-56 w-full relative">
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <RadarChart cx="50%" cy="50%" outerRadius="70%" data={data}>
+                                      <PolarGrid stroke="#e4e4e7" strokeDasharray="3 3" />
+                                      <PolarAngleAxis dataKey="subject" tick={{ fill: '#71717a', fontSize: 9, fontWeight: 600 }} />
+                                      <PolarRadiusAxis domain={[0, max]} tick={false} axisLine={false} />
+                                      <Radar name="Sets" dataKey="A" stroke="#f43f5e" fill="#f43f5e" fillOpacity={0.5} />
+                                      <Tooltip
+                                        formatter={(value: any) => [`${Number(value).toFixed(1)} hard sets`, 'This week']}
+                                        contentStyle={{ borderRadius: '12px', border: '1px solid rgba(0,0,0,0.05)', fontSize: '12px', fontWeight: 'bold' }}
+                                      />
+                                    </RadarChart>
+                                  </ResponsiveContainer>
+                                </div>
+                                <div className="mt-2 space-y-1 text-[11px]">
+                                  <p className="text-zinc-400 dark:text-zinc-500">Target {DEFAULT_SET_RANGE.low}–{DEFAULT_SET_RANGE.high} hard sets a week; warm-ups don't count, secondary muscles count half.</p>
+                                  {([
+                                    ['under', 'Under', 'text-amber-600 dark:text-amber-400'],
+                                    ['in_range', 'In range', 'text-emerald-600 dark:text-emerald-400'],
+                                    ['over', 'Over', 'text-rose-600 dark:text-rose-400'],
+                                  ] as const).map(([status, label, color]) => {
+                                    const items = byStatus(status);
+                                    if (items.length === 0) return null;
+                                    return (
+                                      <p key={status} className="text-zinc-600 dark:text-zinc-300">
+                                        <span className={cn("font-semibold", color)}>{label}:</span>{' '}
+                                        {items.map(m => `${m.label} ${fmtSets(m.sets)}`).join(' · ')}
+                                      </p>
+                                    );
+                                  })}
+                                </div>
+                              </>
+                            );
+                          })()}
                         </div>
                       </div>
                     )}
