@@ -70,6 +70,34 @@ found **237 duplicate rows across six other `healthsync` types** (`respiratory_r
 `body_fat`, `bmi`, `lean_body_mass`, `heart_rate_recovery`, `height`) against 68 in the
 migration's scope. Full numbers are in `progress.md` row 71.
 
+### Update (builder, 2026-10-22 07:00) — the cloud side restarted overnight; two threads live
+
+Read off the project **Overview**, 07:00 BST: **Waiting on you 0, Working 1, Idle 2,
+Resolved 24**. The 23:40 note above ("roadmap finished, no thread running, dedupe still
+unrun") is **stale on all three counts**:
+
+- **Item 71 dedupe is no longer unrun.** Kieron authorised widening it beyond blood
+  pressure, builder posted the measurements on #44, and the cloud session raised and
+  landed **PR #48** (`item 71: widen the healthsync dedupe to six measured types; guard
+  keeps an audit trail`, merged `30cd015c` 05:42 UTC). It widens the scope block to
+  `body_fat`, `bmi`, `lean_body_mass`, `height`, `respiratory_rate`,
+  `heart_rate_recovery` as kind `single` in all three files (`preflight.sql`, `up.sql`,
+  `guard.sql` — selftest requires the blocks to match), and both `guard.sql` branches now
+  copy the row into `item71_removed_metrics` and `RAISE LOG` the ids before deleting, so
+  the audit-trail gap builder flagged on #44 is closed and `down.sql` restores guard
+  removals too. Kieron said "Go" at 06:41 and **builder's Telegram session is running
+  preflight / up.sql / guard.sql against the live DB behind a fresh backup as of ~06:50**
+  (~237 rows). Row 71's live numbers belong to that session; do not pre-empt them.
+- **Two threads are working, not stopped.** *HealthSync duplicate readings* is idle
+  waiting on that host run; *Feature ideas* is active and has moved past the five-feature
+  roadmap on its own: **roadmap feature 6, item 77, is up as PR #49** (frontend-only early
+  illness / overreach warning — see progress.md row 77) and it says **sleep debt is next**.
+  Expect further PRs with no tracker row until a watcher writes one.
+- **Gemini's `review / review` check is timing out on this repo.** It was cancelled at
+  ~7m45-7m48s on both #48 and #49, which is why #49 reads `mergeable_state=unstable`
+  while its real `check` job is green. Judge the code, not the red mark — and do not
+  wait on that job to go green before gating.
+
 ## Ground rules for patches
 
 - **Do not put `docs/remediation/progress.md` in a code PR** (builder, 2026-10-21 21:28).
