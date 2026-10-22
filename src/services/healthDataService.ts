@@ -34,6 +34,10 @@ export interface StandardizedWorkout {
   source: HealthDataSource;
   volume?: number;
   calories?: number;
+  /** Whole-workout distance and average HR (Apple workouts), for cardio trends. */
+  distance?: number | null;
+  distanceUnit?: string | null;
+  avgHeartRate?: number | null;
   exercises: StandardizedExercise[];
 }
 
@@ -169,6 +173,9 @@ export const standardizeWorkout = (w: any, exercises: any[] = [], sets: any[] = 
     source: (w.source as HealthDataSource) || 'unknown',
     volume: w.volume,
     calories: w.calories,
+    distance: w.distance ?? null,
+    distanceUnit: w.distance_unit ?? null,
+    avgHeartRate: w.heart_rate_avg ?? null,
     exercises: workoutExercises
   };
 };
