@@ -677,3 +677,32 @@ server wired. coach's `container.json` has `postgres-nano-health`, `hevy`,
 `cronometer` and `ssm-secrets` — it reads the health DB directly over read-only
 Postgres and has never had `get_digest`. So the digest's `target` field currently
 has no consumer at all, UI aside. Raised with Kieron.
+
+## 2026-10-23 12:15 — every settable target now reaches its digest line
+
+Kieron, Telegram: "Fix that target and we'll come back to the mcp later" / "And
+any other targets", after I flagged that a body-fat target of 20 was set but the
+digest's body-fat line reported no target.
+
+Only 4 of the digest's metric lines declared a `targetType` (calories, protein,
+weight, steps). Four target types were set in `targets` with no digest line at
+all (`carbs` 185, `fat` 75, `muscle_mass` 59, `vo2_max` 37) and three had a line
+but no `targetType` (`sleep`, `active_energy`, `resting_heart_rate`). So:
+
+- new lines: Carbs, Fat (intake), Muscle mass (body), VO2 max (activity)
+- `targetType` wired onto Sleep, Body fat, Active energy, Resting HR
+
+Two pairings do not share a name, and that is the whole reason this class of bug
+survives review: the `calories` target drives the `calories_in` METRIC, and the
+`vo2_max` target drives the `vo2max` metric. `src/components/TargetsTab.tsx`'s
+`TARGET_METRIC_MAP` is the authority on every pairing; the new test
+`resolves every settable target onto its line, mismatched names included` pins
+the digest to it so the next added target cannot silently carry none.
+
+Sleep is in the same unit on both sides: the target is stored in HOURS and the
+line is already scaled seconds -> hours.
+
+NOT added: lines for `water`, `fiber`, `exercise_time`, `stand_time` and
+`blood_oxygen_saturation`. Each has a `targets` row of 0, which this schema means
+as "unset", so a line would read "no target" while lengthening every digest. Say
+the word if any of those targets gets set for real.

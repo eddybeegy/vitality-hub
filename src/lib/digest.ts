@@ -109,19 +109,26 @@ interface MetricSpec {
  * hence the fixed /3600 rather than trusting the label.
  */
 const METRIC_SPECS: MetricSpec[] = [
-  { key: 'sleep_hours', label: 'Sleep', unit: 'h', type: 'sleep_total', agg: 'avg', dp: 2, scale: 3600, section: 'sleep' },
+  // The `sleep` target is stored in HOURS (TargetsTab.tsx's TARGET_METRIC_MAP
+  // divides the seconds reading by 3600 to compare), and this line is already
+  // scaled to hours, so the two are in the same unit.
+  { key: 'sleep_hours', label: 'Sleep', unit: 'h', type: 'sleep_total', agg: 'avg', dp: 2, scale: 3600, section: 'sleep', targetType: 'sleep' },
   { key: 'sleep_deep_hours', label: 'Deep sleep', unit: 'h', type: 'sleep_deep', agg: 'avg', dp: 2, scale: 3600, section: 'sleep' },
   // The target is stored as `calories`, not `calories_in` (`calories_in` is the
   // METRIC). This asked for a target type that has never existed in `targets`, so
   // the digest's intake line silently carried no target at all.
   { key: 'calories_in', label: 'Calories in', unit: 'kcal', type: 'calories_in', agg: 'avg', dp: 0, section: 'intake', targetType: 'calories' },
   { key: 'protein', label: 'Protein', unit: 'g', type: 'protein', agg: 'avg', dp: 0, section: 'intake', targetType: 'protein' },
+  { key: 'carbs', label: 'Carbs', unit: 'g', type: 'carbs', agg: 'avg', dp: 0, section: 'intake', targetType: 'carbs' },
+  { key: 'fat', label: 'Fat', unit: 'g', type: 'fat', agg: 'avg', dp: 0, section: 'intake', targetType: 'fat' },
   { key: 'weight', label: 'Weight', unit: 'kg', type: 'weight', agg: 'avg', dp: 2, section: 'body', targetType: 'weight' },
   { key: 'weight_latest', label: 'Latest weight', unit: 'kg', type: 'weight', agg: 'latest', dp: 2, section: 'body' },
-  { key: 'body_fat', label: 'Body fat', unit: '%', type: 'body_fat', agg: 'avg', dp: 1, section: 'body' },
+  { key: 'body_fat', label: 'Body fat', unit: '%', type: 'body_fat', agg: 'avg', dp: 1, section: 'body', targetType: 'body_fat' },
+  { key: 'muscle_mass', label: 'Muscle mass', unit: 'kg', type: 'muscle_mass', agg: 'avg', dp: 1, section: 'body', targetType: 'muscle_mass' },
   { key: 'steps', label: 'Steps', unit: '/day', type: 'steps', agg: 'avg', dp: 0, section: 'activity', targetType: 'steps' },
-  { key: 'active_energy', label: 'Active energy', unit: 'kcal/day', type: 'active_energy', agg: 'avg', dp: 0, section: 'activity' },
-  { key: 'resting_heart_rate', label: 'Resting HR', unit: 'bpm', type: 'resting_heart_rate', agg: 'avg', dp: 0, section: 'activity' },
+  { key: 'active_energy', label: 'Active energy', unit: 'kcal/day', type: 'active_energy', agg: 'avg', dp: 0, section: 'activity', targetType: 'active_energy' },
+  { key: 'resting_heart_rate', label: 'Resting HR', unit: 'bpm', type: 'resting_heart_rate', agg: 'avg', dp: 0, section: 'activity', targetType: 'resting_heart_rate' },
+  { key: 'vo2max', label: 'VO2 max', unit: 'ml/kg/min', type: 'vo2max', agg: 'avg', dp: 1, section: 'activity', targetType: 'vo2_max' },
 ];
 
 const SECTION_LABELS: Record<DigestSection['key'], string> = {

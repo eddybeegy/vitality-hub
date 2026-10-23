@@ -201,6 +201,40 @@ describe('targets and missing data', () => {
     expect(lineOf(d, 'calories_in').target).toBe(2600);
   });
 
+  // Every target type the UI can set now reaches a line. Two of the pairings do
+  // NOT share a name -- the `calories` target drives the `calories_in` metric and
+  // the `vo2_max` target drives the `vo2max` metric -- which is exactly how the
+  // intake line came to carry no target for as long as it did. TargetsTab.tsx's
+  // TARGET_METRIC_MAP is the authority on the pairings; this pins the digest to it.
+  it('resolves every settable target onto its line, mismatched names included', () => {
+    const d = buildDigest(base({
+      daily: [day('2026-10-18', {
+        sleep_total: 7 * 3600, calories_in: 2400, protein: 150, carbs: 180, fat: 70,
+        weight: 82, body_fat: 21, muscle_mass: 58, steps: 9000, active_energy: 700,
+        resting_heart_rate: 55, vo2max: 36,
+      })],
+      targets: [
+        { type: 'sleep', value: 8 }, { type: 'calories', value: 2600 }, { type: 'protein', value: 160 },
+        { type: 'carbs', value: 185 }, { type: 'fat', value: 75 }, { type: 'weight', value: 80 },
+        { type: 'body_fat', value: 20 }, { type: 'muscle_mass', value: 59 }, { type: 'steps', value: 10000 },
+        { type: 'active_energy', value: 600 }, { type: 'resting_heart_rate', value: 52 },
+        { type: 'vo2_max', value: 37 },
+      ],
+    }));
+    const targetsByKey = Object.fromEntries(
+      d.sections.flatMap((s: any) => s.lines).map((l: any) => [l.key, l.target]),
+    );
+    expect(targetsByKey).toEqual({
+      sessions: null, training_minutes: null, training_volume: null,
+      sleep_hours: 8, sleep_deep_hours: null,
+      calories_in: 2600, protein: 160, carbs: 185, fat: 75,
+      weight: 80, weight_latest: null, body_fat: 20, muscle_mass: 59,
+      steps: 10000, active_energy: 600, resting_heart_rate: 52, vo2max: 37,
+    });
+    expect(lineOf(d, 'body_fat').text).toContain('vs 20.0 target');
+    expect(lineOf(d, 'vo2max').text).toContain('vs 37.0 target');
+  });
+
   it('marks a metric with no data as no data and headlines it', () => {
     const d = buildDigest(base({ daily: [day('2026-10-18', { steps: 8000 })] }));
     const bodyFat = lineOf(d, 'body_fat');
@@ -228,7 +262,7 @@ describe('headlines', () => {
     }));
     const quiet = d.headlines.filter((h) => h.startsWith('Nothing logged'));
     expect(quiet).toHaveLength(1);
-    expect(quiet[0]).toContain('Sleep, Deep sleep, Calories in, Protein, Weight, Body fat');
+    expect(quiet[0]).toContain('Sleep, Deep sleep, Calories in, Protein, Carbs, Fat, Weight, Body fat, Muscle mass');
     // Weight and "latest weight" are the same metric; it is named once.
     expect(quiet[0].match(/Weight/g)).toHaveLength(1);
   });
@@ -236,7 +270,8 @@ describe('headlines', () => {
   it('says so when nothing moved and nothing is missing', () => {
     const full = (date: string) => day(date, {
       sleep_total: 7 * 3600, sleep_deep: 3600, calories_in: 2000, protein: 150,
-      weight: 75, body_fat: 20, steps: 5000, active_energy: 500, resting_heart_rate: 55,
+      carbs: 200, fat: 70, weight: 75, body_fat: 20, muscle_mass: 58, steps: 5000,
+      active_energy: 500, resting_heart_rate: 55, vo2max: 36,
     });
     const d = buildDigest(base({
       daily: [full('2026-10-18'), full('2026-10-08')],
