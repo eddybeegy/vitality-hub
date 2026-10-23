@@ -623,3 +623,27 @@ Deliberate choices:
   what the workout rows say. Noted in the function's comment, not worked around.
 
 837/837 pass, typecheck clean.
+
+## 2026-10-23 10:18 — A 0 target is unset, in the digest too
+
+Answering Kieron's question about the nine `targets` rows sitting at 0 (`steps`,
+`sleep`, `active_energy`, `exercise_time`, `water`, `fiber`, `resting_heart_rate`,
+`blood_oxygen_saturation`, `weight`).
+
+**0 is the storage form of "unset", by design.** `server.ts` validates a target
+`value` as a finite number and seeds new users with 0 rows, so there is no NULL to
+store. `src/lib/targets.ts` owns the convention and documents it; every UI path
+(`Dashboard`, `App`, `TargetsTab`, `NutritionTab`) resolves targets through
+`isTargetSet`/`normaliseTargetValue`, so a 0 correctly reads as no goal.
+
+**`digest.ts`'s `targetFor` was the one path that did not.** It rejected only
+`null`, so with live data it emitted `target: 0` for `steps` and `weight`. Nothing
+renders that field — neither `DigestCard`'s `LineRow` nor `renderDigestText` reads
+it — but it is carried in the `GET /api/digest` JSON and the `get_digest` MCP tool
+payload, so coach could read "steps target 0" as a real goal it was missing. Now
+routed through `normaliseTargetValue`, with the 0-target case covered both for a
+base type and for a rest-day variant.
+
+Worth noting for whoever renders it next: the digest's `target` field has never been
+displayed anywhere. The `calories_in` -> `calories` fix earlier today made it
+*correct* for the first time, not *visible*.

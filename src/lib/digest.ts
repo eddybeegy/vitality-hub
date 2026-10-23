@@ -21,6 +21,7 @@
  */
 import { addDays } from './dayTags.js';
 import { REST_VARIANTS, isTrainingWorkout } from './dayTargets.js';
+import { normaliseTargetValue } from './targets.js';
 import type { DailyRow } from './metricAggregation.js';
 
 export type DigestPeriod = 'week' | 'month';
@@ -187,9 +188,13 @@ function aggregate(series: Array<{ date: string; value: number }>, agg: Agg): nu
 function targetFor(targets: DigestTarget[] | undefined, type: string | undefined): number | null {
   if (!targets || !type) return null;
   const hit = targets.find((t) => t.type === type);
-  if (!hit || hit.value === null) return null;
-  const n = Number(hit.value);
-  return Number.isFinite(n) ? n : null;
+  if (!hit) return null;
+  // 0 is how the API stores "unset" -- server.ts validates value as a finite
+  // number and seeds new users with 0 rows -- so it must not become a target of
+  // zero. src/lib/targets.ts owns that convention and the whole UI already goes
+  // through it; this was the one path that only rejected null, which put
+  // `target: 0` for steps and weight into the /api/digest and get_digest payloads.
+  return normaliseTargetValue(hit.value);
 }
 
 /**

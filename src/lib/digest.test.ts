@@ -160,6 +160,26 @@ describe('targets and missing data', () => {
     expect(lineOf(d, 'calories_in').target).toBe(2343);
   });
 
+  // 0 is the API's storage form for "unset" (new users are seeded with 0 rows),
+  // so it must not read as a goal of zero -- live data has steps and weight at 0.
+  it('treats a 0 target as unset, not as a target of zero', () => {
+    const d = buildDigest(base({
+      daily: [day('2026-10-18', { steps: 8000, weight: 82 })],
+      targets: [{ type: 'steps', value: 0 }, { type: 'weight', value: 0 }],
+    }));
+    expect(lineOf(d, 'steps').target).toBeNull();
+    expect(lineOf(d, 'weight').target).toBeNull();
+  });
+
+  it('ignores a 0 rest-day variant and keeps the base target', () => {
+    const d = buildDigest(base({
+      daily: [day('2026-10-18', { calories_in: 2400 })],
+      targets: [{ type: 'calories', value: 2600 }, { type: 'calories_rest', value: 0 }],
+      workouts: [{ timestamp: '2026-10-18T18:00:00Z', duration: 45, name: 'Upper A' }],
+    }));
+    expect(lineOf(d, 'calories_in').target).toBe(2600);
+  });
+
   it('uses the base target when no rest-day variant is set', () => {
     const d = buildDigest(base({
       daily: [day('2026-10-18', { calories_in: 2400 })],
