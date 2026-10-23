@@ -41,6 +41,9 @@ import { calculateReadinessScore, type ReadinessResult } from "./src/lib/readine
 import { chooseSource, type SourceCounts } from "./src/lib/sourcePriority";
 import { dedupeOverlappingWorkouts } from "./src/lib/workoutDedupe";
 import { latestBpReadings, BP_TYPES } from "./src/lib/bpLatest";
+import { estimateTdee, seriesOf, tdeeWindow } from "./src/lib/tdee";
+import { suggestTargets } from "./src/lib/adaptiveTargets";
+import { autoTargetsDue, decideAutoTargets, DEFAULT_MAX_CHANGE_KCAL } from "./src/lib/autoTargets";
 import { pairNights, TIMING_TYPES } from "./src/lib/sleepTiming";
 import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toSnapshot, historyForAIContext, parseStoredComponents, READINESS_ALGO_VERSION, DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, type ReadinessSnapshot } from "./src/lib/readinessHistory";
 import { validateDayTagInput, normaliseTag, tagsForAIContext, todayIn, addDays, daysBetween, MAX_RANGE_DAYS, type DayTag } from "./src/lib/dayTags";
@@ -481,7 +484,14 @@ async function ensureSchema() {
       alert_bp_diastolic: "INTEGER DEFAULT 82",
       alert_readiness_floor: "INTEGER DEFAULT 60",
       alert_quiet_start_hour: "INTEGER DEFAULT 22",
-      alert_quiet_end_hour: "INTEGER DEFAULT 7"
+      alert_quiet_end_hour: "INTEGER DEFAULT 7",
+      // Targets that adjust themselves (item 97). Ships OFF: rewriting a number the
+      // user set by hand has to be asked for. auto_targets_last_day is the local day
+      // of the last applied run, written only by the server -- same reasoning as
+      // backup_last_day, a client that could set it could suppress every future run.
+      auto_targets_enabled: "INTEGER DEFAULT 0",
+      auto_targets_max_change_kcal: "INTEGER DEFAULT 300",
+      auto_targets_last_day: "TEXT"
     },
     ai_configs: {
       id: "INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -3110,53 +3120,17 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     res.status(202).json({ started: true, modules: plan.sync, skipped: plan.skipped });
   });
 
-  await app.get("/api/metrics/aggregated", requireAuth, async (req: any, res) => {
-    const userId = req.user.id;
-    const { type } = req.query;
-
-    if (!type || typeof type !== 'string') {
-      return res.status(400).json({ error: 'Missing type' });
-    }
-
-    // Item 42: validate values, not just presence. An unknown granularity used to fall
-    // into the month branch, an unknown aggregation became avg, and an unparseable date
-    // became the 365-day default / now -- all as a 200 the caller could not tell apart
-    // from an answer to the question it asked.
-    const granularityP = parseEnumParam('granularity', req.query.granularity, ['day', 'week', 'month'] as const);
-    if (granularityP.error) return res.status(400).json({ error: granularityP.error });
-    const aggregationP = parseEnumParam('aggregation', req.query.aggregation, ['avg', 'sum', 'max', 'min'] as const, 'avg');
-    if (aggregationP.error) return res.status(400).json({ error: aggregationP.error });
-    const startP = parseDateParam('startDate', req.query.startDate);
-    if (startP.error) return res.status(400).json({ error: startP.error });
-    const endP = parseDateParam('endDate', req.query.endDate);
-    if (endP.error) return res.status(400).json({ error: endP.error });
-    const orderError = checkDateOrder(startP.value, endP.value);
-    if (orderError) return res.status(400).json({ error: orderError });
-    const granularity = granularityP.value;
-    const aggregation = aggregationP.value;
-
-    const typeStr = type;
-    const requestedTypes = typeStr.split(',');
-
-    let cutoffStr: string;
-    if (startP.value) {
-      const d = new Date(startP.value);
-      d.setUTCHours(0, 0, 0, 0); // Include full start day
-      cutoffStr = d.toISOString();
-    } else {
-      cutoffStr = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
-    }
-
-    const endStr: string = endP.value ? endP.value.toISOString() : new Date().toISOString();
-
-    // Keyed on the raw date params (as before) but the validated granularity/aggregation,
-    // so an absent aggregation and an explicit `avg` share one entry.
-    const cacheKey = `${userId}-${typeStr}-${req.query.startDate}-${req.query.endDate}-${granularity}-${aggregation}`;
-    const cachedData = await metricsCache.get(cacheKey);
-    if (cachedData) {
-      return res.json(cachedData);
-    }
-
+  // One implementation, two callers (item 97): this route and the weekly auto-targets
+  // sweep both get their day series here. The sweep applies the TDEE the card shows,
+  // so the two must not be able to disagree about the shape of the data behind it.
+  const aggregatedSeries = async (opts: {
+    userId: number;
+    types: string[];
+    granularity: 'day' | 'week' | 'month';
+    aggregation: 'avg' | 'sum' | 'max' | 'min';
+    startIso: string;
+    endIso: string;
+  }): Promise<ReturnType<typeof aggregateMetricBuckets>> => {
     const mappings: Record<string, string> = {
       "step_count": "steps",
       "stepCount": "steps",
@@ -3204,7 +3178,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
 
     // Build query types including mappings
     const allQueryTypes: string[] = [];
-    requestedTypes.forEach(rt => {
+    opts.types.forEach(rt => {
       if (!allQueryTypes.includes(rt)) allQueryTypes.push(rt);
       // Auto-include weight and body_fat for derived metrics
       if (rt === 'lean_body_mass' || rt === 'fat_mass') {
@@ -3252,22 +3226,186 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       ) d
       WHERE bucket IS NOT NULL
       GROUP BY bucket, type, source
-    `).all(userId, ...allQueryTypes, cutoffStr, endStr) as MetricBucketRow[];
+    `).all(opts.userId, ...allQueryTypes, opts.startIso, opts.endIso) as MetricBucketRow[];
 
-    const userData = await db.prepare("SELECT timezone, metric_priorities FROM users WHERE id = ?").get(userId) as any;
-    const result = aggregateMetricBuckets(buckets, {
-      granularity,
-      aggregation,
+    const userData = await db.prepare("SELECT timezone, metric_priorities FROM users WHERE id = ?").get(opts.userId) as any;
+    return aggregateMetricBuckets(buckets, {
+      granularity: opts.granularity,
+      aggregation: opts.aggregation,
       timezone: userData?.timezone || undefined,
       prioritiesJson: userData?.metric_priorities || null,
       mappings,
       sourceRank: SOURCE_RANK,
       unknownSourceRank: UNKNOWN_SOURCE_RANK,
     });
+  };
+
+  await app.get("/api/metrics/aggregated", requireAuth, async (req: any, res) => {
+    const userId = req.user.id;
+    const { type } = req.query;
+
+    if (!type || typeof type !== 'string') {
+      return res.status(400).json({ error: 'Missing type' });
+    }
+
+    // Item 42: validate values, not just presence. An unknown granularity used to fall
+    // into the month branch, an unknown aggregation became avg, and an unparseable date
+    // became the 365-day default / now -- all as a 200 the caller could not tell apart
+    // from an answer to the question it asked.
+    const granularityP = parseEnumParam('granularity', req.query.granularity, ['day', 'week', 'month'] as const);
+    if (granularityP.error) return res.status(400).json({ error: granularityP.error });
+    const aggregationP = parseEnumParam('aggregation', req.query.aggregation, ['avg', 'sum', 'max', 'min'] as const, 'avg');
+    if (aggregationP.error) return res.status(400).json({ error: aggregationP.error });
+    const startP = parseDateParam('startDate', req.query.startDate);
+    if (startP.error) return res.status(400).json({ error: startP.error });
+    const endP = parseDateParam('endDate', req.query.endDate);
+    if (endP.error) return res.status(400).json({ error: endP.error });
+    const orderError = checkDateOrder(startP.value, endP.value);
+    if (orderError) return res.status(400).json({ error: orderError });
+    const granularity = granularityP.value;
+    const aggregation = aggregationP.value;
+
+    const typeStr = type;
+    const requestedTypes = typeStr.split(',');
+
+    let cutoffStr: string;
+    if (startP.value) {
+      const d = new Date(startP.value);
+      d.setUTCHours(0, 0, 0, 0); // Include full start day
+      cutoffStr = d.toISOString();
+    } else {
+      cutoffStr = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
+    }
+
+    const endStr: string = endP.value ? endP.value.toISOString() : new Date().toISOString();
+
+    // Keyed on the raw date params (as before) but the validated granularity/aggregation,
+    // so an absent aggregation and an explicit `avg` share one entry.
+    const cacheKey = `${userId}-${typeStr}-${req.query.startDate}-${req.query.endDate}-${granularity}-${aggregation}`;
+    const cachedData = await metricsCache.get(cacheKey);
+    if (cachedData) {
+      return res.json(cachedData);
+    }
+
+    const result = await aggregatedSeries({
+      userId,
+      types: requestedTypes,
+      granularity,
+      aggregation,
+      startIso: cutoffStr,
+      endIso: endStr,
+    });
 
     metricsCache.set(cacheKey, result);
     res.json(result);
   });
+
+  // --- Targets that adjust themselves (item 97) -----------------------------
+  // The Apply button from #77 with nobody to press it: once a week, write the
+  // suggested calorie and protein targets into Targets. Opt-in, and every run --
+  // applied or refused -- is logged under source `targets`, so a target that moved
+  // on its own can always be traced back to a run. Every guard, and the reason it
+  // gives, is in src/lib/autoTargets.ts.
+  const AUTO_TARGETS_TICK_MINUTES = 60;
+  let autoTargetsRunning = false;
+  const autoTargetsTick = async () => {
+    if (autoTargetsRunning) return;
+    autoTargetsRunning = true;
+    try {
+      const users = await db.prepare(
+        "SELECT id, timezone, auto_targets_max_change_kcal, auto_targets_last_day FROM users WHERE auto_targets_enabled = 1"
+      ).all() as any[];
+      for (const u of users) {
+        const userId = Number(u.id);
+        const tz = resolveTimeZone(u.timezone);
+        const today = todayIn(tz);
+        // The weekday of the user's local calendar day, read back as UTC, so no
+        // offset can put Monday's run on Sunday.
+        const weekday = new Date(today + 'T00:00:00Z').getUTCDay();
+        const lastAppliedDay = u.auto_targets_last_day ?? null;
+        // Cheap gates first: on six days out of seven there is no reason to read
+        // 28 days of metrics only to refuse.
+        if (!autoTargetsDue({ enabled: true, today, weekday, lastAppliedDay }).due) continue;
+
+        // The same two reads, the same slack and the same window as AdaptiveTdeeCard.
+        const from = new Date(tdeeWindow(today).start + 'T00:00:00Z');
+        from.setUTCDate(from.getUTCDate() - 2);
+        const startIso = from.toISOString();
+        const endIso = new Date().toISOString();
+        const [weightRows, energyRows] = await Promise.all([
+          aggregatedSeries({ userId, types: ['weight', 'lean_body_mass'], granularity: 'day', aggregation: 'avg', startIso, endIso }),
+          aggregatedSeries({ userId, types: ['calories_in', 'active_energy', 'basal_energy'], granularity: 'day', aggregation: 'sum', startIso, endIso }),
+        ]);
+        const tdee = estimateTdee({
+          today,
+          weight: seriesOf(weightRows as any[], 'weight'),
+          intake: seriesOf(energyRows as any[], 'calories_in'),
+          activeEnergy: seriesOf(energyRows as any[], 'active_energy'),
+          basalEnergy: seriesOf(energyRows as any[], 'basal_energy'),
+        });
+
+        const targetRows = await db.prepare("SELECT type, value FROM targets WHERE user_id = ?").all(userId) as any[];
+        const targetOf = (type: string) => {
+          const v = Number(targetRows.find((r) => r.type === type)?.value);
+          return Number.isFinite(v) ? v : null;
+        };
+        const leanSeries = seriesOf(weightRows as any[], 'lean_body_mass');
+        const leanMassKg = leanSeries.length ? leanSeries[leanSeries.length - 1].value : null;
+        const goalWeightKg = targetOf('weight');
+
+        const suggestion = tdee.status === 'ok'
+          ? suggestTargets({ tdee: tdee.tdee, trendWeightKg: tdee.trendWeightKg, goalWeightKg, leanMassKg })
+          : null;
+        const maxChange = Number.isInteger(u.auto_targets_max_change_kcal)
+          ? u.auto_targets_max_change_kcal
+          : DEFAULT_MAX_CHANGE_KCAL;
+        const decision = decideAutoTargets({
+          enabled: true,
+          today,
+          weekday,
+          lastAppliedDay,
+          confidence: tdee.status === 'ok' ? tdee.confidence : null,
+          suggestion: suggestion ? { calories: suggestion.calories, protein: suggestion.protein } : null,
+          current: { calories: targetOf('calories'), protein: targetOf('protein') },
+          maxChangeKcal: maxChange,
+        });
+
+        if (decision.apply === false) {
+          // Logged, not silent: "my target did not move" needs an answer, and a
+          // refusal that leaves no trace is indistinguishable from a sweep that
+          // never ran.
+          logEvent('info', `Auto-targets: no change -- ${decision.reason}`, 'targets', userId);
+          continue;
+        }
+
+        const insertStmt = db.prepare(`
+          ${db.type === 'sqlite' ? 'INSERT OR REPLACE' : 'INSERT'} INTO targets (user_id, type, value, unit)
+          VALUES (?, ?, ?, ?)
+          ${db.type === 'postgres' ? 'ON CONFLICT (user_id, type) DO UPDATE SET value = EXCLUDED.value, unit = EXCLUDED.unit' : ''}
+        `);
+        const transaction = db.transaction(async (list: any[]) => {
+          for (const t of list) await insertStmt.run(userId, t.type, t.value, t.unit);
+        });
+        try {
+          await transaction(decision.targets);
+        } catch (e: any) {
+          // The marker is only stamped after a write that landed, so a failed run
+          // is retried on the next tick rather than skipped for a week.
+          logEvent('error', `Auto-targets: write failed, targets unchanged: ${e?.message || e}`, 'targets', userId);
+          continue;
+        }
+        await db.prepare("UPDATE users SET auto_targets_last_day = ? WHERE id = ?").run(today, userId);
+        logEvent('info', `Auto-targets applied: ${decision.changes.join(', ')}`, 'targets', userId);
+      }
+    } catch (e: any) {
+      logEvent('error', `Auto-targets sweep failed: ${e?.message || e}`, 'targets');
+    } finally {
+      autoTargetsRunning = false;
+    }
+  };
+  setInterval(autoTargetsTick, AUTO_TARGETS_TICK_MINUTES * 60 * 1000);
+  // One check after boot, so enabling it on a Monday does not wait an hour.
+  setTimeout(() => { void autoTargetsTick(); }, 60 * 1000);
 
   await app.get("/api/data/summary", requireAuth, async (req: any, res) => {
     const userId = Number(req.user.id);

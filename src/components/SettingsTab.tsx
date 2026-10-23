@@ -26,6 +26,7 @@ import { signOut } from '../lib/apiFetch';
 import { metricsCsvHref, isWindowed, rangeOrderError } from '../lib/exportHref';
 import { ScheduledBackupsCard } from './ScheduledBackupsCard';
 import { PhoneAlertsCard } from './PhoneAlertsCard';
+import { AutoTargetsCard } from './AutoTargetsCard';
 import { useUIStore } from '../store/useUIStore';
 
 interface SettingsTabProps {
@@ -594,6 +595,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
             <ScheduledBackupsCard />
 
             <PhoneAlertsCard settings={settings} setSettings={setSettings} />
+            <AutoTargetsCard settings={settings} setSettings={setSettings} />
 
             <div className="flex items-center justify-between p-4 rounded-xl border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-zinc-800/50">
               <div>

@@ -2,8 +2,9 @@
  * Targets that adjust themselves (roadmap: "Targets that adjust themselves").
  *
  * Turns the adaptive TDEE (item 73) and the weight goal into a suggested daily
- * calorie target, and lean mass into a protein target. Suggestions only: the
- * user decides whether to copy them into Targets.
+ * calorie target, and lean mass into a protein target. This module only suggests;
+ * applying is someone else's decision -- the Apply button on AdaptiveTdeeCard (#77),
+ * or, if the user switches it on, the weekly sweep in src/lib/autoTargets.ts (item 97).
  *
  * - Goal rate: losing at 0.5% of body weight a week (capped at 0.5 kg),
  *   gaining at 0.25% (capped at 0.25 kg), or maintaining when the trend is

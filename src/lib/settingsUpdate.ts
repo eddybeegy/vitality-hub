@@ -186,6 +186,10 @@ const FIELDS: Record<string, Check> = {
   alert_readiness_floor: int(0, 100),
   alert_quiet_start_hour: int(0, 23),
   alert_quiet_end_hour: int(0, 23),
+  // Targets that adjust themselves (item 97). auto_targets_last_day is NOT here, for
+  // the backup_last_day reason: it is the sweep own record of what it has done.
+  auto_targets_enabled: flag,
+  auto_targets_max_change_kcal: int(50, 1000),
 };
 
 // Credentials: GET /api/settings never returns hevy_api_key or withings_client_secret,
