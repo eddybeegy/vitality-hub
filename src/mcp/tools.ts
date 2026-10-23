@@ -65,6 +65,10 @@ const resolvedZone = (tz?: string): string => tz || Intl.DateTimeFormat().resolv
 
 const round = (n: number, dp = 2): number => Math.round(n * 10 ** dp) / 10 ** dp;
 
+/** `secondary_muscle_groups` is a comma-joined TEXT column; [] when unset. */
+const splitGroups = (v: unknown): string[] =>
+  v == null ? [] : String(v).split(',').map((x) => x.trim()).filter(Boolean);
+
 /**
  * Sleep metric types, and the name each gets in a tool response.
  *
@@ -109,6 +113,18 @@ async function dailyMetrics(ctx: McpContext, days: number, types?: string[]): Pr
   return { timezone: resolvedZone(u.timezone), rows: aggregateDailyValues(resolved, u.timezone) };
 }
 
+/**
+ * Every metric type ever stored for this account. Used only to tell a caller
+ * that a type they named does not exist -- never to filter the query itself,
+ * which still runs exactly as asked.
+ */
+async function storedMetricTypes(ctx: McpContext): Promise<Set<string>> {
+  const rows = (await ctx.db.prepare(
+    'SELECT DISTINCT type FROM metrics WHERE user_id = ?'
+  ).all(ctx.userId)) as Array<{ type: string }>;
+  return new Set(rows.map((r) => r.type));
+}
+
 export const tools = {
   /** What is actually in this account, so a caller can pick types that exist. */
   async listMetricTypes(ctx: McpContext) {
@@ -136,7 +152,49 @@ export const tools = {
   async getMetrics(ctx: McpContext, args: { types?: string[]; days?: number }) {
     const days = clampDays(args.days);
     const { timezone, rows } = await dailyMetrics(ctx, days, args.types);
-    return { days, timezone, note: 'One row per local day, newest first. Daily totals are summed; readings are averaged.', rows };
+    const out: Record<string, unknown> = {
+      days,
+      timezone,
+      note: 'One row per local day, newest first. Daily totals are summed; readings are averaged.',
+      rows,
+    };
+
+    // A misspelled type used to come back as `rows: []` -- byte-identical to a
+    // window that genuinely holds no data, so a caller could not tell "you asked
+    // for a type that does not exist" from "nothing was logged". Name the types
+    // that could never have matched, and say so in the note when that is the
+    // whole of the request. Two separate reasons produce an empty result:
+    if (args.types?.length) {
+      const stored = await storedMetricTypes(ctx);
+      // (1) never stored for this account at all -- almost always a typo.
+      const unknown = args.types.filter((t) => !stored.has(t));
+      // (2) stored, but dailyMetrics drops them: bedtime/wake_time are offsets,
+      //     not quantities, so summing or averaging them is meaningless.
+      const excluded = args.types.filter(
+        (t) => stored.has(t) && (TIMING_TYPES as readonly string[]).includes(t)
+      );
+
+      if (unknown.length) {
+        out.unknown_types = unknown;
+        const scope =
+          unknown.length === args.types.length
+            ? 'NONE of the requested types exist'
+            : 'Some requested types do not exist';
+        out.note =
+          `${out.note} ${scope} for this account: ${unknown.join(', ')}. ` +
+          'Call list_metric_types for the valid names -- an empty `rows` here means the type is ' +
+          'wrong, not that there is no data.';
+      }
+      if (excluded.length) {
+        out.excluded_types = excluded;
+        out.note =
+          `${out.note} ${excluded.join(', ')} ${excluded.length === 1 ? 'is a clock offset' : 'are clock offsets'} ` +
+          'rather than a quantity, so get_metrics cannot aggregate it and omits it; use get_sleep, ' +
+          'which reads it properly.';
+      }
+    }
+
+    return out;
   },
 
   /** Daily nutrition totals. Only days with logged food appear. */
@@ -158,8 +216,9 @@ export const tools = {
     const ids = workouts.map((w) => w.id);
     const exercises = (await ctx.db.prepare(
       `SELECT id, workout_id, exercise_title, sets_count, best_weight, best_reps, best_distance,
-              best_time, exercise_type, primary_muscle_group
-         FROM workout_exercises WHERE workout_id IN (${ids.map(() => '?').join(',')})`
+              best_time, exercise_type, primary_muscle_group, secondary_muscle_groups, superset_id
+         FROM workout_exercises WHERE workout_id IN (${ids.map(() => '?').join(',')})
+         ORDER BY workout_id, id`
     ).all(...ids)) as any[];
 
     let setsByExercise = new Map<number, any[]>();
@@ -179,8 +238,18 @@ export const tools = {
     const byWorkout = new Map<number, any[]>();
     for (const e of exercises) {
       const list = byWorkout.get(e.workout_id) || [];
-      const { id, workout_id, ...rest } = e;
-      list.push(args.include_sets ? { ...rest, sets: setsByExercise.get(id) || [] } : rest);
+      const { id, workout_id, secondary_muscle_groups, superset_id, ...rest } = e;
+      const shaped = {
+        ...rest,
+        // Stored comma-joined by the hevy ingest; split here so a caller does not
+        // have to know that, matching healthDataService's own reader.
+        secondary_muscle_groups: splitGroups(secondary_muscle_groups),
+        // Null = performed on its own. Equal ids = performed back-to-back as a
+        // superset, and ZERO is a real group id, so compare with == null, not
+        // truthiness. Scoped to THIS workout only -- see the tool description.
+        superset_id: superset_id == null ? null : Number(superset_id),
+      };
+      list.push(args.include_sets ? { ...shaped, sets: setsByExercise.get(id) || [] } : shaped);
       byWorkout.set(workout_id, list);
     }
 
