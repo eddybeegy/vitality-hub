@@ -335,8 +335,13 @@ export const HevyModule: DataSourceModule = {
             }
 
             const muscleGroups = getMuscleGroups(ex.title);
-            const sqlExInsert = "INSERT INTO workout_exercises (workout_id, exercise_title, sets_count, best_weight, best_reps, best_distance, best_time, best_steps, best_calories, best_avg_hr, best_max_hr, exercise_type, primary_muscle_group, secondary_muscle_groups) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + (db.type === 'postgres' ? " RETURNING id" : "");
-            const exRes = await db.prepare(sqlExInsert).run(workoutId, ex.title, num(ex.sets.length), num(bestWeight), num(bestReps), num(bestDist), num(bestTime), num(bestSteps), num(bestCals), num(bestAvgHr), num(bestMaxHr), exerciseType, muscleGroups.primary, muscleGroups.secondary);
+            // `superset_id` groups exercises performed back-to-back. It is `??`-coalesced,
+            // never `num()`-ed or `||`-defaulted: hevy uses ZERO as a real group id
+            // (measured 2026-10-23 — "Lateral Raise"/"Rear Delt Fly" share group 0),
+            // so a falsy check would silently merge group 0 into "not a superset".
+            // The id is only unique WITHIN one workout; get_workouts says so.
+            const sqlExInsert = "INSERT INTO workout_exercises (workout_id, exercise_title, sets_count, best_weight, best_reps, best_distance, best_time, best_steps, best_calories, best_avg_hr, best_max_hr, exercise_type, primary_muscle_group, secondary_muscle_groups, superset_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + (db.type === 'postgres' ? " RETURNING id" : "");
+            const exRes = await db.prepare(sqlExInsert).run(workoutId, ex.title, num(ex.sets.length), num(bestWeight), num(bestReps), num(bestDist), num(bestTime), num(bestSteps), num(bestCals), num(bestAvgHr), num(bestMaxHr), exerciseType, muscleGroups.primary, muscleGroups.secondary, ex.superset_id ?? null);
             const exerciseId = exRes.lastInsertRowid as number;
 
             for (let idx = 0; idx < ex.sets.length; idx++) {

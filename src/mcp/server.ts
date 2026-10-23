@@ -57,7 +57,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
 
   server.registerTool('get_metrics', {
     title: 'Get daily metrics',
-    description: 'Daily values for the named metric types, newest day first. Daily totals (steps, energy, nutrients) are summed; readings (weight, resting HR, HRV) are averaged. Where two sources cover the same day, the account\'s source priority picks one. Omit `types` to get every type, which can be a large response.',
+    description: 'Daily values for the named metric types, newest day first. Daily totals (steps, energy, nutrients) are summed; readings (weight, resting HR, HRV) are averaged. Where two sources cover the same day, the account\'s source priority picks one. Omit `types` to get every type, which can be a large response. If you name a type this account has never stored, it is listed back to you in `unknown_types` -- an empty `rows` with `unknown_types` set means the name is wrong, not that there is no data.',
     inputSchema: {
       types: z.array(z.string()).max(40).optional().describe('Metric types to return, e.g. ["weight","resting_heart_rate"]. Omit for all.'),
       days: daysArg(30),
@@ -74,10 +74,25 @@ export function createMcpServer(ctx: McpContext): McpServer {
 
   server.registerTool('get_workouts', {
     title: 'Get workouts',
-    description: 'Workout sessions newest first, with duration, volume and the exercises performed. Set include_sets for per-set weight/reps, which is much larger.',
+    description:
+      'Workout sessions newest first, with duration, volume and the exercises performed. ' +
+      'Each exercise carries primary_muscle_group and secondary_muscle_groups (an array), plus ' +
+      'superset_id: null means the exercise was performed on its own, while exercises sharing ' +
+      'an id were performed back-to-back as a superset. That id is only meaningful WITHIN a ' +
+      'single workout -- do not group across sessions by it -- and 0 is a valid id, not "none". ' +
+      'IMPORTANT: this returns only each exercise\'s BEST set (best_weight/best_reps/etc). ' +
+      'To analyse per-set progression, volume per set, rest patterns or set types you MUST pass ' +
+      'include_sets: true, which adds every set of every exercise and makes the response much larger -- ' +
+      'narrow `days` when you do.',
     inputSchema: {
       days: daysArg(30),
-      include_sets: z.boolean().optional().describe('Include every set of every exercise (default false).'),
+      include_sets: z
+        .boolean()
+        .optional()
+        .describe(
+          'Include every individual set (weight, reps, distance, time, hr, type) of every exercise. ' +
+          'Default false, which returns best-set summaries ONLY. Required for any per-set analysis.'
+        ),
     },
     annotations: readOnly,
   }, async (args) => reply(await tools.getWorkouts(ctx, args)));

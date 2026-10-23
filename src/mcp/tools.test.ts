@@ -99,6 +99,72 @@ describe('getMetrics', () => {
     const { db } = fakeDb([[/FROM users/, undefined], [/FROM metrics/, []]]);
     await expect(tools.getMetrics(ctx(db), {})).resolves.toMatchObject({ rows: [] });
   });
+
+  // An unrecognised type used to be indistinguishable from an empty window:
+  // both answered `rows: []` and nothing else. Reported by coach, 2026-10-23.
+  describe('an empty result says WHY it is empty', () => {
+    // The DISTINCT probe also selects FROM metrics, so it has to be matched
+    // ahead of the aggregation query or it swallows the wrong answer.
+    const stored = (types: string[], rows: any[] = []) =>
+      fakeDb([
+        [/FROM users/, USER],
+        [/DISTINCT type/, types.map((type) => ({ type }))],
+        [/FROM metrics/, rows],
+      ]);
+
+    it('names a type that does not exist for this account', async () => {
+      const { db } = stored(['weight', 'hrv']);
+      const out: any = await tools.getMetrics(ctx(db), { types: ['wieght'] });
+      expect(out.unknown_types).toEqual(['wieght']);
+      expect(out.note).toContain('NONE of the');
+      expect(out.note).toContain('list_metric_types');
+    });
+
+    it('distinguishes a partly-wrong request from a wholly-wrong one', async () => {
+      const { db } = stored(['weight', 'hrv']);
+      const out: any = await tools.getMetrics(ctx(db), { types: ['weight', 'nonsense'] });
+      expect(out.unknown_types).toEqual(['nonsense']);
+      expect(out.note).toContain('do not exist');
+      expect(out.note).not.toContain('NONE of the');
+    });
+
+    it('stays quiet when every named type exists -- no false alarm on a real empty window', async () => {
+      const { db } = stored(['weight', 'hrv']);
+      const out: any = await tools.getMetrics(ctx(db), { types: ['weight', 'hrv'] });
+      expect(out.unknown_types).toBeUndefined();
+      expect(out.excluded_types).toBeUndefined();
+      expect(out.rows).toEqual([]);
+    });
+
+    it('does not probe at all when no types are named', async () => {
+      const { db, calls } = stored(['weight']);
+      const out: any = await tools.getMetrics(ctx(db), {});
+      expect(out.unknown_types).toBeUndefined();
+      expect(calls.some((c) => /DISTINCT type/.test(c.sql))).toBe(false);
+    });
+
+    it('explains bedtime/wake_time separately -- stored, but deliberately not aggregated', async () => {
+      const { db } = stored(['weight', 'bedtime']);
+      const out: any = await tools.getMetrics(ctx(db), { types: ['bedtime'] });
+      expect(out.excluded_types).toEqual(['bedtime']);
+      expect(out.unknown_types).toBeUndefined();
+      expect(out.note).toContain('get_sleep');
+    });
+
+    it('still runs the query exactly as asked -- the probe never filters it', async () => {
+      const { db, calls } = stored(['weight']);
+      await tools.getMetrics(ctx(db), { types: ['weight', 'nonsense'] });
+      const q = calls.find((c) => /type IN/.test(c.sql))!;
+      expect(q.params).toEqual([7, 'weight', 'nonsense', expect.any(String)]);
+    });
+
+    it('scopes the probe to the context user', async () => {
+      const { db, calls } = stored(['weight']);
+      await tools.getMetrics(ctx(db), { types: ['weight'] });
+      const probe = calls.find((c) => /DISTINCT type/.test(c.sql))!;
+      expect(probe.params).toEqual([7]);
+    });
+  });
 });
 
 describe('getNutrition', () => {
@@ -132,7 +198,9 @@ describe('getWorkouts', () => {
     ]);
     const out = await tools.getWorkouts(ctx(db), { days: 7 });
     expect(out.workouts[0]).toMatchObject({ name: 'Pull', duration_minutes: 48, volume: 4210.5 });
-    expect(out.workouts[0].exercises).toEqual([{ exercise_title: 'Row', sets_count: 3 }]);
+    expect(out.workouts[0].exercises).toEqual([
+      { exercise_title: 'Row', sets_count: 3, secondary_muscle_groups: [], superset_id: null },
+    ]);
   });
 
   it('skips the exercise query entirely when there are no workouts', async () => {
@@ -154,6 +222,74 @@ describe('getWorkouts', () => {
 
     const with_ = await tools.getWorkouts(ctx(db), { include_sets: true });
     expect(with_.workouts[0].exercises[0].sets).toEqual([{ exercise_id: 10, set_index: 0, weight: 60, reps: 10 }]);
+  });
+
+  it('keeps superset id 0 distinct from "not a superset"', async () => {
+    // hevy uses 0 as a real group id, so `|| null` or num() anywhere on this
+    // path would merge a genuine superset into the solo-exercise case.
+    const { db } = fakeDb([
+      [/FROM workouts/, [workout]],
+      [/FROM workout_exercises/, [
+        { id: 10, workout_id: 1, exercise_title: 'Lateral Raise', superset_id: 0 },
+        { id: 11, workout_id: 1, exercise_title: 'Rear Delt Fly', superset_id: 0 },
+        { id: 12, workout_id: 1, exercise_title: 'Seated Row', superset_id: null },
+      ]],
+    ]);
+    const out = await tools.getWorkouts(ctx(db), {});
+    expect(out.workouts[0].exercises.map((e: any) => e.superset_id)).toEqual([0, 0, null]);
+  });
+
+  it('splits the comma-joined secondary muscle groups into an array', async () => {
+    const { db } = fakeDb([
+      [/FROM workouts/, [workout]],
+      [/FROM workout_exercises/, [
+        { id: 10, workout_id: 1, exercise_title: 'Row', primary_muscle_group: 'upper_back',
+          secondary_muscle_groups: 'lats, biceps ,forearms' },
+        { id: 11, workout_id: 1, exercise_title: 'Plank', secondary_muscle_groups: '' },
+        { id: 12, workout_id: 1, exercise_title: 'Curl', secondary_muscle_groups: null },
+      ]],
+    ]);
+    const out = await tools.getWorkouts(ctx(db), {});
+    const ex = out.workouts[0].exercises;
+    expect(ex[0]).toMatchObject({ primary_muscle_group: 'upper_back', secondary_muscle_groups: ['lats', 'biceps', 'forearms'] });
+    expect(ex[1].secondary_muscle_groups).toEqual([]);
+    expect(ex[2].secondary_muscle_groups).toEqual([]);
+  });
+
+  it('asks the database for the superset and secondary-group columns', async () => {
+    const { db, calls } = fakeDb([
+      [/FROM workouts/, [workout]],
+      [/FROM workout_exercises/, []],
+    ]);
+    await tools.getWorkouts(ctx(db), {});
+    const sql = calls.find((c) => /FROM workout_exercises/.test(c.sql))!.sql;
+    expect(sql).toMatch(/superset_id/);
+    expect(sql).toMatch(/secondary_muscle_groups/);
+  });
+
+  it('still shapes the new fields when sets are included', async () => {
+    const { db } = fakeDb([
+      [/FROM workouts/, [workout]],
+      [/FROM workout_exercises/, [{ id: 10, workout_id: 1, exercise_title: 'Row', superset_id: 2, secondary_muscle_groups: 'lats' }]],
+      [/FROM workout_sets/, [{ exercise_id: 10, set_index: 0, weight: 60, reps: 10 }]],
+    ]);
+    const out = await tools.getWorkouts(ctx(db), { include_sets: true });
+    expect(out.workouts[0].exercises[0]).toMatchObject({
+      superset_id: 2,
+      secondary_muscle_groups: ['lats'],
+      sets: [{ exercise_id: 10, set_index: 0, weight: 60, reps: 10 }],
+    });
+  });
+
+  it('asks for exercises in insertion order, which is the order they were performed', async () => {
+    // Without ORDER BY, postgres returns these in whatever order it likes, and
+    // superset_id is only interpretable next to the exercises around it.
+    const { db, calls } = fakeDb([
+      [/FROM workouts/, [workout]],
+      [/FROM workout_exercises/, []],
+    ]);
+    await tools.getWorkouts(ctx(db), {});
+    expect(calls.find((c) => /FROM workout_exercises/.test(c.sql))!.sql).toMatch(/ORDER BY workout_id, id/);
   });
 
   it('tolerates a null duration and volume', async () => {
