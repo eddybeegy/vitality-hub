@@ -16,7 +16,7 @@ export interface HealthData {
   meal_suggestion_lunch?: boolean;
   meal_suggestion_dinner?: boolean;
   ai_persona?: string;
-  ai_focus?: string;
+  focus?: string;
 }
 
 export interface CombinedReviewData extends HealthData {

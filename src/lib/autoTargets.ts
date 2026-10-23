@@ -25,12 +25,16 @@
  *   decision refuses and says so rather than applying it, and keeps refusing until
  *   the estimate settles or the user presses Apply himself. A silent 600 kcal cut
  *   is the failure mode this exists to prevent.
- * - **Both targets are capped.** Calories and protein each have their own limit. The
- *   first live rehearsal of this sweep moved protein 160 g -> 130 g in one run: the
- *   suggestion is formulaic (2.2 g/kg lean mass, or 1.8 g/kg body weight) while the
- *   stored 160 was deliberate, and silently overwriting it is the same surprise as a
- *   silent calorie cut. An uncapped protein target was wrong for the same reason a
- *   capped calorie one is right.
+ * - **Both targets are capped, and capped independently.** Calories and protein each
+ *   have their own limit. The first live rehearsal of this sweep moved protein
+ *   160 g -> 130 g in one run: the suggestion is formulaic (2.2 g/kg lean mass, or
+ *   1.8 g/kg body weight) while the stored 160 was deliberate, and silently
+ *   overwriting it is the same surprise as a silent calorie cut. The second rehearsal
+ *   showed why one gate over the pair is also wrong: a protein target permanently off
+ *   the formula held back an in-limit calorie change every single week. So each target
+ *   is judged alone -- the one inside its limit is written, the one outside it is
+ *   reported in `refusals` on an applied decision, and the run is only refused outright
+ *   when nothing may move.
  *
  * Every applied change is logged server-side (source `targets`) with the before and
  * after, so an unexplained target can always be traced back to a run.
@@ -73,7 +77,8 @@ export interface AutoTargetInput {
 
 export type AutoTargetDecision =
   | { apply: false; reason: string }
-  | { apply: true; targets: AutoTargetTarget[]; changes: string[] };
+  /** `refusals` is the targets left alone by their own cap, on a run that still wrote something. */
+  | { apply: true; targets: AutoTargetTarget[]; changes: string[]; refusals: string[] };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -140,9 +145,10 @@ export function decideAutoTargets(input: AutoTargetInput): AutoTargetDecision {
   const currentCalories = positive(input.current.calories);
   const currentProtein = positive(input.current.protein);
 
-  // Both caps, one shape. A refusal names the numbers, because "my target did not
-  // move" has to be answerable from the log line on its own. With no stored target
-  // there is nothing established to protect, so the first value is never capped.
+  // Both caps, one shape, each judged alone. A refusal names the numbers, because "my
+  // target did not move" has to be answerable from the log line on its own. With no
+  // stored target there is nothing established to protect, so the first value is
+  // never capped.
   const overCap = (label: string, unit: string, current: number | null, next: number, cap: number): string | null => {
     if (current === null) return null;
     const delta = Math.abs(next - current);
@@ -151,24 +157,32 @@ export function decideAutoTargets(input: AutoTargetInput): AutoTargetDecision {
       ? `suggested ${label} moves ${delta} ${unit} (${current} to ${next}), over the ${limit} ${unit} limit`
       : null;
   };
-  const overLimit =
-    overCap('calories', 'kcal', currentCalories, calories, input.maxChangeKcal)
-    ?? overCap('protein', 'g', currentProtein, protein, input.maxChangeG);
-  if (overLimit) return { apply: false, reason: overLimit };
 
   const changes: string[] = [];
   const targets: AutoTargetTarget[] = [];
-  if (calories !== currentCalories) {
-    targets.push({ type: 'calories', value: calories, unit: 'kcal' });
-    changes.push(`calories ${currentCalories ?? 'unset'} to ${calories}`);
-  }
-  if (protein !== currentProtein) {
-    targets.push({ type: 'protein', value: protein, unit: 'g' });
-    changes.push(`protein ${currentProtein ?? 'unset'} to ${protein}`);
-  }
+  const refusals: string[] = [];
+  const consider = (
+    type: 'calories' | 'protein', unit: string, current: number | null, next: number, cap: number,
+  ) => {
+    // An unchanged target is neither a write nor a refusal: there is nothing to say
+    // about a number the suggestion agrees with.
+    if (next === current) return;
+    const refusal = overCap(type, unit, current, next, cap);
+    if (refusal) { refusals.push(refusal); return; }
+    targets.push({ type, value: next, unit });
+    changes.push(`${type} ${current ?? 'unset'} to ${next}`);
+  };
+  consider('calories', 'kcal', currentCalories, calories, input.maxChangeKcal);
+  consider('protein', 'g', currentProtein, protein, input.maxChangeG);
+
   if (!targets.length) {
-    return { apply: false, reason: 'targets already match the suggestion' };
+    // Nothing to write. Which of the two reasons it is matters: "already matches" is
+    // the system working, a cap refusal is the system declining, and the log line is
+    // the only place that distinction is visible.
+    return refusals.length
+      ? { apply: false, reason: refusals.join('; ') }
+      : { apply: false, reason: 'targets already match the suggestion' };
   }
 
-  return { apply: true, targets, changes };
+  return { apply: true, targets, changes, refusals };
 }

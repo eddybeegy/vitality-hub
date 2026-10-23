@@ -148,7 +148,10 @@ const FIELDS: Record<string, Check> = {
   ai_base_url: nullable(text(2048)),
   ai_hints: nullable(text(4000)),
   ai_persona: nonEmptyText(200),
-  ai_focus: nonEmptyText(200),
+  // Item 98: renamed from ai_focus, and deliberately still free text rather than an
+  // enum -- normaliseFocus() in adaptiveTargets.ts maps anything it does not know to
+  // General Health, so an unknown value degrades instead of being rejected.
+  focus: nonEmptyText(200),
   meal_suggestion_breakfast: flag,
   meal_suggestion_lunch: flag,
   meal_suggestion_dinner: flag,

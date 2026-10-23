@@ -42,7 +42,7 @@ import { chooseSource, type SourceCounts } from "./src/lib/sourcePriority";
 import { dedupeOverlappingWorkouts } from "./src/lib/workoutDedupe";
 import { latestBpReadings, BP_TYPES } from "./src/lib/bpLatest";
 import { estimateTdee, seriesOf, tdeeWindow } from "./src/lib/tdee";
-import { suggestTargets } from "./src/lib/adaptiveTargets";
+import { FOCUS_LABELS, normaliseFocus, suggestTargets } from "./src/lib/adaptiveTargets";
 import { autoTargetsDue, decideAutoTargets, DEFAULT_MAX_CHANGE_KCAL, DEFAULT_MAX_CHANGE_G } from "./src/lib/autoTargets";
 import { pairNights, TIMING_TYPES } from "./src/lib/sleepTiming";
 import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toSnapshot, historyForAIContext, parseStoredComponents, READINESS_ALGO_VERSION, DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, type ReadinessSnapshot } from "./src/lib/readinessHistory";
@@ -413,6 +413,12 @@ const readingInstant = (table: NaiveTsTable, col = 'timestamp', srcCol = 'source
 // SQL for the instant a log row was written.
 const logInstant = (col = 'timestamp') => tzColumns.logs ? col : `(${col} AT TIME ZONE 'Europe/London')`;
 
+// The user's Focus, as one of the nine canonical labels (item 98). Reads `focus` and
+// falls back to the pre-rename `ai_focus` for a row the boot-time copy has not touched;
+// normaliseFocus maps anything unrecognised to General Health, so the prompts get a
+// label the suggestion engine would also recognise rather than raw free text.
+const focusOf = (u: any) => FOCUS_LABELS[normaliseFocus(u?.focus ?? u?.ai_focus)];
+
 async function startServer() {
 // Initialize database schema
 async function ensureSchema() {
@@ -456,6 +462,11 @@ async function ensureSchema() {
       timezone: "TEXT",
       ai_persona: "TEXT DEFAULT 'Encouraging Coach'",
       ai_focus: "TEXT DEFAULT 'General Health'",
+      // Item 98 renamed this to `focus`: it drives the target arithmetic in
+      // adaptiveTargets.ts now, not only two prompt strings, so "AI focus" named the
+      // wrong thing. No DEFAULT -- a DEFAULT backfills every existing row and loses
+      // the stored value; the copy from ai_focus happens once, in cleanup step 3c.
+      focus: "TEXT",
       enable_correlations: "INTEGER DEFAULT 1",
       enable_daily_briefing: "INTEGER DEFAULT 1",
       daily_briefing: "TEXT",
@@ -1055,6 +1066,21 @@ async function ensureSchema() {
       await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ai_insights_user_type_date_uidx ON ai_insights (user_id, type, date)`);
     } catch (e: any) {
       logEvent('error', `ai_insights uniqueness migration failed: ${e.message}`, 'cleanup');
+    }
+
+    // 3c. Item 98: copy ai_focus into the renamed `focus` column, once. Guarded on
+    // `focus IS NULL`, so it is a no-op from the second boot onwards and a Focus the
+    // user changes in Settings is never reverted by the next restart. `ai_focus` is
+    // left in place but unread for one release, as the rollback path.
+    try {
+      const movedFocus: any = await db.prepare(
+        `UPDATE users SET focus = ai_focus WHERE focus IS NULL AND ai_focus IS NOT NULL AND ai_focus <> ''`
+      ).run();
+      if ((movedFocus?.changes ?? 0) > 0) {
+        logEvent('info', `Copied ai_focus into focus for ${movedFocus.changes} user(s)`, 'cleanup');
+      }
+    } catch (e: any) {
+      logEvent('error', `focus column backfill failed: ${e.message}`, 'cleanup');
     }
 
     // 4. Nutrition source precedence is a READ-time concern, not a cleanup.
@@ -2794,7 +2820,7 @@ async function checkScheduledRegeneration(userId: number) {
       // Single unified review covering nutrition, training, body/vitals and progress vs targets.
       if (!typesToGenerate || typesToGenerate.includes('combined')) {
         try {
-          const combinedPrompt = `You are a ${user.ai_persona || 'supportive expert health & fitness coach'} writing a single, unified health & fitness review for a ${user.age || ''}y ${user.gender || 'person'}. Focus area: ${user.ai_focus || 'General Health'}.
+          const combinedPrompt = `You are a ${user.ai_persona || 'supportive expert health & fitness coach'} writing a single, unified health & fitness review for a ${user.age || ''}y ${user.gender || 'person'}. Focus area: ${focusOf(user)}.
 ${previousInsights.length ? `\nYOUR PREVIOUS REVIEWS (summaries — build on these and focus on what is NEW or CHANGING; do not repeat old advice verbatim):\n${previousInsights.map(pi => `- ${pi.date}: ${String(pi.content).substring(0, 250)}...`).join('\n')}\n` : ''}
 User hints: ${user.ai_hints || 'None'}
 Targets: ${JSON.stringify(targets)}
@@ -3314,7 +3340,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     autoTargetsRunning = true;
     try {
       const users = await db.prepare(
-        "SELECT id, timezone, auto_targets_max_change_kcal, auto_targets_max_change_g, auto_targets_last_day FROM users WHERE auto_targets_enabled = 1"
+        "SELECT id, timezone, focus, ai_focus, auto_targets_max_change_kcal, auto_targets_max_change_g, auto_targets_last_day FROM users WHERE auto_targets_enabled = 1"
       ).all() as any[];
       for (const u of users) {
         const userId = Number(u.id);
@@ -3334,7 +3360,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         const startIso = from.toISOString();
         const endIso = new Date().toISOString();
         const [weightRows, energyRows] = await Promise.all([
-          aggregatedSeries({ userId, types: ['weight', 'lean_body_mass'], granularity: 'day', aggregation: 'avg', startIso, endIso }),
+          aggregatedSeries({ userId, types: ['weight', 'lean_body_mass', 'body_fat', 'muscle_mass'], granularity: 'day', aggregation: 'avg', startIso, endIso }),
           aggregatedSeries({ userId, types: ['calories_in', 'active_energy', 'basal_energy'], granularity: 'day', aggregation: 'sum', startIso, endIso }),
         ]);
         const tdee = estimateTdee({
@@ -3350,12 +3376,33 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
           const v = Number(targetRows.find((r) => r.type === type)?.value);
           return Number.isFinite(v) ? v : null;
         };
-        const leanSeries = seriesOf(weightRows as any[], 'lean_body_mass');
-        const leanMassKg = leanSeries.length ? leanSeries[leanSeries.length - 1].value : null;
+        // Latest of each, not the window mean: a target is set against where the
+        // body is now, the same reading AdaptiveTdeeCard shows.
+        const latestOf = (type: string) => {
+          const series = seriesOf(weightRows as any[], type);
+          return series.length ? series[series.length - 1].value : null;
+        };
+        const leanMassKg = latestOf('lean_body_mass');
         const goalWeightKg = targetOf('weight');
 
+        // Item 98: the sweep and the card have to pass identical inputs, or a target
+        // would move on Monday to a number the card never showed. `carbs`/`fiber` in
+        // the suggestion are deliberately dropped here -- only calories and protein
+        // have movement caps, and writing an uncapped target automatically is the
+        // surprise this whole feature is built to avoid.
         const suggestion = tdee.status === 'ok'
-          ? suggestTargets({ tdee: tdee.tdee, trendWeightKg: tdee.trendWeightKg, goalWeightKg, leanMassKg })
+          ? suggestTargets({
+              tdee: tdee.tdee,
+              trendWeightKg: tdee.trendWeightKg,
+              focus: u.focus ?? u.ai_focus,
+              goalWeightKg,
+              leanMassKg,
+              bodyFatPct: latestOf('body_fat'),
+              bodyFatTargetPct: targetOf('body_fat'),
+              muscleMassKg: latestOf('muscle_mass'),
+              muscleMassTargetKg: targetOf('muscle_mass'),
+              currentProteinG: targetOf('protein'),
+            })
           : null;
         const maxChange = Number.isInteger(u.auto_targets_max_change_kcal)
           ? u.auto_targets_max_change_kcal
@@ -6167,7 +6214,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         "SELECT content FROM ai_insights WHERE user_id = ? AND type = 'combined' AND date = ?"
       ).get(userId, chatDate) as any;
 
-      const prompt = `You are a ${user.ai_persona || 'supportive expert health & fitness coach'} answering questions from a ${user.age || ''}y ${user.gender || 'person'} about their own health and fitness data. Focus area: ${user.ai_focus || 'General Health'}.
+      const prompt = `You are a ${user.ai_persona || 'supportive expert health & fitness coach'} answering questions from a ${user.age || ''}y ${user.gender || 'person'} about their own health and fitness data. Focus area: ${focusOf(user)}.
 User hints: ${user.ai_hints || 'None'}
 Today for the user: ${getTodayInTimezone(user.timezone || undefined)}. The conversation is about ${chatDate}.
 Targets: ${JSON.stringify(targets)}

@@ -282,7 +282,7 @@ export const useAIStore = create<AIState>((set, get) => ({
         medications: settings.medications || [],
         timezone: settings.timezone || 'UTC',
         ai_persona: settings.ai_persona || 'Encouraging Coach',
-        ai_focus: settings.ai_focus || 'General Health',
+        focus: settings.focus || 'General Health',
         aiHints: settings.ai_hints || '',
         combinedInsightForDate: combinedInsight,
         chatDate: date

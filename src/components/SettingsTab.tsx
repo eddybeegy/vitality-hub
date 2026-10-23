@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion } from 'motion/react';
 import { useAIStore } from '../store/useAIStore';
+import { FOCUS_LABELS, FOCUS_ORDER } from '../lib/adaptiveTargets';
 import { 
   Settings, 
   Database, 
@@ -837,18 +838,23 @@ export const SettingsTab: React.FC<SettingsTabProps> = React.memo(({
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">AI Focus</label>
+                  <label className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Focus</label>
                   <select 
-                    value={settings.ai_focus || 'General Health'}
-                    onChange={(e) => setSettings({ ...settings, ai_focus: e.target.value })}
+                    value={settings.focus || 'General Health'}
+                    onChange={(e) => setSettings({ ...settings, focus: e.target.value })}
                     className="w-full px-4 py-3 rounded-xl border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all text-zinc-900 dark:text-zinc-100"
                   >
-                    <option value="General Health">General Health</option>
-                    <option value="Fat Loss">Fat Loss</option>
-                    <option value="Muscle Gain">Muscle Gain</option>
-                    <option value="Body Recomposition">Body Recomposition</option>
-                    <option value="Endurance">Endurance</option>
+                    {/* One list, from the module that acts on it: an option here that
+                        normaliseFocus() does not know would silently behave as General
+                        Health, which is the "setting that changes nothing" failure. */}
+                    {FOCUS_ORDER.map(f => <option key={f} value={FOCUS_LABELS[f]}>{FOCUS_LABELS[f]}</option>)}
                   </select>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                    Steers the AI's tone and, since item 98, the suggested calorie and protein
+                    targets on the Adaptive TDEE card: Fat Loss works from your body-fat target,
+                    Muscle Gain from your muscle-mass target, Recomposition never puts you in a
+                    surplus. Endurance adds a carb target; Heart Health adds a fibre one.
+                  </p>
                 </div>
               </div>
             </div>

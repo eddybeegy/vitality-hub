@@ -94,7 +94,7 @@ describe('buildSettingsUpdate — values are validated, not coerced', () => {
       ai_base_url: '',
       ai_hints: null,
       ai_persona: 'Encouraging Coach',
-      ai_focus: 'General Health',
+      focus: 'General Health',
       meal_suggestion_breakfast: true,
       meal_suggestion_lunch: false,
       meal_suggestion_dinner: 1,

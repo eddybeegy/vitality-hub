@@ -4,16 +4,22 @@ import { fetchJson } from '../lib/apiFetch';
 import { getLocalDateString } from '../lib/utils';
 import { useRefreshOnFocus } from '../lib/useRefreshOnFocus';
 import { estimateTdee, seriesOf, tdeeWindow, MIN_LOGGED_KCAL, type TdeeResult } from '../lib/tdee';
-import { suggestTargets } from '../lib/adaptiveTargets';
+import { PROTEIN_RULE, suggestTargets } from '../lib/adaptiveTargets';
 import { useSettingsStore } from '../store/useSettingsStore';
 
 interface AdaptiveTdeeCardProps {
   timezone?: string;
   preferredUnits?: string;
+  /** users.focus: which goal the suggestion should chase (item 98). */
+  focus?: string;
   /** Current targets, to compare the suggestion with; unset or 0 means none. */
   weightGoalKg?: number;
+  bodyFatTargetPct?: number;
+  muscleMassTargetKg?: number;
   calorieTarget?: number;
   proteinTarget?: number;
+  carbsTarget?: number;
+  fiberTarget?: number;
 }
 
 const KG_TO_LB = 2.20462;
@@ -29,12 +35,21 @@ const CONFIDENCE_STYLE: Record<string, string> = {
 // live in src/lib/tdee.ts. Two reads of /api/metrics/aggregated because weight
 // wants the day's mean and energy wants the day's total; the server has already
 // chosen one source per (day, type) and placed each reading on its local day.
-export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({ timezone, preferredUnits, weightGoalKg, calorieTarget, proteinTarget }) => {
+//
+// The first read also carries the body-composition readings item 98 needs: the
+// suggestion's driver depends on the user's Focus, and Fat Loss or Recomposition
+// cannot be computed from the scale weight alone.
+export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({
+  timezone, preferredUnits, focus, weightGoalKg, bodyFatTargetPct, muscleMassTargetKg,
+  calorieTarget, proteinTarget, carbsTarget, fiberTarget,
+}) => {
   const applyTargetValues = useSettingsStore(s => s.applyTargetValues);
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<TdeeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [leanMassKg, setLeanMassKg] = useState<number | null>(null);
+  const [bodyFatPct, setBodyFatPct] = useState<number | null>(null);
+  const [muscleMassKg, setMuscleMassKg] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -45,7 +60,7 @@ export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({ timezone, pr
       from.setUTCDate(from.getUTCDate() - 2);
       const startDate = from.toISOString();
       const [weightRows, energyRows] = await Promise.all([
-        fetchJson<any[]>(`/api/metrics/aggregated?type=weight,lean_body_mass&granularity=day&aggregation=avg&startDate=${startDate}`),
+        fetchJson<any[]>(`/api/metrics/aggregated?type=weight,lean_body_mass,body_fat,muscle_mass&granularity=day&aggregation=avg&startDate=${startDate}`),
         fetchJson<any[]>(`/api/metrics/aggregated?type=calories_in,active_energy,basal_energy&granularity=day&aggregation=sum&startDate=${startDate}`),
       ]);
       setResult(estimateTdee({
@@ -55,8 +70,14 @@ export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({ timezone, pr
         activeEnergy: seriesOf(energyRows, 'active_energy'),
         basalEnergy: seriesOf(energyRows, 'basal_energy'),
       }));
-      const lean = seriesOf(weightRows, 'lean_body_mass');
-      setLeanMassKg(lean.length ? lean[lean.length - 1].value : null);
+      // Latest of each, not a mean: a target is set against where you are now.
+      const latest = (type: string) => {
+        const series = seriesOf(weightRows, type);
+        return series.length ? series[series.length - 1].value : null;
+      };
+      setLeanMassKg(latest('lean_body_mass'));
+      setBodyFatPct(latest('body_fat'));
+      setMuscleMassKg(latest('muscle_mass'));
       setError(null);
     } catch (e) {
       console.error('Failed to load adaptive TDEE inputs', e);
@@ -140,38 +161,68 @@ export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({ timezone, pr
             </span>
           </p>
           {(() => {
-            const s = suggestTargets({ tdee: result.tdee, trendWeightKg: result.trendWeightKg, goalWeightKg: weightGoalKg, leanMassKg });
+            const s = suggestTargets({
+              tdee: result.tdee,
+              trendWeightKg: result.trendWeightKg,
+              focus,
+              goalWeightKg: weightGoalKg,
+              leanMassKg,
+              bodyFatPct,
+              bodyFatTargetPct,
+              muscleMassKg,
+              muscleMassTargetKg,
+              currentProteinG: proteinTarget,
+            });
             const current = (v?: number) => (v && v > 0 ? Math.round(v).toLocaleString() : 'not set');
-            const goalLabel = s.direction === 'maintain'
-              ? (weightGoalKg && weightGoalKg > 0 ? 'you are at your weight goal, so this maintains' : 'no weight goal set, so this maintains')
-              : `${s.direction === 'lose' ? 'losing' : 'gaining'} ${formatRate(s.ratePerWeek).replace(/^[+−]/, '')} towards your goal`;
+            // One list, so the button, the "already applied" check and the display
+            // can never disagree about which targets this suggestion covers.
+            const rows: { type: string; value: number; label: string; now?: number }[] = [
+              { type: 'calories', value: s.calories, label: `${s.calories.toLocaleString()} kcal`, now: calorieTarget },
+              { type: 'protein', value: s.protein, label: `${s.protein} g protein`, now: proteinTarget },
+              ...(s.carbs != null ? [{ type: 'carbs', value: s.carbs, label: `${s.carbs} g carbs`, now: carbsTarget }] : []),
+              ...(s.fiber != null ? [{ type: 'fiber', value: s.fiber, label: `${s.fiber} g fibre`, now: fiberTarget }] : []),
+            ];
+            // Lean mass is what 2.2 (or 2.4) g/kg is defined against, so a focus that
+            // wants it but has no reading says so rather than passing the body-weight
+            // number off as the intended rule.
+            const wantedLean = PROTEIN_RULE[s.focus] === 'lean';
+            const proteinNote = s.proteinFloored
+              ? 'Protein: keeping your current target, which is above the formula \u2014 this focus never cuts protein.'
+              : `Protein: ${s.proteinPerKg} g per kg of ${s.proteinBasis === 'lean_mass' ? 'lean mass' : 'body weight'}${wantedLean && s.proteinBasis === 'body_weight' ? ' (no lean mass reading)' : ''}.`;
             return (
               <div className="pt-4 border-t border-zinc-100 dark:border-zinc-800">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-2">Suggested targets</p>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <p className="font-semibold text-zinc-800 dark:text-zinc-100">{s.calories.toLocaleString()} kcal</p>
-                    <p className="text-[11px] text-zinc-400">now {current(calorieTarget)}</p>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-zinc-800 dark:text-zinc-100">{s.protein} g protein</p>
-                    <p className="text-[11px] text-zinc-400">now {current(proteinTarget)}</p>
-                  </div>
+                <div className="flex items-baseline justify-between gap-2 mb-2">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">Suggested targets</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">focus: {s.focusLabel}</p>
+                </div>
+                <div className={`grid gap-4 text-sm ${rows.length > 2 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                  {rows.map(r => (
+                    <div key={r.type}>
+                      <p className="font-semibold text-zinc-800 dark:text-zinc-100">{r.label}</p>
+                      <p className="text-[11px] text-zinc-400">now {current(r.now)}</p>
+                    </div>
+                  ))}
                 </div>
                 <p className="text-[11px] text-zinc-400 mt-2">
-                  Calories: {goalLabel}. Protein: {s.proteinBasis === 'lean_mass' ? '2.2 g per kg of lean mass' : '1.8 g per kg of body weight (no lean mass reading)'}.
+                  Calories: {s.why}. {proteinNote}
                 </p>
+                {s.fallback && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-500 mt-1">
+                    {s.focusLabel} normally drives this, but {s.fallback}.
+                  </p>
+                )}
                 {(() => {
-                  // Already-applied is judged on both values, so the button stays
-                  // live while either one still differs from the stored target.
-                  const matches = Math.round(calorieTarget || 0) === s.calories && Math.round(proteinTarget || 0) === s.protein;
+                  // Already-applied is judged on every suggested target, so the button
+                  // stays live while any one of them still differs from the stored value.
+                  const matches = rows.every(r => Math.round(r.now || 0) === r.value);
+                  const names = rows.map(r => r.type === 'fiber' ? 'fibre' : r.type).join(', ').replace(/, ([^,]*)$/, ' and $1');
                   return (
                     <div className="mt-3 flex items-center gap-3">
                       <button
                         onClick={async () => {
                           setApplying(true);
                           try {
-                            await applyTargetValues({ calories: s.calories, protein: s.protein });
+                            await applyTargetValues(Object.fromEntries(rows.map(r => [r.type, r.value])));
                           } finally {
                             setApplying(false);
                           }
@@ -183,7 +234,7 @@ export const AdaptiveTdeeCard: React.FC<AdaptiveTdeeCardProps> = ({ timezone, pr
                         {applying ? 'Applying' : matches ? 'Applied' : 'Apply to targets'}
                       </button>
                       <span className="text-[11px] text-zinc-400">
-                        {matches ? 'Your calorie and protein targets match this suggestion.' : 'Writes the calorie and protein targets. Nothing else changes.'}
+                        {matches ? `Your ${names} targets match this suggestion.` : `Writes the ${names} targets. Nothing else changes.`}
                       </span>
                     </div>
                   );

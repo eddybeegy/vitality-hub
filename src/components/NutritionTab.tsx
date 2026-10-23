@@ -224,9 +224,14 @@ export const NutritionTab = React.memo(({
       <AdaptiveTdeeCard
         timezone={settings?.timezone}
         preferredUnits={settings?.preferred_units}
+        focus={settings?.focus}
         weightGoalKg={getTargetValue('weight')}
+        bodyFatTargetPct={getTargetValue('body_fat')}
+        muscleMassTargetKg={getTargetValue('muscle_mass')}
         calorieTarget={getTargetValue('calories')}
         proteinTarget={getTargetValue('protein')}
+        carbsTarget={getTargetValue('carbs')}
+        fiberTarget={getTargetValue('fiber')}
       />
 
       {macroSplit && (

@@ -35,7 +35,8 @@ interface Settings {
   hevy_api_key?: string;
   ai_hints?: string;
   ai_persona?: string;
-  ai_focus?: string;
+  /** Item 98: which goal the suggestions chase. Renamed from ai_focus. */
+  focus?: string;
   enable_daily_briefing?: boolean;
   enable_correlations: boolean;
   medications: Medication[];
@@ -129,7 +130,7 @@ const defaultSettings: Settings = {
   ai_model: '',
   ai_hints: '',
   ai_persona: 'Encouraging Coach',
-  ai_focus: 'General Health',
+  focus: 'General Health',
   enable_daily_briefing: true,
   enable_correlations: true,
   medications: [],
