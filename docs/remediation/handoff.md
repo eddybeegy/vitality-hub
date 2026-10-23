@@ -68,7 +68,10 @@ The source is the feature-ideas page. A **copy with a status chip on every idea*
 [`feature-ideas.html`](feature-ideas.html), and the live original is the artifact
 <https://claude.ai/artifact/BvnqazRXJJYEVrVRqEHrKZ>. Keep the chips in the repo copy
 current as items land, so a hand-back starts from an accurate list.
-Kieron's ordering: the rest of the page in page order, with **phone alerts LAST**.
+Kieron's ordering was: the rest of the page in page order, with **phone alerts LAST**.
+**Done as of 2026-10-23** — phone alerts merged as PR #82 / tracker item 95, which clears
+every high-value idea on the page. Only offline PWA and progress photos remain, both low
+value, and neither is blocked on anything.
 
 1. **Item 90, bedtime timing.** Finish the branch above.
 2. **Medication and supplement log.** Medications today are a JSON list in
@@ -90,9 +93,16 @@ Kieron's ordering: the rest of the page in page order, with **phone alerts LAST*
 8. **Vitality Hub as an MCP server.** This is **waiting on Kieron's pick** of
    route inside the app, local stdio, or skip. Do not open a PR before he
    chooses.
-9. **Weekly digest, then phone alerts, LAST.** The digest uses the alerts'
-   delivery channel. The alerts spec (Telegram or ntfy; stale feed, high BP, low
-   readiness) should come from Kieron.
+9. **Phone alerts — DONE, PR #82 / item 95, 2026-10-23.** Telegram, on coach's
+   line. The spec did come from Kieron: deterministic text, thresholds tuned to his
+   own readings. Anything else that wants to push to his phone should reuse this
+   path rather than build a second one — `postAlerts` in `server.ts` signs with the
+   existing vitality-chat HMAC secret and POSTs to `/webhook/vitality-chat/alert`,
+   and the host side (`/srv/nanoclaw/src/channels/vitality-alert.ts`) does the
+   Telegram delivery plus a `trigger: false` context write into coach's session.
+   **Two traps if you touch it:** the daemon runs `dist/`, so a host-side change
+   needs `npm run build` + `systemctl restart nanoclaw.service` or the route 404s;
+   and `x-vitality-timestamp` is an ISO-8601 string, not unix epoch.
 
 Small follow-ups noted while building:
 - The Dashboard still compares calories against the base target, not the
@@ -164,12 +174,12 @@ threads' one-line summaries are all stale restatements of landed work ("PR #38 m
 ready; builder to gate" — merged `18e96334` at 21:1x; "PR #44 merged; dedupe run handed
 to builder" — see below) and should not be read as open asks.
 
-**Roadmap idea 6, phone alerts, was deliberately deferred and never started.** The
-Feature-ideas thread's last word (22:23) was "I'm starting the next feature from the
-ideas list, leaving phone alerts for last", and it then built #47 and stopped. It is
-therefore the only roadmap item with no tracker row and no code — a successor session
-picking up the roadmap starts there, and should get the spec from Kieron, because it
-exists nowhere in this repo.
+**Roadmap idea 6, phone alerts — CLOSED 2026-10-23, PR #82 / item 95.** It had been
+deliberately deferred and never started (the Feature-ideas thread's last word at 22:23
+was "leaving phone alerts for last"), so it was the only roadmap item with no tracker
+row and no code. Kieron gave the spec on his Telegram line on 2026-10-23 and it is now
+built, merged, deployed and verified end-to-end. See tracker row 95 for the thresholds
+and why they are his numbers rather than clinical ones.
 
 **The "dedupe run handed to builder" line does not mean the dedupe ran.** PR #44 merged
 as `09493e11`, but it is migration files only and executes nothing on deploy; `up.sql`
