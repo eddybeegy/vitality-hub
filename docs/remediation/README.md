@@ -508,3 +508,25 @@ state must survive losing it. So:
   `server.ts` change** — the thread is honouring the one-branch-in-`server.ts` hold and will
   push that half after #38 merges), **#41** item 67 (base is still #40's branch). Row 69 is
   independent of items 66 and 67; nothing is blocked on it.
+
+- **2026-10-23 06:35 (builder).** **Items 66 and 67 are closed, merged and verified against the
+  live database.** `480dcc8` (item 66, PR #40) and `e375245` (item 67, PR #41) are both
+  ancestors of HEAD `9137f08`, and the running `vitality` container's bundle contains
+  `PAIRED_TYPES`, so the fix is deployed, not just committed. The tracker entries above were
+  last updated 2026-10-21 18:44, when all three PRs were still drafts — they are stale, not
+  open.
+  **Live verification, not a re-read of the PRs:** ran `chooseSource` from
+  `src/lib/sourcePriority.ts` over the per-(day, source, type) row counts for **every**
+  `blood_pressure%` day in the `health` database, with the `blood_pressure` priority list the
+  settings UI writes. **Zero mixed days** — systolic and diastolic resolve to the same source
+  on every day that has blood pressure. The six days the bug was found on (2025-12-09, 12-15,
+  2026-03-09, 03-23, 03-31, 04-09) all now resolve whole to `withings`: `apple_health` holds
+  only the diastolic on those days, so the paired resolver prefers the source that has both
+  halves. `src/lib/sourcePriority.test.ts` (21 tests) and `src/lib/aggregatedMetrics.test.ts`
+  (65 tests) pass.
+  **Numbering note for later sessions:** a builder status report on Kieron's Telegram line
+  called these "#65 and #66". That was wrong — it was off by one against this tracker. The
+  mixed-source pair is **item 66** and the dead `blood_pressure` priority key is **item 67**.
+  Tracker item 65 is roadmap feature 1 (PR #38). Cite tracker numbers from this file.
+  **Still genuinely open:** item 64 — `logEvent` escapes control characters for the file sink
+  but writes the raw message into the `logs` table.
