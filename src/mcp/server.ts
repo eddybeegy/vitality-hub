@@ -98,7 +98,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
 
   server.registerTool('get_digest', {
     title: 'Get digest',
-    description: 'A weekly or monthly digest: training, sleep, intake, body and activity for the trailing period against the period before it. Each line carries both numbers, the percent change and a ready-made sentence; `text` is the whole digest as plain text, and `headlines` the few lines worth leading with.',
+    description: 'A weekly or monthly digest: training, sleep, intake, body and activity for the trailing period against the period before it. Each line carries both numbers, the percent change, the target it is measured against when one is set (`target`, null when unset -- do not read it as a goal of zero) and a ready-made sentence; `text` is the whole digest as plain text, and `headlines` the few lines worth leading with.',
     inputSchema: {
       period: z.enum(['week', 'month']).optional().describe('week = the trailing 7 days, month = the trailing 30 (default week).'),
     },

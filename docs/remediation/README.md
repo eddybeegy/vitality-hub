@@ -647,3 +647,33 @@ base type and for a rest-day variant.
 Worth noting for whoever renders it next: the digest's `target` field has never been
 displayed anywhere. The `calories_in` -> `calories` fix earlier today made it
 *correct* for the first time, not *visible*.
+
+## 2026-10-23 10:40 — The digest target is now on the card (Kieron: "Make that ui change")
+
+The digest's `target` field existed but had never been displayed. Now rendered in
+two places that cannot drift:
+
+- `DigestCard.tsx` gains a `TargetHint` next to each value (`2,400 kcal / 2,055`).
+  The unit is not repeated and nothing is shown when no target is set.
+- `sentence()` in `src/lib/digest.ts` appends ` vs 2,055 target`, so the copy
+  button and the eventual push notification carry the same number the card shows.
+  That card's own header comment is explicit that the on-screen text and the
+  copied text must be one rendering, not two — adding it to the component alone
+  would have broken that.
+
+`line()` now resolves the target once and hands it to both the field and the
+sentence. The training lines (sessions, minutes, volume) have no target type, so
+they pass `null` and say nothing about a target.
+
+Also widened the `get_digest` MCP tool description in `src/mcp/server.ts` to name
+the `target` field and state that null means unset, not a goal of zero.
+
+840/840 pass, typecheck clean. Note tsc caught a second `sentence()` call site that
+the test suite did not — vitest does not typecheck, so `npx tsc --noEmit` is not
+optional on a signature change.
+
+**Finding while checking who reads this:** no agent group has the vitality-hub MCP
+server wired. coach's `container.json` has `postgres-nano-health`, `hevy`,
+`cronometer` and `ssm-secrets` — it reads the health DB directly over read-only
+Postgres and has never had `get_digest`. So the digest's `target` field currently
+has no consumer at all, UI aside. Raised with Kieron.

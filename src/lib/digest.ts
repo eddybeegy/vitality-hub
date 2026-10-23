@@ -153,12 +153,17 @@ const fmt = (n: number, dp: number): string =>
   dp === 0 ? Math.round(n).toLocaleString('en-GB') : n.toFixed(dp);
 
 /** "4 sessions (prev 3, +33%)" -- one sentence a delivery channel can use as-is. */
-function sentence(label: string, unit: string, current: number | null, previous: number | null, pct: number | null, dp: number): string {
-  if (current === null) return `${label}: no data`;
+function sentence(label: string, unit: string, current: number | null, previous: number | null, pct: number | null, dp: number, target: number | null): string {
+  // The target is appended to the SENTENCE, not just rendered on the card: this
+  // text is what the copy button and the push notification carry, and the card
+  // comment is explicit that the two must not drift. A line with no target set
+  // says nothing about one rather than claiming a goal of zero.
+  const goal = target === null ? '' : ` vs ${fmt(target, dp)} target`;
+  if (current === null) return `${label}: no data${goal}`;
   const head = `${label}: ${fmt(current, dp)}${unit ? ' ' + unit : ''}`;
-  if (previous === null) return `${head} (no previous period)`;
+  if (previous === null) return `${head} (no previous period)${goal}`;
   const change = pct === null ? '' : `, ${pct > 0 ? '+' : ''}${pct}%`;
-  return `${head} (prev ${fmt(previous, dp)}${change})`;
+  return `${head} (prev ${fmt(previous, dp)}${change})${goal}`;
 }
 
 function windowRows(daily: DailyRow[], from: string, to: string): DailyRow[] {
@@ -253,6 +258,7 @@ function line(
   const rounded = curValue === null ? null : round(curValue, spec.dp);
   const prevRounded = prevValue === null ? null : round(prevValue, spec.dp);
   const pct = changeOf(rounded, prevRounded);
+  const target = windowTarget(spec, targets, workouts, window);
   return {
     key: spec.key,
     label: spec.label,
@@ -262,8 +268,8 @@ function line(
     changePct: pct,
     direction: directionOf(pct),
     daysWithData: cur.length,
-    target: windowTarget(spec, targets, workouts, window),
-    text: sentence(spec.label, spec.unit, rounded, prevRounded, pct, spec.dp),
+    target,
+    text: sentence(spec.label, spec.unit, rounded, prevRounded, pct, spec.dp, target),
   };
 }
 
@@ -301,8 +307,9 @@ function trainingLines(workouts: DigestWorkout[], current: { from: string; to: s
       changePct: pct,
       direction: directionOf(pct),
       daysWithData: c.days,
+      // Training lines (sessions, minutes, volume) have no target type at all.
       target: null,
-      text: sentence(label, unit, round(cv, dp), round(pv, dp), pct, dp),
+      text: sentence(label, unit, round(cv, dp), round(pv, dp), pct, dp, null),
     };
   };
 

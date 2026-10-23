@@ -162,6 +162,18 @@ describe('targets and missing data', () => {
 
   // 0 is the API's storage form for "unset" (new users are seeded with 0 rows),
   // so it must not read as a goal of zero -- live data has steps and weight at 0.
+  // The card renders line.target and the copy button renders line.text; both must
+  // name the same number, so the sentence carries the target too.
+  it('names the target in the line sentence, and says nothing when there is none', () => {
+    const d = buildDigest(base({
+      daily: [day('2026-10-18', { calories_in: 2400, steps: 8000 })],
+      targets: [{ type: 'calories', value: 2055 }],
+    }));
+    expect(lineOf(d, 'calories_in').text).toContain('vs 2,055 target');
+    expect(lineOf(d, 'steps').text).not.toContain('target');
+    expect(lineOf(d, 'steps').target).toBeNull();
+  });
+
   it('treats a 0 target as unset, not as a target of zero', () => {
     const d = buildDigest(base({
       daily: [day('2026-10-18', { steps: 8000, weight: 82 })],

@@ -31,12 +31,27 @@ const TrendIcon: React.FC<{ line: DigestLine }> = ({ line }) => {
   return <Icon size={12} className="text-zinc-400 dark:text-zinc-500" />;
 };
 
+const fmtNumber = (n: number): string =>
+  Number.isInteger(n) ? n.toLocaleString('en-GB') : String(n);
+
 const fmtValue = (line: DigestLine): string => {
   if (line.current === null) return '—';
-  const n = line.current;
-  const text = Number.isInteger(n) ? n.toLocaleString('en-GB') : String(n);
+  const text = fmtNumber(line.current);
   return line.unit ? `${text} ${line.unit}` : text;
 };
+
+/**
+ * The target the value is measured against, when one is set. The unit is already
+ * on the value, so it is not repeated. A 0 target means "unset" in this schema
+ * and `src/lib/digest.ts` already resolves it to null, so nothing is shown for
+ * one rather than a goal of zero.
+ */
+const TargetHint: React.FC<{ line: DigestLine }> = ({ line }) =>
+  line.target === null ? null : (
+    <span className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500 whitespace-nowrap">
+      / {fmtNumber(line.target)}
+    </span>
+  );
 
 const LineRow: React.FC<{ line: DigestLine }> = ({ line }) => (
   <div className="flex items-baseline justify-between gap-2 py-0.5">
@@ -45,6 +60,7 @@ const LineRow: React.FC<{ line: DigestLine }> = ({ line }) => (
       <span className={cn('text-sm font-mono font-semibold', line.current === null ? 'text-zinc-400' : 'text-zinc-900 dark:text-zinc-100')}>
         {fmtValue(line)}
       </span>
+      <TargetHint line={line} />
       {line.changePct !== null && (
         <span className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500 flex items-center gap-0.5 w-12 justify-end">
           <TrendIcon line={line} />
