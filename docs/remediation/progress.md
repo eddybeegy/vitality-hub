@@ -446,8 +446,14 @@ morning. Leads corrected above. Read a row's LAST dated note, not its first.
   systolic and diastolic, so 6 of 40 displayed readings pair a `withings` systolic with an
   `apple_health` diastolic; and `MetricSettings.tsx`'s `blood_pressure` priority key can never
   match the stored `blood_pressure_systolic`/`_diastolic` types.
-- Item 94: the item-71 trigger stays until `healthsync-ingest-watch` shows 7 consecutive days
-  of zero firings while the feed is demonstrably writing.
+- Item 94: **CLOSED 2026-10-22 on Kieron's instruction**, re-verified on live data 2026-10-23
+  17:4x. The trigger and its function are dropped — `select tgname from pg_trigger where not
+  tgisinternal` returns nothing; `item71_removed_metrics` and `item71_dedupe_scope` remain as
+  the reversal path, and `migrations/item-71-healthsync-duplicates/guard.sql` re-installs it if
+  ever needed. The 7-consecutive-days condition written here was superseded and never struck
+  out, so this row read as open for a day. Nothing guards healthsync duplicates now: if
+  identical readings reappear with fresh sync timestamps, that is a **kb-health writer** bug
+  (it stamps sync time, not reading time) and is fixed at the writer, not re-guarded in the DB.
 - `fix/item-90-bedtime-timing`: **CLOSED 2026-10-23.** Merged as #66 and deployed on
   2026-10-22; `src/components/SleepTimingCard.tsx` uses `summariseTiming`, and the live HAE
   payload was confirmed to carry `sleepStart`/`sleepEnd`. The remote branch is gone. This row
