@@ -3400,7 +3400,10 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
           continue;
         }
         await db.prepare("UPDATE users SET auto_targets_last_day = ? WHERE id = ?").run(today, userId);
-        logEvent('info', `Auto-targets applied: ${decision.changes.join(', ')}`, 'targets', userId);
+        // An applied run can still have left a target alone; both halves go in the
+        // one line, or "it changed my calories but not my protein" has no record.
+        const alsoLeft = decision.refusals.length ? ` (left alone: ${decision.refusals.join('; ')})` : '';
+        logEvent('info', `Auto-targets applied: ${decision.changes.join(', ')}${alsoLeft}`, 'targets', userId);
       }
     } catch (e: any) {
       logEvent('error', `Auto-targets sweep failed: ${e?.message || e}`, 'targets');
