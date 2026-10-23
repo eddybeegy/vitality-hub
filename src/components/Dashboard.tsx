@@ -32,6 +32,7 @@ import { MedicationsCard } from './MedicationsCard';
 import { LabResultsCard } from './LabResultsCard';
 import { CoverageCalendarCard } from './CoverageCalendarCard';
 import { GAP_PCT, MICRO_TARGETS, microLabel, weeklyMicroGaps } from '../lib/microGaps';
+import { MicroGapFoods } from './MicroGapFoods';
 import { formatWeight, convertWeight, getWeightUnit, getLocalDateString, formatDateWithTimezone, cn } from '../lib/utils';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { useHealthStore } from '../store/useHealthStore';
@@ -739,12 +740,21 @@ export const Dashboard = React.memo(({ lastSynced }: { lastSynced?: string | nul
                             const week = weeklyMicroGaps(summaryData.metrics || [], getLocalDateString(settings?.timezone));
                             if (!week) return null;
                             return (
-                              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-2">
-                                <span className="font-semibold">Last 7 days</span> ({week.loggedDays} logged):{' '}
-                                {week.gaps.length === 0
-                                  ? <span className="text-emerald-600 dark:text-emerald-400">every nutrient averaged at least {GAP_PCT}% of target</span>
-                                  : <>under {GAP_PCT}% on <span className="text-amber-600 dark:text-amber-400 font-medium">{week.gaps.map(g => `${g.label} ${Math.round(g.pct)}%`).join(', ')}</span></>}
-                              </p>
+                              <>
+                                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-2">
+                                  <span className="font-semibold">Last 7 days</span> ({week.loggedDays} logged):{' '}
+                                  {week.gaps.length === 0
+                                    ? <span className="text-emerald-600 dark:text-emerald-400">every nutrient averaged at least {GAP_PCT}% of target</span>
+                                    : <>under {GAP_PCT}% on <span className="text-amber-600 dark:text-amber-400 font-medium">{week.gaps.map(g => `${g.label} ${Math.round(g.pct)}%`).join(', ')}</span></>}
+                                </p>
+                                {week.gaps.length > 0 && (
+                                  <MicroGapFoods
+                                    gaps={week.gaps}
+                                    mealItems={summaryData.mealItems || []}
+                                    today={getLocalDateString(settings?.timezone)}
+                                  />
+                                )}
+                              </>
                             );
                           })()}
                         </div>

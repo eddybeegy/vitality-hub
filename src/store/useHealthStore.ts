@@ -12,6 +12,11 @@ interface SummaryData {
   exercises: any[];
   sets: any[];
   syncLogs: any[];
+  // Raw `meal_items` rows for the last 90 days, straight from the summary payload
+  // (the server sends SELECT *, so every micronutrient column is present). Used by
+  // MicroGapFoods. Optional because a payload cached before it was typed has it at
+  // runtime but not in this interface.
+  mealItems?: any[];
   syncIssues: Record<string, { message: string; level: string; timestamp: string }>;
   // Same issues, re-keyed by module id via the server's MODULE_SOURCES map, because
   // logs.source and module.id are not the same namespace. See SyncHealthWidget.
