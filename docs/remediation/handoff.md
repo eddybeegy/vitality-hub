@@ -70,8 +70,10 @@ The source is the feature-ideas page. A **copy with a status chip on every idea*
 current as items land, so a hand-back starts from an accurate list.
 Kieron's ordering was: the rest of the page in page order, with **phone alerts LAST**.
 **Done as of 2026-10-23** — phone alerts merged as PR #82 / tracker item 95, which clears
-every high-value idea on the page. Only offline PWA and progress photos remain, both low
-value, and neither is blocked on anything.
+every high-value idea on the page. **The roadmap is now finished:** Kieron dropped the
+only two remaining ideas, offline PWA and progress photos, on his Telegram line at
+2026-10-23 15:59 ("Forget that offline pwa and progress photos"). Nothing on the
+feature-ideas page is outstanding. Do not re-propose either one.
 
 1. **Item 90, bedtime timing.** Finish the branch above.
 2. **Medication and supplement log.** Medications today are a JSON list in
@@ -85,11 +87,11 @@ value, and neither is blocked on anything.
    rows received. No coverage endpoint exists yet, so this needs `server.ts`.
 5. **Scheduled backups.** A nightly compressed export with retention. It pairs
    with item 54's bounded CSV export and is host-side.
-6. **Offline PWA.** `public/sw.js` is a deliberate kill-switch that caches
-   nothing. Caching the shell risks a stale `index.html` after deploys, and
-   caching API data must be cleared on logout (it is per-user). Low value; do it
-   late.
-7. **Progress photos.** Low value, large effort.
+6. **Offline PWA — DROPPED** by Kieron, 2026-10-23 15:59, Telegram. `public/sw.js`
+   stays a deliberate kill-switch that caches nothing, which also sidesteps the two
+   traps that made it unattractive: a stale `index.html` after a deploy, and cached
+   per-user API data that would have to be cleared on logout.
+7. **Progress photos — DROPPED** by Kieron, 2026-10-23 15:59, Telegram. Not being built.
 8. **Vitality Hub as an MCP server.** This is **waiting on Kieron's pick** of
    route inside the app, local stdio, or skip. Do not open a PR before he
    chooses.

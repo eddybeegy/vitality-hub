@@ -449,7 +449,9 @@ morning. Leads corrected above. Read a row's LAST dated note, not its first.
 - `origin/fix/item-90-bedtime-timing` (`49b3cae`, WIP, no PR, 17 commits behind main) — the only
   unmerged cloud artefact. builder to rebase, finish and gate it.
 - Roadmap: **CLEARED of high-value items 2026-10-23** — phone alerts (the LAST one) merged as
-  PR #82 / item 95. Only offline PWA and progress photos remain, both low priority.
+  PR #82 / item 95. **Offline PWA and progress photos were then DROPPED** by Kieron on
+  his Telegram line at 15:59 ("Forget that offline pwa and progress photos"), so the
+  feature-ideas roadmap is finished: 25 merged, 2 dropped, 0 outstanding.
 - Partial residuals inside merged features: plateau detection's Hevy push-back, micronutrient
   food suggestions, self-adjusting targets are suggestion-only, period comparison is
   vs-previous-only, cardio trends is walks-only (Strava is a mock).
