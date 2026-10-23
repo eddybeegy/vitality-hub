@@ -30,21 +30,23 @@ for a fresh session to resume from them alone (see the ownership note in
   Each PR body carries its tracker-row text for `progress.md`.
 - **#61, item 89 (BP bands and 7-day average), merged after the handover was written**
   (`c8aa8e9`). Its body carries the tracker row.
-- **Pushed, NO PR: `fix/item-90-bedtime-timing`, a half-built item 90 (bedtime
-  and wake-time consistency).** It touches `server.ts`.
-  - Done: the Apple Health ingest stores HAE `sleepStart`/`sleepEnd`, falling
-    back to `inBedStart`/`inBedEnd`, as `bedtime`/`wake_time` metric rows. The
-    value is **seconds from the row's own timestamp**, not an epoch, because
-    `metrics.value` is float4 and would round an epoch to about 2 minutes. The
-    names avoid the `sleep%` prefix on purpose.
-  - Done: the ingest logs the first sleep data point's keys once per sync.
-  - Done: `GET /api/sleep/timing?days=N` returns paired nights, the timing rows
-    are kept out of the AI context, and `src/lib/sleepTiming.ts` has 9 tests.
-  - Not done: the Dashboard card in the `sleep_consistency` widget, which should
-    use `summariseTiming` and `formatClock`.
-  - Not done: checking that the live HAE payload really uses those key names.
-    After one sync, read the "Sleep data point keys" log line.
-  - Whoever resumes it: rebase it on `main` and open a draft PR as the claim.
+- **`fix/item-90-bedtime-timing`: CLOSED, merged as #66 and deployed 2026-10-22.** The
+  Dashboard card exists (`src/components/SleepTimingCard.tsx`, using `summariseTiming` and
+  `formatClock`) and the live HAE payload was confirmed on 2026-10-23 to carry the
+  `sleepStart`/`sleepEnd` pair the ingest needs. The remote branch is gone. The two "Not
+  done" bullets this section used to carry were both finished a day before anyone read them
+  again — see the note below.
+
+- **Stale-doc warning, written 2026-10-23 17:30 after losing a round to it.** These
+  remediation docs listed five "partial residuals inside merged features" and **three of them
+  were already built and deployed** — plateau push-back to Hevy (#78), period-comparison
+  baselines (#87) and the Apply-to-targets button (#77). The notes were never updated when
+  the work landed. One of the three was also mis-verified a second time: `grep -c "Apply to
+  targets"` over a single `dist` asset returned 0 and looked like proof of absence, when the
+  card simply lives in a lazy-loaded chunk (`grep -rl` over all of `dist/` found it). Before
+  picking up any "not done" note in this folder, **verify it in the source**, and verify
+  absence with a recursive search. The two residuals that were real are now closed as items
+  96 and 97; see `progress.md`.
 
 ### builder addendum (page-watch, 2026-10-22 07:35)
 
