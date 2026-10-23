@@ -72,11 +72,11 @@ const splitGroups = (v: unknown): string[] =>
 /**
  * Sleep metric types, and the name each gets in a tool response.
  *
- * The stored values are SECONDS, whatever `metrics.unit` says -- 260 rows per
- * stage are labelled 'hr' while holding the same magnitudes as the 432 labelled
- * 's' (sleep_total averages ~21,000 either way, which is 5.9 h, not 21,000 h).
- * Nothing reads the unit column, so the mislabel is cosmetic, but it is why this
- * converts by a fixed /3600 rather than trusting the label.
+ * The stored values are SECONDS, and as of 2026-10-23 the `unit` column finally
+ * agrees: 1275 legacy rows (2023-07 to 2024-09, from the bulk import that predates
+ * this repo) were labelled 'hr' while holding seconds, and were relabelled 's'.
+ * Values were not touched. Keep converting by a fixed /3600 rather than trusting
+ * the label -- the label has been wrong before and nothing enforces it.
  *
  * There is no bare `sleep` type in this schema: the total is `sleep_total`.
  * `sleep_in_bed` is present but has only ever been written as 0.
