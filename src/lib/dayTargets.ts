@@ -33,12 +33,22 @@ interface WorkoutLike {
 
 const isWalk = (name: string | undefined) => /\b(walk|walking|hike|hiking)/i.test(name || '');
 
+/**
+ * Does this workout make its day a training day? Exported so the digest
+ * (src/lib/digest.ts) can apply the same rule without copying the threshold or
+ * the walk test -- it assigns days by its own UTC convention, so it needs the
+ * predicate on its own.
+ */
+export function isTrainingWorkout(w: WorkoutLike): boolean {
+  const minutes = Number(w.duration);
+  return Number.isFinite(minutes) && minutes >= MIN_TRAINING_MINUTES && !isWalk(w.name);
+}
+
 /** Is a qualifying workout logged on `day` (YYYY-MM-DD in `timezone`)? */
 export function trainedOn(workouts: WorkoutLike[], day: string, timezone = 'UTC'): boolean {
   const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: timezone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' });
   return workouts.some(w => {
-    const minutes = Number(w.duration);
-    if (!Number.isFinite(minutes) || minutes < MIN_TRAINING_MINUTES || isWalk(w.name)) return false;
+    if (!isTrainingWorkout(w)) return false;
     return metricDay(String(w.timestamp ?? ''), fmt) === day;
   });
 }

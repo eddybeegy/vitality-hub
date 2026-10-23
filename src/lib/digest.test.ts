@@ -134,11 +134,39 @@ describe('targets and missing data', () => {
   it('attaches the matching target to its line', () => {
     const d = buildDigest(base({
       daily: [day('2026-10-18', { calories_in: 2100, steps: 8000 })],
-      targets: [{ type: 'calories_in', value: 2000 }, { type: 'protein', value: '180' }],
+      // `calories` is the target type; `calories_in` is the metric. The spec used to
+      // ask for the metric name, so this line carried no target at all.
+      targets: [{ type: 'calories', value: 2000 }, { type: 'protein', value: '180' }],
     }));
     expect(lineOf(d, 'calories_in').target).toBe(2000);
     expect(lineOf(d, 'protein').target).toBe(180);
     expect(lineOf(d, 'steps').target).toBeNull();
+  });
+
+  it('averages the training- and rest-day calorie targets across the window', () => {
+    // Four training days (>= 20 min, not a walk) and three rest days in the week
+    // ending 2026-10-18: (4 * 2600 + 3 * 2000) / 7 = 2343.
+    const session = (date: string, duration: number, name = 'Upper A') =>
+      ({ timestamp: `${date}T18:00:00Z`, duration, name });
+    const d = buildDigest(base({
+      daily: [day('2026-10-18', { calories_in: 2400 })],
+      targets: [{ type: 'calories', value: 2600 }, { type: 'calories_rest', value: 2000 }],
+      workouts: [
+        session('2026-10-12', 45), session('2026-10-14', 45), session('2026-10-16', 45), session('2026-10-18', 45),
+        session('2026-10-13', 60, 'Outdoor Walk'),   // a walk is not training
+        session('2026-10-15', 10),                   // under 20 minutes
+      ],
+    }));
+    expect(lineOf(d, 'calories_in').target).toBe(2343);
+  });
+
+  it('uses the base target when no rest-day variant is set', () => {
+    const d = buildDigest(base({
+      daily: [day('2026-10-18', { calories_in: 2400 })],
+      targets: [{ type: 'calories', value: 2600 }],
+      workouts: [{ timestamp: '2026-10-18T18:00:00Z', duration: 45, name: 'Upper A' }],
+    }));
+    expect(lineOf(d, 'calories_in').target).toBe(2600);
   });
 
   it('marks a metric with no data as no data and headlines it', () => {

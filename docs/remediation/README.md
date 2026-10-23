@@ -592,3 +592,34 @@ both the status and its "stale after Nh" tooltip through `stalenessThresholdHour
 so no second copy needed updating. Two tests that happened to use `withings` as their
 24h example were repointed at `apple_health`, and the withings boundary now has its
 own 5-day-good / 8-day-stale case. 837/837 pass, typecheck clean.
+
+## 2026-10-23 10:14 — Digest intake targets (written 2026-10-22, landed on Kieron's go-ahead)
+
+Two bugs in the weekly/monthly digest's intake section, found while writing the
+rest-day target support and sitting uncommitted overnight:
+
+1. **The calories line never carried a target.** `METRIC_SPECS` asked for
+   `targetType: 'calories_in'`, but `calories_in` is the *metric* type — the stored
+   target type is `calories`. So `targetFor()` looked up a type that has never
+   existed in `targets` and the line silently reported `target: null`. A test
+   asserted the same wrong type, which is why nothing caught it; that test now uses
+   the real one and carries a comment saying which is which.
+
+2. **Rest-day target variants were ignored across the window.** For a type with a
+   `_rest` variant (item 88: `calories_rest`, `carbs_rest`) the applicable target
+   differs day to day, so comparing a 7-day average against the training-day number
+   alone read as a deficit on any week containing a rest day. New `windowTarget()`
+   averages each day's own target over the window.
+
+Deliberate choices:
+
+- Training days come from `digest.ts`'s own UTC `dayOf`, **not** from
+  `dayTargets.trainedOn`'s zoned day. A digest's windows are already UTC-sliced and
+  two day conventions inside one digest is worse than one imperfect one. The
+  *predicate* is shared — `isTrainingWorkout` was extracted from `dayTargets.ts` and
+  exported — so the 20-minute threshold and the walk test cannot drift apart.
+- The Nutrition tab's manual training/rest override lives in the browser's
+  localStorage and is not visible server-side, so an overridden day falls back to
+  what the workout rows say. Noted in the function's comment, not worked around.
+
+837/837 pass, typecheck clean.

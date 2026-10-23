@@ -20,6 +20,7 @@
  * inside a window cannot shift a boundary by an hour and drop a day.
  */
 import { addDays } from './dayTags.js';
+import { REST_VARIANTS, isTrainingWorkout } from './dayTargets.js';
 import type { DailyRow } from './metricAggregation.js';
 
 export type DigestPeriod = 'week' | 'month';
@@ -109,7 +110,10 @@ interface MetricSpec {
 const METRIC_SPECS: MetricSpec[] = [
   { key: 'sleep_hours', label: 'Sleep', unit: 'h', type: 'sleep_total', agg: 'avg', dp: 2, scale: 3600, section: 'sleep' },
   { key: 'sleep_deep_hours', label: 'Deep sleep', unit: 'h', type: 'sleep_deep', agg: 'avg', dp: 2, scale: 3600, section: 'sleep' },
-  { key: 'calories_in', label: 'Calories in', unit: 'kcal', type: 'calories_in', agg: 'avg', dp: 0, section: 'intake', targetType: 'calories_in' },
+  // The target is stored as `calories`, not `calories_in` (`calories_in` is the
+  // METRIC). This asked for a target type that has never existed in `targets`, so
+  // the digest's intake line silently carried no target at all.
+  { key: 'calories_in', label: 'Calories in', unit: 'kcal', type: 'calories_in', agg: 'avg', dp: 0, section: 'intake', targetType: 'calories' },
   { key: 'protein', label: 'Protein', unit: 'g', type: 'protein', agg: 'avg', dp: 0, section: 'intake', targetType: 'protein' },
   { key: 'weight', label: 'Weight', unit: 'kg', type: 'weight', agg: 'avg', dp: 2, section: 'body', targetType: 'weight' },
   { key: 'weight_latest', label: 'Latest weight', unit: 'kg', type: 'weight', agg: 'latest', dp: 2, section: 'body' },
@@ -188,7 +192,55 @@ function targetFor(targets: DigestTarget[] | undefined, type: string | undefined
   return Number.isFinite(n) ? n : null;
 }
 
-function line(spec: MetricSpec, current: DailyRow[], previous: DailyRow[], targets?: DigestTarget[]): DigestLine {
+/**
+ * The target to compare a windowed average against. For a type with a rest-day
+ * variant (item 88: `calories_rest`, `carbs_rest`) the applicable target differs
+ * day to day, so the comparison is the mean of each day's own target -- measuring
+ * a 7-day average against the training-day number alone reads as a deficit on any
+ * week that contains a rest day.
+ *
+ * Days come from this module's own UTC `dayOf`, not from `dayTargets.trainedOn`'s
+ * zoned day: a digest's windows are already UTC-sliced, and two day conventions in
+ * one digest is worse than one imperfect one. The predicate itself is shared
+ * (`isTrainingWorkout`) so the 20-minute threshold and the walk test cannot drift.
+ *
+ * The Nutrition tab's manual training/rest override lives in the browser's
+ * localStorage and is not visible here, so an overridden day falls back to what
+ * the workout rows say.
+ */
+function windowTarget(
+  spec: MetricSpec,
+  targets: DigestTarget[] | undefined,
+  workouts: DigestWorkout[],
+  window: { from: string; to: string },
+): number | null {
+  const base = targetFor(targets, spec.targetType);
+  const variant = spec.targetType ? REST_VARIANTS[spec.targetType] : undefined;
+  if (base === null || !variant) return base;
+  const rest = targetFor(targets, variant);
+  if (rest === null) return base;
+
+  const trainingDays = new Set(
+    workouts.filter(w => isTrainingWorkout({ name: w.name ?? undefined, duration: w.duration ?? undefined }))
+      .map(w => dayOf(w.timestamp)),
+  );
+  let sum = 0;
+  let n = 0;
+  for (let day = window.from; day <= window.to; day = addDays(day, 1)) {
+    sum += trainingDays.has(day) ? base : rest;
+    n += 1;
+  }
+  return n === 0 ? base : round(sum / n, spec.dp);
+}
+
+function line(
+  spec: MetricSpec,
+  current: DailyRow[],
+  previous: DailyRow[],
+  targets: DigestTarget[] | undefined,
+  workouts: DigestWorkout[],
+  window: { from: string; to: string },
+): DigestLine {
   const cur = seriesOf(current, spec);
   const prev = seriesOf(previous, spec);
   const curValue = aggregate(cur, spec.agg);
@@ -205,7 +257,7 @@ function line(spec: MetricSpec, current: DailyRow[], previous: DailyRow[], targe
     changePct: pct,
     direction: directionOf(pct),
     daysWithData: cur.length,
-    target: targetFor(targets, spec.targetType),
+    target: windowTarget(spec, targets, workouts, window),
     text: sentence(spec.label, spec.unit, rounded, prevRounded, pct, spec.dp),
   };
 }
@@ -290,7 +342,8 @@ export function buildDigest(input: DigestInput): Digest {
     { key: 'training', label: SECTION_LABELS.training, lines: trainingLines(input.workouts || [], current, previous) },
   ];
   for (const key of ['sleep', 'intake', 'body', 'activity'] as const) {
-    const lines = METRIC_SPECS.filter((s) => s.section === key).map((s) => line(s, curRows, prevRows, input.targets));
+    const lines = METRIC_SPECS.filter((s) => s.section === key)
+      .map((s) => line(s, curRows, prevRows, input.targets, input.workouts || [], current));
     sections.push({ key, label: SECTION_LABELS[key], lines });
   }
 
