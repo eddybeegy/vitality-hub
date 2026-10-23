@@ -430,6 +430,19 @@ describe('getTargets', () => {
     expect(out.targets).toEqual([{ type: 'protein', value: 170, unit: 'g' }]);
     expect(calls[0].params).toEqual([7]);
   });
+
+  // A 0 row is the UI's "no target set" placeholder, not a goal of zero. The rows
+  // stay in the table (TargetsTab renders its editable fields from them), so the
+  // filtering has to happen on the way out.
+  it('omits targets stored as 0 or null', async () => {
+    const { db } = fakeDb([[/FROM targets/, [
+      { type: 'calories', value: 2055, unit: 'kcal' },
+      { type: 'water', value: 0, unit: 'ml' },
+      { type: 'sleep', value: null, unit: 'h' },
+    ]]]);
+    const out = await tools.getTargets(ctx(db));
+    expect(out.targets).toEqual([{ type: 'calories', value: 2055, unit: 'kcal' }]);
+  });
 });
 
 describe('listMetricTypes', () => {

@@ -43,6 +43,7 @@ import { dedupeOverlappingWorkouts } from "./src/lib/workoutDedupe";
 import { latestBpReadings, BP_TYPES } from "./src/lib/bpLatest";
 import { estimateTdee, seriesOf, tdeeWindow } from "./src/lib/tdee";
 import { FOCUS_LABELS, normaliseFocus, suggestTargets } from "./src/lib/adaptiveTargets";
+import { isTargetSet, onlySetTargets } from "./src/lib/targets";
 import { autoTargetsDue, decideAutoTargets, DEFAULT_MAX_CHANGE_KCAL, DEFAULT_MAX_CHANGE_G } from "./src/lib/autoTargets";
 import { pairNights, TIMING_TYPES } from "./src/lib/sleepTiming";
 import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toSnapshot, historyForAIContext, parseStoredComponents, READINESS_ALGO_VERSION, DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, type ReadinessSnapshot } from "./src/lib/readinessHistory";
@@ -2502,7 +2503,7 @@ async function checkScheduledRegeneration(userId: number) {
     const summed = ['active_energy', 'sleep', 'sleep_total', 'sleep_in_bed', 'sleep_core', 'sleep_deep', 'sleep_rem', 'sleep_awake'];
     const metrics = aggregateDailyMetrics(filtered, timezone, summed, []);
 
-    const targets = await db.prepare("SELECT * FROM targets WHERE user_id = ?").all(userId) as any[];
+    const targets = onlySetTargets(await db.prepare("SELECT * FROM targets WHERE user_id = ?").all(userId) as any[]);
     return { metrics, targets, timezone };
   }
 
@@ -2647,7 +2648,10 @@ async function checkScheduledRegeneration(userId: number) {
         user.metric_priorities, timezone);
       const metrics = filteredMetrics;
       
-      const targets = await db.prepare("SELECT * FROM targets WHERE user_id = ?").all(userId);
+      // A 0 target is "unset", not a goal of zero -- it must not reach the model,
+      // which would otherwise report progress against it in the Progress vs Targets
+      // table. One filter here covers both the JSON payload and the prompt line.
+      const targets = onlySetTargets(await db.prepare("SELECT * FROM targets WHERE user_id = ?").all(userId) as any[]);
       const routines = await db.prepare("SELECT * FROM routines WHERE user_id = ?").all(userId);
       
       // Use latest 2 weeks of workouts to inform AI generation
@@ -3372,9 +3376,12 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         });
 
         const targetRows = await db.prepare("SELECT type, value FROM targets WHERE user_id = ?").all(userId) as any[];
+        // 0 is unset, so it reads as null rather than as a goal of zero: a 0
+        // `calories` row would otherwise look like a current target the whole
+        // suggestion had to move from, and be refused as over the cap forever.
         const targetOf = (type: string) => {
-          const v = Number(targetRows.find((r) => r.type === type)?.value);
-          return Number.isFinite(v) ? v : null;
+          const raw = targetRows.find((r) => r.type === type)?.value;
+          return isTargetSet(raw) ? Number(raw) : null;
         };
         // Latest of each, not the window mean: a target is set against where the
         // body is now, the same reading AdaptiveTdeeCard shows.

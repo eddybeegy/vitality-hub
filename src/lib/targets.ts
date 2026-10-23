@@ -16,6 +16,25 @@ export function isTargetSet(value: unknown): value is number {
   return normaliseTargetValue(value) !== null;
 }
 
+/**
+ * The rows that hold a real goal, for anything that reads a target *as* a goal.
+ *
+ * A 0 row is not a goal of zero, it is the UI's "no target set" placeholder:
+ * new users are seeded with `steps`/`vo2_max` at 0, and clearing the input in
+ * TargetsTab writes 0 back over the wire. The client has gone through
+ * `isTargetSet` since those helpers were written; the server had not, so a
+ * `water 0` or `sleep 0` row reached the AI prompt and the MCP tools as a
+ * target the model could report progress against (Kieron, 2026-10-23: "Should
+ * be no target if set to 0").
+ *
+ * The rows deliberately stay in the database. TargetsTab renders one editable
+ * field per existing row, so deleting them would remove the user's only way to
+ * set that target.
+ */
+export function onlySetTargets<T extends { value?: unknown }>(rows: readonly T[] | null | undefined): T[] {
+  return (rows ?? []).filter((r) => isTargetSet(r?.value));
+}
+
 /** Wire form for POST /api/targets, which only accepts finite numbers. */
 export function toApiTargetValue(value: TargetValue): number {
   return normaliseTargetValue(value) ?? 0;

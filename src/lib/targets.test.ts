@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normaliseTargetValue, isTargetSet, toApiTargetValue, formatTargetLabel } from './targets';
+import { normaliseTargetValue, isTargetSet, toApiTargetValue, formatTargetLabel, onlySetTargets } from './targets';
 
 describe('normaliseTargetValue', () => {
   it('treats the stored 0 sentinel as unset', () => {
@@ -32,6 +32,33 @@ describe('toApiTargetValue', () => {
   it('sends unset as 0, which the API accepts', () => {
     expect(toApiTargetValue(null)).toBe(0);
     expect(toApiTargetValue(8)).toBe(8);
+  });
+});
+
+describe('onlySetTargets', () => {
+  const rows = [
+    { type: 'calories', value: 2055, unit: 'kcal' },
+    { type: 'water', value: 0, unit: 'ml' },
+    { type: 'sleep', value: null, unit: 'h' },
+    { type: 'steps', value: '0', unit: '' },
+    { type: 'protein', value: '160', unit: 'g' },
+  ];
+
+  it('drops the rows that only look like targets', () => {
+    expect(onlySetTargets(rows).map(r => r.type)).toEqual(['calories', 'protein']);
+  });
+
+  it('keeps the row objects themselves, so units and labels survive', () => {
+    expect(onlySetTargets(rows)[0]).toBe(rows[0]);
+  });
+
+  it('tolerates a missing list', () => {
+    expect(onlySetTargets(undefined)).toEqual([]);
+    expect(onlySetTargets(null)).toEqual([]);
+  });
+
+  it('drops a negative target too -- it is not a goal either', () => {
+    expect(onlySetTargets([{ value: -5 }])).toEqual([]);
   });
 });
 

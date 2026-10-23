@@ -17,6 +17,7 @@
 import { pairNights, summariseTiming, TIMING_TYPES, formatClock, type TimingSummary } from '../lib/sleepTiming.js';
 import { aggregateDailyValues, NUTRITION_METRICS, type DailyRow, type MetricRow } from '../lib/metricAggregation.js';
 import { buildDigest, renderDigestText, isDigestPeriod, PERIOD_DAYS, type DigestPeriod } from '../lib/digest.js';
+import { onlySetTargets } from '../lib/targets.js';
 
 type NaiveTsTable = 'metrics' | 'workouts' | 'meal_items';
 
@@ -345,15 +346,18 @@ export const tools = {
       `SELECT name, duration, volume, source, ${tsExpr(ctx, 'workouts')} AS timestamp
          FROM workouts WHERE user_id = ? AND timestamp >= ?`
     ).all(ctx.userId, cutoffIso(window))) as any[];
+    // Not filtered through onlySetTargets: digest's own targetFor() already runs
+    // normaliseTargetValue, so a 0 row is a null target there. A second filter here
+    // would be unkillable by any test, which is how dead code gets in.
     const targets = (await ctx.db.prepare('SELECT type, value, unit FROM targets WHERE user_id = ?').all(ctx.userId)) as any[];
 
     const digest = buildDigest({ period, today: todayIn(zone), timezone: zone, daily: rows, workouts, targets });
     return { ...digest, text: renderDigestText(digest) };
   },
 
-  /** The user's configured targets. */
+  /** The user's configured targets. Rows at 0 are unset and are not returned. */
   async getTargets(ctx: McpContext) {
     const rows = (await ctx.db.prepare('SELECT type, value, unit FROM targets WHERE user_id = ? ORDER BY type').all(ctx.userId)) as any[];
-    return { targets: rows };
+    return { targets: onlySetTargets(rows) };
   },
 };
