@@ -25,8 +25,12 @@
  *   decision refuses and says so rather than applying it, and keeps refusing until
  *   the estimate settles or the user presses Apply himself. A silent 600 kcal cut
  *   is the failure mode this exists to prevent.
- * - **Calories are capped, protein is not.** Protein is derived from lean mass, which
- *   moves slowly, and being 20 g out for a week is not a problem worth a refusal.
+ * - **Both targets are capped.** Calories and protein each have their own limit. The
+ *   first live rehearsal of this sweep moved protein 160 g -> 130 g in one run: the
+ *   suggestion is formulaic (2.2 g/kg lean mass, or 1.8 g/kg body weight) while the
+ *   stored 160 was deliberate, and silently overwriting it is the same surprise as a
+ *   silent calorie cut. An uncapped protein target was wrong for the same reason a
+ *   capped calorie one is right.
  *
  * Every applied change is logged server-side (source `targets`) with the before and
  * after, so an unexplained target can always be traced back to a run.
@@ -39,6 +43,9 @@ export const MIN_DAYS_BETWEEN = 7;
 export const DEFAULT_MAX_CHANGE_KCAL = 300;
 export const MIN_MAX_CHANGE_KCAL = 50;
 export const MAX_MAX_CHANGE_KCAL = 1000;
+export const DEFAULT_MAX_CHANGE_G = 20;
+export const MIN_MAX_CHANGE_G = 5;
+export const MAX_MAX_CHANGE_G = 100;
 
 export interface AutoTargetTarget {
   type: 'calories' | 'protein';
@@ -61,6 +68,7 @@ export interface AutoTargetInput {
   /** The stored targets now. null/0 means "no target set". */
   current: { calories: number | null; protein: number | null };
   maxChangeKcal: number;
+  maxChangeG: number;
 }
 
 export type AutoTargetDecision =
@@ -132,16 +140,21 @@ export function decideAutoTargets(input: AutoTargetInput): AutoTargetDecision {
   const currentCalories = positive(input.current.calories);
   const currentProtein = positive(input.current.protein);
 
-  if (currentCalories !== null) {
-    const delta = Math.abs(calories - currentCalories);
-    const cap = Math.round(input.maxChangeKcal);
-    if (delta > cap) {
-      return {
-        apply: false,
-        reason: `suggested calories move ${delta} kcal (${currentCalories} to ${calories}), over the ${cap} kcal limit`,
-      };
-    }
-  }
+  // Both caps, one shape. A refusal names the numbers, because "my target did not
+  // move" has to be answerable from the log line on its own. With no stored target
+  // there is nothing established to protect, so the first value is never capped.
+  const overCap = (label: string, unit: string, current: number | null, next: number, cap: number): string | null => {
+    if (current === null) return null;
+    const delta = Math.abs(next - current);
+    const limit = Math.round(cap);
+    return delta > limit
+      ? `suggested ${label} moves ${delta} ${unit} (${current} to ${next}), over the ${limit} ${unit} limit`
+      : null;
+  };
+  const overLimit =
+    overCap('calories', 'kcal', currentCalories, calories, input.maxChangeKcal)
+    ?? overCap('protein', 'g', currentProtein, protein, input.maxChangeG);
+  if (overLimit) return { apply: false, reason: overLimit };
 
   const changes: string[] = [];
   const targets: AutoTargetTarget[] = [];

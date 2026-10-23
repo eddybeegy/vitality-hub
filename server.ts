@@ -43,7 +43,7 @@ import { dedupeOverlappingWorkouts } from "./src/lib/workoutDedupe";
 import { latestBpReadings, BP_TYPES } from "./src/lib/bpLatest";
 import { estimateTdee, seriesOf, tdeeWindow } from "./src/lib/tdee";
 import { suggestTargets } from "./src/lib/adaptiveTargets";
-import { autoTargetsDue, decideAutoTargets, DEFAULT_MAX_CHANGE_KCAL } from "./src/lib/autoTargets";
+import { autoTargetsDue, decideAutoTargets, DEFAULT_MAX_CHANGE_KCAL, DEFAULT_MAX_CHANGE_G } from "./src/lib/autoTargets";
 import { pairNights, TIMING_TYPES } from "./src/lib/sleepTiming";
 import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toSnapshot, historyForAIContext, parseStoredComponents, READINESS_ALGO_VERSION, DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, type ReadinessSnapshot } from "./src/lib/readinessHistory";
 import { validateDayTagInput, normaliseTag, tagsForAIContext, todayIn, addDays, daysBetween, MAX_RANGE_DAYS, type DayTag } from "./src/lib/dayTags";
@@ -491,6 +491,7 @@ async function ensureSchema() {
       // backup_last_day, a client that could set it could suppress every future run.
       auto_targets_enabled: "INTEGER DEFAULT 0",
       auto_targets_max_change_kcal: "INTEGER DEFAULT 300",
+      auto_targets_max_change_g: "INTEGER DEFAULT 20",
       auto_targets_last_day: "TEXT"
     },
     ai_configs: {
@@ -3313,7 +3314,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
     autoTargetsRunning = true;
     try {
       const users = await db.prepare(
-        "SELECT id, timezone, auto_targets_max_change_kcal, auto_targets_last_day FROM users WHERE auto_targets_enabled = 1"
+        "SELECT id, timezone, auto_targets_max_change_kcal, auto_targets_max_change_g, auto_targets_last_day FROM users WHERE auto_targets_enabled = 1"
       ).all() as any[];
       for (const u of users) {
         const userId = Number(u.id);
@@ -3359,6 +3360,9 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
         const maxChange = Number.isInteger(u.auto_targets_max_change_kcal)
           ? u.auto_targets_max_change_kcal
           : DEFAULT_MAX_CHANGE_KCAL;
+        const maxChangeG = Number.isInteger(u.auto_targets_max_change_g)
+          ? u.auto_targets_max_change_g
+          : DEFAULT_MAX_CHANGE_G;
         const decision = decideAutoTargets({
           enabled: true,
           today,
@@ -3368,6 +3372,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
           suggestion: suggestion ? { calories: suggestion.calories, protein: suggestion.protein } : null,
           current: { calories: targetOf('calories'), protein: targetOf('protein') },
           maxChangeKcal: maxChange,
+          maxChangeG,
         });
 
         if (decision.apply === false) {

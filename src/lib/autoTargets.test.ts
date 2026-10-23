@@ -5,6 +5,7 @@ import {
   daysBetween,
   AUTO_TARGET_WEEKDAY,
   DEFAULT_MAX_CHANGE_KCAL,
+  DEFAULT_MAX_CHANGE_G,
   type AutoTargetInput,
 } from './autoTargets';
 
@@ -18,6 +19,7 @@ const base = (over: Partial<AutoTargetInput> = {}): AutoTargetInput => ({
   suggestion: { calories: 2150, protein: 165 },
   current: { calories: 2055, protein: 160 },
   maxChangeKcal: DEFAULT_MAX_CHANGE_KCAL,
+  maxChangeG: DEFAULT_MAX_CHANGE_G,
   ...over,
 });
 
@@ -100,7 +102,7 @@ describe('decideAutoTargets', () => {
     const d = decideAutoTargets(base({ suggestion: { calories: 2600, protein: 165 } }));
     expect(d).toEqual({
       apply: false,
-      reason: 'suggested calories move 545 kcal (2055 to 2600), over the 300 kcal limit',
+      reason: 'suggested calories moves 545 kcal (2055 to 2600), over the 300 kcal limit',
     });
   });
 
@@ -145,12 +147,37 @@ describe('decideAutoTargets', () => {
     expect((d as any).changes).toEqual(['calories unset to 2150', 'protein unset to 165']);
   });
 
-  it('does not cap protein, which moves with lean mass and is low risk', () => {
-    const d = decideAutoTargets(base({ suggestion: { calories: 2055, protein: 260 } }));
+  // The first live rehearsal applied protein 160 -> 130 in one run, which is the same
+  // surprise an uncapped calorie change would be.
+  it('caps protein too, and names the numbers', () => {
+    expect(decideAutoTargets(base({ suggestion: { calories: 2055, protein: 130 } }))).toEqual({
+      apply: false,
+      reason: 'suggested protein moves 30 g (160 to 130), over the 20 g limit',
+    });
+  });
+
+  it('allows a protein move at the limit', () => {
+    expect(decideAutoTargets(base({ suggestion: { calories: 2055, protein: 180 } }))).toEqual({
+      apply: true,
+      targets: [{ type: 'protein', value: 180, unit: 'g' }],
+      changes: ['protein 160 to 180'],
+    });
+  });
+
+  it('reports the calorie limit first when both are over', () => {
+    const d = decideAutoTargets(base({ suggestion: { calories: 2600, protein: 260 } }));
+    expect((d as any).reason).toContain('calories');
+  });
+
+  it('does not cap the first protein target either', () => {
+    const d = decideAutoTargets(base({
+      current: { calories: 2055, protein: null },
+      suggestion: { calories: 2055, protein: 260 },
+    }));
     expect(d).toEqual({
       apply: true,
       targets: [{ type: 'protein', value: 260, unit: 'g' }],
-      changes: ['protein 160 to 260'],
+      changes: ['protein unset to 260'],
     });
   });
 

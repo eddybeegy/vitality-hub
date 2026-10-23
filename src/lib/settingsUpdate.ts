@@ -190,6 +190,7 @@ const FIELDS: Record<string, Check> = {
   // the backup_last_day reason: it is the sweep own record of what it has done.
   auto_targets_enabled: flag,
   auto_targets_max_change_kcal: int(50, 1000),
+  auto_targets_max_change_g: int(5, 100),
 };
 
 // Credentials: GET /api/settings never returns hevy_api_key or withings_client_secret,
