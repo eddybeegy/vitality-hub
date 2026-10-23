@@ -174,6 +174,18 @@ const FIELDS: Record<string, Check> = {
   backup_enabled: flag,
   backup_hour: int(0, 23),
   backup_keep: int(1, 60),
+  // Phone alerts (item 95). The thresholds are deliberately his-numbers rather than
+  // textbook ones -- see src/lib/alerts.ts -- so they have to be editable here, or the
+  // defaults become folklore. Ranges are wide enough to hold a textbook value too.
+  alerts_enabled: flag,
+  alert_stale_enabled: flag,
+  alert_bp_enabled: flag,
+  alert_readiness_enabled: flag,
+  alert_bp_systolic: int(80, 220),
+  alert_bp_diastolic: int(40, 140),
+  alert_readiness_floor: int(0, 100),
+  alert_quiet_start_hour: int(0, 23),
+  alert_quiet_end_hour: int(0, 23),
 };
 
 // Credentials: GET /api/settings never returns hevy_api_key or withings_client_secret,

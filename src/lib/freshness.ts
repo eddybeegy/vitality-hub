@@ -49,3 +49,87 @@ export function freshnessStatus(
   const diffHours = (now - t) / (1000 * 60 * 60);
   return diffHours < stalenessThresholdHours(moduleId) ? 'good' : 'error';
 }
+
+// ---------------------------------------------------------------------------
+// Module -> source/table resolution. Extracted from the dashboard endpoint for
+// item 95 so the phone-alert sweep judges staleness by exactly the same rule
+// the Data Freshness panel shows. Two copies of this mapping would guarantee a
+// day where the panel says "stale" and the alert disagrees, or worse the other
+// way round.
+// ---------------------------------------------------------------------------
+
+/**
+ * A module id is not always its metrics `source`:
+ *  - `apple_workouts` writes rows tagged `apple_health`, so on its own id it
+ *    would always read "Never".
+ *  - `healthsync` (HealthSync's HASS-routed copy of the same Apple Health data)
+ *    has no module at all, so the freshest source in the DB was never
+ *    represented in the UI. It counts towards apple_health's freshness,
+ *    matching the source-precedence policy in aggregateDailyMetrics.
+ *  - the Nutracheck module's id is `nutrachek` (one 'c') while some rank tables
+ *    spell it `nutracheck`; accept both rather than silently reading "Never".
+ * Unknown modules fall back to their own id.
+ */
+export const MODULE_SOURCES: Record<string, string[]> = {
+  apple_health: ['apple_health', 'healthsync'],
+  apple_workouts: ['apple_health', 'healthsync'],
+  cronometer: ['cronometer'],
+  hevy: ['hevy'],
+  myfitnesspal: ['myfitnesspal'],
+  nutrachek: ['nutrachek', 'nutracheck'],
+  strava: ['strava'],
+  withings: ['withings'],
+};
+
+/**
+ * Which table a module actually writes. Workout feeds must not be able to read
+ * their freshness off a metrics row that another feed sharing the same `source`
+ * tag wrote, or vice versa (item 39). A module not listed here is read against
+ * both tables.
+ */
+export const MODULE_TABLES: Record<string, string[]> = {
+  apple_health: ['metrics'],
+  apple_workouts: ['workouts'],
+  cronometer: ['metrics'],
+  hevy: ['workouts'],
+  myfitnesspal: ['metrics'],
+  nutrachek: ['metrics'],
+  strava: ['workouts'],
+  withings: ['metrics'],
+};
+
+/** `{ metrics: { source: isoTimestamp }, workouts: { ... } }`. */
+export type ReadingFreshnessByTable = Record<string, Record<string, string | undefined>>;
+
+export interface ModuleFreshness {
+  lastReading: string | null;
+  /** Which `source` values actually contributed — empty means "never". */
+  sources: string[];
+  tables: string[];
+}
+
+/** Newest reading per module, resolved through the two maps above. */
+export function moduleFreshness(
+  byTable: ReadingFreshnessByTable,
+  moduleIds: string[],
+): Record<string, ModuleFreshness> {
+  const out: Record<string, ModuleFreshness> = {};
+  for (const id of moduleIds) {
+    const srcs = MODULE_SOURCES[id] || [id];
+    const tables = MODULE_TABLES[id] || ['metrics', 'workouts'];
+    let best: string | null = null;
+    const contributing: string[] = [];
+    for (const s of srcs) {
+      let t: string | null = null;
+      for (const table of tables) {
+        const c = byTable[table]?.[s];
+        if (c && (!t || new Date(c).getTime() > new Date(t).getTime())) t = c;
+      }
+      if (!t) continue;
+      contributing.push(s);
+      if (!best || new Date(t).getTime() > new Date(best).getTime()) best = t;
+    }
+    out[id] = { lastReading: best, sources: contributing, tables };
+  }
+  return out;
+}

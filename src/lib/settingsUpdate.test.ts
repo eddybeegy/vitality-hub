@@ -174,3 +174,62 @@ describe('enable_correlations', () => {
     expect(Object.keys(Object.fromEntries(r.columns!))).toEqual(['font_size']);
   });
 });
+
+// Item 95: the alert_* columns. The point of these is that the thresholds are
+// editable at all -- the defaults are tuned to one person's readings, so a column
+// missing from FIELDS would silently drop the save (the item-86 failure).
+describe('alert settings', () => {
+  it('accepts every alert column', () => {
+    const body = {
+      alerts_enabled: true,
+      alert_stale_enabled: false,
+      alert_bp_enabled: true,
+      alert_readiness_enabled: false,
+      alert_bp_systolic: 135,
+      alert_bp_diastolic: 85,
+      alert_readiness_floor: 55,
+      alert_quiet_start_hour: 23,
+      alert_quiet_end_hour: 6,
+    };
+    const r = buildSettingsUpdate(body);
+    expect(r.error).toBeUndefined();
+    expect(Object.fromEntries(r.columns!)).toEqual({
+      alerts_enabled: 1,
+      alert_stale_enabled: 0,
+      alert_bp_enabled: 1,
+      alert_readiness_enabled: 0,
+      alert_bp_systolic: 135,
+      alert_bp_diastolic: 85,
+      alert_readiness_floor: 55,
+      alert_quiet_start_hour: 23,
+      alert_quiet_end_hour: 6,
+    });
+  });
+
+  it('accepts 0/1 for the flags, as a raw GET returns them', () => {
+    const r = buildSettingsUpdate({ alerts_enabled: 1, alert_bp_enabled: 0 });
+    expect(Object.fromEntries(r.columns!)).toEqual({ alerts_enabled: 1, alert_bp_enabled: 0 });
+  });
+
+  it('rejects an out-of-range quiet hour', () => {
+    expect(buildSettingsUpdate({ alert_quiet_start_hour: 24 }).error).toMatch(/alert_quiet_start_hour/);
+  });
+
+  it('rejects a BP threshold outside the plausible band', () => {
+    expect(buildSettingsUpdate({ alert_bp_systolic: 20 }).error).toMatch(/alert_bp_systolic/);
+    expect(buildSettingsUpdate({ alert_bp_diastolic: 300 }).error).toMatch(/alert_bp_diastolic/);
+  });
+
+  it('rejects a non-integer readiness floor', () => {
+    expect(buildSettingsUpdate({ alert_readiness_floor: 60.5 }).error).toMatch(/alert_readiness_floor/);
+  });
+
+  it('rejects a string where a flag is expected', () => {
+    expect(buildSettingsUpdate({ alerts_enabled: 'yes' }).error).toMatch(/alerts_enabled/);
+  });
+
+  it('leaves alert columns alone when the body omits them', () => {
+    const r = buildSettingsUpdate({ font_size: 'large' });
+    expect(r.columns!.map(([c]) => c)).toEqual(['font_size']);
+  });
+});

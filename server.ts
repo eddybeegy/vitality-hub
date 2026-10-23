@@ -24,6 +24,8 @@ import { probeProvider } from "./ai_providers/openai_compatible";
 import { setupDb } from "./src/lib/db";
 import { parseEnumParam, parseDateParam, parseDayParam, parseIntParam, checkDateOrder } from "./src/lib/queryParams";
 import { buildSettingsUpdate, hasSettingsField } from "./src/lib/settingsUpdate";
+import { moduleFreshness, MODULE_SOURCES, stalenessThresholdHours } from "./src/lib/freshness";
+import { evaluateAlerts, DEFAULT_ALERT_SETTINGS, type AlertSettings } from "./src/lib/alerts";
 import { validateClientLog, formatLogLine, escapeLogFields } from "./src/lib/logEntry";
 import { jsonParseErrorResponse } from "./src/lib/bodyParseError";
 import { parseLogsQuery, zonedDayBounds, resolveTimeZone, logTimestampToIso, toSqliteTimestamp } from "./src/lib/logsQuery";
@@ -467,7 +469,19 @@ async function ensureSchema() {
       backup_enabled: "INTEGER DEFAULT 0",
       backup_hour: "INTEGER DEFAULT 3",
       backup_keep: "INTEGER DEFAULT 7",
-      backup_last_day: "TEXT"
+      backup_last_day: "TEXT",
+      // Phone alerts (item 95, Kieron 2026-10-23). The thresholds are his own
+      // distribution, not the textbook numbers -- see src/lib/alerts.ts for why
+      // 140/90 and readiness-40 would never have fired once in his history.
+      alerts_enabled: "INTEGER DEFAULT 0",
+      alert_stale_enabled: "INTEGER DEFAULT 1",
+      alert_bp_enabled: "INTEGER DEFAULT 1",
+      alert_readiness_enabled: "INTEGER DEFAULT 1",
+      alert_bp_systolic: "INTEGER DEFAULT 130",
+      alert_bp_diastolic: "INTEGER DEFAULT 82",
+      alert_readiness_floor: "INTEGER DEFAULT 60",
+      alert_quiet_start_hour: "INTEGER DEFAULT 22",
+      alert_quiet_end_hour: "INTEGER DEFAULT 7"
     },
     ai_configs: {
       id: "INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -678,6 +692,17 @@ async function ensureSchema() {
     // blood draw belongs to a day, not an instant. `ref_low`/`ref_high` are the range
     // printed on the user's own report: labs differ, so the row's range is the
     // authority and src/lib/labs.ts only falls back to a typical adult range.
+    // Phone alerts already sent, so a feed that has been dead four days pages
+    // once a day instead of once an hour. Keyed by the alert's own dedupe key
+    // (see src/lib/alerts.ts), NOT by kind -- the key already encodes the day
+    // for staleness and the reading instant for BP.
+    alerts_sent: {
+      id: "INTEGER PRIMARY KEY AUTOINCREMENT",
+      user_id: "INTEGER",
+      alert_key: "VARCHAR(200)",
+      kind: "VARCHAR(20)",
+      sent_at: "DATETIME DEFAULT CURRENT_TIMESTAMP"
+    },
     lab_results: {
       id: "INTEGER PRIMARY KEY AUTOINCREMENT",
       user_id: "INTEGER",
@@ -710,6 +735,7 @@ async function ensureSchema() {
     if (tableName === 'medications') createSql += `, UNIQUE(user_id, name)`;
     if (tableName === 'medication_doses') createSql += `, UNIQUE(user_id, medication_id, dose_date)`;
     if (tableName === 'lab_results') createSql += `, UNIQUE(user_id, taken_on, analyte)`;
+    if (tableName === 'alerts_sent') createSql += `, UNIQUE(user_id, alert_key)`;
     createSql += `)`;
     
     try {
@@ -3714,58 +3740,10 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       `SELECT source, MAX(${readingInstant('workouts')}) AS timestamp FROM workouts WHERE user_id = ? GROUP BY source`
     ).all(userId) as any[]);
 
-    // A module id is not always its metrics `source`:
-    //  - `apple_workouts` writes rows tagged `apple_health`, so on its own id it would
-    //    always read "Never".
-    //  - `healthsync` (HealthSync's HASS-routed copy of the same Apple Health data) has
-    //    no module at all, so the freshest source in the DB was never represented in the
-    //    UI. It counts towards apple_health's freshness, matching the source-precedence
-    //    policy in aggregateDailyMetrics (prefer the direct push, fall back to this).
-    //  - the Nutracheck module's id is `nutrachek` (one 'c') while some rank tables spell
-    //    it `nutracheck`; accept both rather than silently reading "Never".
-    // Unknown modules fall back to their own id.
-    const MODULE_SOURCES: Record<string, string[]> = {
-      apple_health: ['apple_health', 'healthsync'],
-      apple_workouts: ['apple_health', 'healthsync'],
-      cronometer: ['cronometer'],
-      hevy: ['hevy'],
-      myfitnesspal: ['myfitnesspal'],
-      nutrachek: ['nutrachek', 'nutracheck'],
-      strava: ['strava'],
-      withings: ['withings'],
-    };
-    // Which table a module actually writes. Workout feeds must not be able to read
-    // their freshness off a metrics row that another feed sharing the same `source`
-    // tag wrote, or vice versa (item 39). A module not listed here is read against
-    // both tables, as before.
-    const MODULE_TABLES: Record<string, string[]> = {
-      apple_health: ['metrics'],
-      apple_workouts: ['workouts'],
-      cronometer: ['metrics'],
-      hevy: ['workouts'],
-      myfitnesspal: ['metrics'],
-      nutrachek: ['metrics'],
-      strava: ['workouts'],
-      withings: ['metrics'],
-    };
-    const freshnessByModule: Record<string, { lastReading: string | null; sources: string[]; tables: string[] }> = {};
-    for (const m of modules) {
-      const srcs = MODULE_SOURCES[m.id] || [m.id];
-      const tables = MODULE_TABLES[m.id] || ['metrics', 'workouts'];
-      let best: string | null = null;
-      const contributing: string[] = [];
-      for (const s of srcs) {
-        let t: string | null = null;
-        for (const table of tables) {
-          const c = readingFreshnessByTable[table]?.[s];
-          if (c && (!t || new Date(c).getTime() > new Date(t).getTime())) t = c;
-        }
-        if (!t) continue;
-        contributing.push(s);
-        if (!best || new Date(t).getTime() > new Date(best).getTime()) best = t;
-      }
-      freshnessByModule[m.id] = { lastReading: best, sources: contributing, tables };
-    }
+    // Module -> source/table resolution now lives in src/lib/freshness.ts, so the
+    // phone-alert sweep (item 95) judges staleness by exactly this rule rather
+    // than a second copy of it that could drift.
+    const freshnessByModule = moduleFreshness(readingFreshnessByTable, modules.map((m: any) => m.id));
 
     // --- Sync issues, keyed by MODULE as well as by log source ---------------
     // `syncIssues` above is keyed by `logs.source`, and the widget looked it up by
@@ -4203,6 +4181,187 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
   setInterval(backupTick, BACKUP_TICK_MINUTES * 60 * 1000);
   // One check shortly after boot, so enabling it and restarting does not wait a tick.
   setTimeout(() => { void backupTick(); }, 30 * 1000);
+
+  // --- Phone alerts (item 95, Kieron 2026-10-23) ----------------------------
+  // Same ticker shape as scheduled backups, and for the same reason: the
+  // container is redeployed several times a day, so an armed timer for "07:00"
+  // would be lost every time. Ask a cheap question often instead.
+  //
+  // Nothing here decides WHETHER an alert is true -- that is evaluateAlerts in
+  // src/lib/alerts.ts, pure and unit-tested. This function only gathers the
+  // inputs, dedupes against `alerts_sent`, and posts.
+  const ALERT_TICK_MINUTES = 15;
+  const ALERT_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL || 'http://172.20.0.1:3001/webhook/vitality-chat/alert';
+  const ALERT_SECRET = process.env.VITALITY_CHAT_SHARED_SECRET || '';
+  // Kill switch needing no redeploy: ALERTS_ENABLED=0 in .env, then restart.
+  const ALERT_TRANSPORT_ENABLED = ALERT_SECRET !== '' && process.env.ALERTS_ENABLED !== '0';
+  const ALERT_POST_TIMEOUT_MS = 15_000;
+  let alertRunning = false;
+
+  const alertSettingsFrom = (u: any): AlertSettings => {
+    const n = (v: unknown, fallback: number) => (Number.isInteger(v) ? (v as number) : fallback);
+    const d = DEFAULT_ALERT_SETTINGS;
+    return {
+      enabled: !!u.alerts_enabled,
+      staleEnabled: !!u.alert_stale_enabled,
+      bpEnabled: !!u.alert_bp_enabled,
+      readinessEnabled: !!u.alert_readiness_enabled,
+      bpSystolic: n(u.alert_bp_systolic, d.bpSystolic),
+      bpDiastolic: n(u.alert_bp_diastolic, d.bpDiastolic),
+      readinessFloor: n(u.alert_readiness_floor, d.readinessFloor),
+      quietStartHour: n(u.alert_quiet_start_hour, d.quietStartHour),
+      quietEndHour: n(u.alert_quiet_end_hour, d.quietEndHour),
+    };
+  };
+
+  /**
+   * Posts a batch and returns the keys the host confirms it delivered. Never
+   * throws: a failed post leaves nothing in `alerts_sent`, so the next tick
+   * retries the same alerts. That is the right way round -- a missed alert is
+   * recoverable, a double-buzzed one is not.
+   */
+  const postAlerts = async (alerts: Array<{ key: string; text: string; kind: string }>): Promise<string[]> => {
+    const body = JSON.stringify({ alerts });
+    const timestamp = new Date().toISOString();
+    const signature = createHmac('sha256', ALERT_SECRET).update(`${timestamp}.${body}`).digest('hex');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ALERT_POST_TIMEOUT_MS);
+    try {
+      const res = await fetch(ALERT_WEBHOOK_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-vitality-timestamp': timestamp,
+          'x-vitality-signature': signature,
+        },
+        body,
+        signal: controller.signal,
+      });
+      const raw = await res.text();
+      if (!res.ok) {
+        logEvent('warn', `Alerts: host returned ${res.status} (${raw.substring(0, 200)})`, 'alerts');
+        return [];
+      }
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed?.delivered_keys) ? parsed.delivered_keys.filter((k: unknown) => typeof k === 'string') : [];
+    } catch (err: any) {
+      const why = err?.name === 'AbortError' ? `timed out after ${ALERT_POST_TIMEOUT_MS}ms` : (err?.message || String(err));
+      logEvent('warn', `Alerts: host unreachable (${why})`, 'alerts');
+      return [];
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const alertTick = async () => {
+    if (!ALERT_TRANSPORT_ENABLED || alertRunning) return;
+    alertRunning = true;
+    try {
+      const users = await db.prepare(
+        `SELECT id, timezone, alerts_enabled, alert_stale_enabled, alert_bp_enabled, alert_readiness_enabled,
+                alert_bp_systolic, alert_bp_diastolic, alert_readiness_floor,
+                alert_quiet_start_hour, alert_quiet_end_hour
+           FROM users WHERE alerts_enabled = 1`
+      ).all() as any[];
+
+      for (const u of users) {
+        const userId = u.id;
+        const tz = resolveTimeZone(u.timezone);
+        const now = new Date();
+        const hourNow = Number(new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: 'numeric', hour12: false }).format(now));
+        const today = todayIn(tz);
+
+        // Freshness, via exactly the maps the Data Freshness panel uses.
+        const byTable: Record<string, Record<string, string>> = { metrics: {}, workouts: {} };
+        for (const table of ['metrics', 'workouts'] as const) {
+          const rows = await db.prepare(
+            `SELECT source, MAX(${readingInstant(table)}) AS timestamp FROM ${table} WHERE user_id = ? GROUP BY source`
+          ).all(userId) as any[];
+          for (const r of rows) {
+            if (!r?.source || !r?.timestamp) continue;
+            byTable[table][r.source] = r.timestamp instanceof Date ? r.timestamp.toISOString() : String(r.timestamp);
+          }
+        }
+        const perModule = moduleFreshness(byTable, modules.map((m: any) => m.id));
+        const freshness: Record<string, string | null> = {};
+        for (const [id, f] of Object.entries(perModule)) freshness[id] = f.lastReading;
+
+        // Newest BP reading. Both halves are taken from the SAME instant: pairing
+        // a systolic from this morning with a diastolic from last week would
+        // invent a reading that was never taken.
+        const bpRows = await db.prepare(
+          `SELECT type, value, ${readingInstant('metrics')} AS timestamp FROM metrics
+            WHERE user_id = ? AND type IN ('blood_pressure_systolic','blood_pressure_diastolic')
+            ORDER BY timestamp DESC LIMIT 20`
+        ).all(userId) as any[];
+        let bp: { systolic: number | null; diastolic: number | null; timestamp: string } | null = null;
+        if (bpRows.length) {
+          const iso = (v: any) => (v instanceof Date ? v.toISOString() : String(v));
+          const newest = iso(bpRows[0].timestamp);
+          const atNewest = bpRows.filter((r) => iso(r.timestamp) === newest);
+          bp = {
+            systolic: atNewest.find((r) => r.type === 'blood_pressure_systolic')?.value ?? null,
+            diastolic: atNewest.find((r) => r.type === 'blood_pressure_diastolic')?.value ?? null,
+            timestamp: newest,
+          };
+        }
+
+        // Today's readiness snapshot, plus a trailing mean for context in the text.
+        const snap = await db.prepare(
+          "SELECT snapshot_date, score FROM readiness_snapshots WHERE user_id = ? AND snapshot_date = ?"
+        ).get(userId, today) as any;
+        let readiness: { date: string; score: number; average: number | null } | null = null;
+        if (snap && Number.isFinite(Number(snap.score))) {
+          const avgRow = await db.prepare(
+            `SELECT AVG(score) AS avg FROM readiness_snapshots
+              WHERE user_id = ? AND snapshot_date < ? AND snapshot_date >= ?`
+          ).get(userId, today, addDays(today, -30)) as any;
+          const avg = Number(avgRow?.avg);
+          readiness = { date: snap.snapshot_date, score: Number(snap.score), average: Number.isFinite(avg) ? avg : null };
+        }
+
+        const candidates = evaluateAlerts({
+          now, hourNow, today, freshness, bp, readiness, settings: alertSettingsFrom(u),
+        });
+        if (!candidates.length) continue;
+
+        const sentRows = await db.prepare(
+          "SELECT alert_key FROM alerts_sent WHERE user_id = ?"
+        ).all(userId) as any[];
+        const alreadySent = new Set(sentRows.map((r) => r.alert_key));
+        const fresh = candidates.filter((a) => !alreadySent.has(a.key));
+        if (!fresh.length) continue;
+
+        const delivered = new Set(await postAlerts(fresh));
+        for (const a of fresh) {
+          if (!delivered.has(a.key)) continue;
+          try {
+            await db.prepare(
+              "INSERT INTO alerts_sent (user_id, alert_key, kind) VALUES (?, ?, ?)"
+            ).run(userId, a.key, a.kind);
+          } catch (e: any) {
+            // UNIQUE(user_id, alert_key) losing a race with a concurrent tick is
+            // the row already being there, which is the state we wanted anyway.
+            logEvent('warn', `Alerts: could not record ${a.key}: ${e?.message || e}`, 'alerts', userId);
+          }
+        }
+        if (delivered.size) {
+          logEvent('info', `Alerts sent: ${[...delivered].join(', ')}`, 'alerts', userId);
+        }
+      }
+    } catch (e: any) {
+      logEvent('error', `Alert sweep failed: ${e?.message || e}`, 'alerts');
+    } finally {
+      alertRunning = false;
+    }
+  };
+  if (ALERT_TRANSPORT_ENABLED) {
+    setInterval(alertTick, ALERT_TICK_MINUTES * 60 * 1000);
+    setTimeout(() => { void alertTick(); }, 45 * 1000);
+  } else {
+    logEvent('warn', `Alerts: transport disabled (secret ${ALERT_SECRET ? 'present' : 'missing'}) — nothing will be sent`, 'alerts');
+  }
+
 
   await app.get("/api/backups", requireAuth, async (req: any, res) => {
     try {
