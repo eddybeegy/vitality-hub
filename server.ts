@@ -37,6 +37,7 @@ import { WINDOW_DAYS as CARDIO_WINDOW_DAYS } from "./src/lib/cardioTrends";
 import { aggregateMetricBuckets, bucketIndexSql, MetricBucketRow } from "./src/lib/aggregatedMetrics";
 import { calculateReadinessScore, type ReadinessResult } from "./src/lib/readiness";
 import { chooseSource, type SourceCounts } from "./src/lib/sourcePriority";
+import { dedupeOverlappingWorkouts } from "./src/lib/workoutDedupe";
 import { latestBpReadings, BP_TYPES } from "./src/lib/bpLatest";
 import { pairNights, TIMING_TYPES } from "./src/lib/sleepTiming";
 import { computeReadinessHistory, dayRange, explainChange, previousSnapshot, toSnapshot, historyForAIContext, parseStoredComponents, READINESS_ALGO_VERSION, DEFAULT_HISTORY_DAYS, MAX_HISTORY_DAYS, type ReadinessSnapshot } from "./src/lib/readinessHistory";
@@ -3565,6 +3566,41 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       }
     }
 
+    // One training session can land in `workouts` from more than one source: Hevy
+    // writes it with its routine name, exercises and sets, while Apple Health or
+    // HealthSync write the same half hour as a bare "Traditional Strength Training"
+    // with a duration and nothing else. Both rows are legitimate writes -- the
+    // `(user_id, type, timestamp, source)` style uniqueness that protects `metrics`
+    // does not apply -- so the session was listed twice.
+    //
+    // De-duplicate here rather than at ingest. The existing ±30-minute guard lives in
+    // modules/apple_workouts.ts, which means (a) it only ever protects whichever row
+    // arrives SECOND -- in the 2026-10-23 case the hevy row was inserted last (id
+    // 203071 > 203066), so an ingest guard would not have caught it -- and (b)
+    // HealthSync rows are written straight into Postgres by kb-health, outside this
+    // app, so no ingest hook here can see them at all. A read-path filter is
+    // source-agnostic, order-independent, and non-destructive: the row stays in the
+    // table for exports and backfills.
+    const exerciseCountByWorkout = new Map<number, number>();
+    for (const e of exercises) {
+      exerciseCountByWorkout.set(e.workout_id, (exerciseCountByWorkout.get(e.workout_id) ?? 0) + 1);
+    }
+    const deduped = dedupeOverlappingWorkouts(
+      workouts as any[],
+      (id: any) => exerciseCountByWorkout.get(id) ?? 0
+    );
+    const visibleWorkouts = deduped.kept;
+    if (deduped.suppressed.length > 0) {
+      const visibleIds = new Set(visibleWorkouts.map((w: any) => w.id));
+      // Carry the children with their parent so the client cannot render an
+      // exercise list belonging to a workout it was never given.
+      const keptExerciseIds = new Set(
+        exercises.filter(e => visibleIds.has(e.workout_id)).map(e => e.id)
+      );
+      exercises = exercises.filter(e => visibleIds.has(e.workout_id));
+      sets = sets.filter(st => keptExerciseIds.has(st.exercise_id));
+    }
+
     const latestMetrics = latestMetricsResults;
 
     const mealCutoffDate = new Date();
@@ -3764,7 +3800,7 @@ Be precise, analytical, and ${user.ai_persona ? `match a "${user.ai_persona}" to
       if (pick) syncIssuesByModule[m.id] = pick;
     }
 
-    const result = { metrics, latestMetrics, workouts, routines, routineExercises, exercises, sets, mealItems, syncLogs, syncIssues,
+    const result = { metrics, latestMetrics, workouts: visibleWorkouts, routines, routineExercises, exercises, sets, mealItems, syncLogs, syncIssues,
       syncIssuesByModule,
       dataFreshness: { bySource: readingFreshness, byTable: readingFreshnessByTable, byModule: freshnessByModule } };
     summaryCache.set(summaryCacheKey, { data: result, timestamp: Date.now() });

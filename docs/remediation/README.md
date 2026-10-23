@@ -530,3 +530,44 @@ state must survive losing it. So:
   Tracker item 65 is roadmap feature 1 (PR #38). Cite tracker numbers from this file.
   **Still genuinely open:** item 64 — `logEvent` escapes control characters for the file sink
   but writes the raw message into the `logs` table.
+
+## 2026-10-23 06:45 — duplicate workouts from a second source (builder)
+
+Kieron: *"There's a traditional strength training workout showing which corresponds
+with this mornings Hevy workout. This shouldn't appear where a workout from another
+source with more detail exists."*
+
+One training session reaches `workouts` from more than one ingest path. Hevy writes it
+with its routine name, 8 exercises and their sets; HealthSync writes the same half hour
+as a bare `Traditional Strength Training` with a duration only. Both are legitimate
+writes — the `(user_id, type, timestamp, source)` uniqueness that makes `metrics`
+collision-proof has no equivalent on `workouts` — so the session was listed twice.
+
+Both pre-existing de-dupe mechanisms are hardcoded to `source = 'apple_health'`
+(`modules/apple_workouts.ts:113` at ingest; `POST /api/debug/deduplicate`), and
+HealthSync rows are written straight into Postgres by `kb-health` on the host, outside
+this app, so neither could ever see them.
+
+Fixed on the **read path**, source-agnostic: `src/lib/workoutDedupe.ts` hides a workout
+when a *different* source describes the same session (±30 min) with more detail, ranking
+on recorded exercise count first and falling back to source rank only when detail ties.
+Wired into `/api/data/summary`, which is what feeds the workouts list, with the
+suppressed rows' exercises and sets filtered out alongside them.
+
+Deliberate choices:
+
+- **Read path, not ingest.** An ingest guard only ever protects whichever row arrives
+  second, and here the *hevy* row was inserted last (id 203071 > 203066) — it would not
+  have caught this. Nothing is deleted either, so exports and backfills still see the
+  row.
+- **Cross-source only.** Two rows from the same source half an hour apart are two
+  workouts; the live DB has 8 such `apple_health` pairs and they are untouched.
+- **Not applied to `/api/ai/data`** — that route already filters `source = 'hevy'`.
+- **Not applied to `workouts.csv`** — an export should stay raw.
+
+Verified against all 488 live workout rows: exactly 2 suppressed, both the known
+healthsync/hevy pairs (2026-10-19 and today), 486 kept. 835 tests pass, 16 of them new.
+
+Noticed, not actioned: `apple_health` workouts stop at **2026-10-13** (Health Auto
+Export appears to have stopped sending them), and 8 intra-`apple_health` duplicate pairs
+remain.
