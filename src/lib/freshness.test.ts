@@ -10,9 +10,9 @@ describe('freshnessStatus', () => {
   it('uses the approved thresholds', () => {
     expect(STALENESS_THRESHOLD_HOURS).toEqual({
       apple_health: 24,
-      apple_workouts: 24,
+      apple_workouts: 48,
       healthsync: 24,
-      withings: 24,
+      withings: 168,
       cronometer: 72,
       hevy: 72,
       nutracheck: 72,
@@ -45,17 +45,31 @@ describe('freshnessStatus', () => {
     expect(freshnessStatus('withings', '', NOW)).toBe('unknown');
   });
 
-  it('a 30h-old reading is good for cronometer but error for withings', () => {
+  it('a 30h-old reading is good for cronometer but error for apple_health', () => {
     const reading = hoursAgo(30);
     expect(freshnessStatus('cronometer', reading, NOW)).toBe('good');
-    expect(freshnessStatus('withings', reading, NOW)).toBe('error');
+    expect(freshnessStatus('apple_health', reading, NOW)).toBe('error');
+  });
+
+  // The two halves of Health Auto Export are graded separately on purpose: a day's
+  // gap in workouts is expected, the same gap in metrics is not.
+  it('splits apple_workouts from apple_health at 30h', () => {
+    const reading = hoursAgo(30);
+    expect(freshnessStatus('apple_workouts', reading, NOW)).toBe('good');
+    expect(freshnessStatus('apple_health', reading, NOW)).toBe('error');
+  });
+
+  it('gives the withings scale a full week before it is stale', () => {
+    expect(freshnessStatus('withings', hoursAgo(120), NOW)).toBe('good');   // 5 days
+    expect(freshnessStatus('withings', hoursAgo(200), NOW)).toBe('error');  // 8+ days
   });
 
   it('honours the offset on the reading, as the live payload sends it', () => {
     // dataFreshness lastReading arrives offset-bearing (timestamptz since item 13).
     // Naive strings are deliberately not tested: parseUTCDate resolves those in the
     // runner's local zone, which is item 44's concern, not this one's.
-    expect(freshnessStatus('withings', '2026-10-20T12:30:00.000Z', NOW)).toBe('good');      // 23.5h
-    expect(freshnessStatus('withings', '2026-10-20T12:30:00+01:00', NOW)).toBe('error');    // 24.5h
+    // apple_health is the 24h module, so these two straddle its boundary.
+    expect(freshnessStatus('apple_health', '2026-10-20T12:30:00.000Z', NOW)).toBe('good');      // 23.5h
+    expect(freshnessStatus('apple_health', '2026-10-20T12:30:00+01:00', NOW)).toBe('error');    // 24.5h
   });
 });

@@ -5,13 +5,21 @@ import { parseUTCDate } from './utils';
 // produce something most days; manually logged ones (food diaries, lifting) can
 // legitimately go quiet over a weekend, so they get three days.
 //
+// Widened on Kieron's instruction (Telegram, 2026-10-23):
+//   - `apple_workouts` -> 48h. Health Auto Export is run by hand and its workout
+//     payload is sparse by design, so a day's gap is normal, not a fault. Note
+//     `apple_health` (the METRICS half of the same source) stays at 24h -- it
+//     syncs thousands of points whenever HAE runs, so a quiet day there is real.
+//   - `withings` -> 7 days. The scale only produces a reading when he stands on
+//     it, which is not a daily event.
+//
 // The Nutracheck module's id is `nutrachek` (one 'c', see handoff fact 2); both
 // spellings are listed so the threshold holds whichever one reaches the widget.
 export const STALENESS_THRESHOLD_HOURS: Record<string, number> = {
   apple_health: 24,
-  apple_workouts: 24,
+  apple_workouts: 48,
   healthsync: 24,
-  withings: 24,
+  withings: 168,
   cronometer: 72,
   hevy: 72,
   nutracheck: 72,

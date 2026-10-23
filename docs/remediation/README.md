@@ -571,3 +571,24 @@ healthsync/hevy pairs (2026-10-19 and today), 486 kept. 835 tests pass, 16 of th
 Noticed, not actioned: `apple_health` workouts stop at **2026-10-13** (Health Auto
 Export appears to have stopped sending them), and 8 intra-`apple_health` duplicate pairs
 remain.
+
+## 2026-10-23 10:02 — Data Freshness windows widened (Kieron, Telegram)
+
+> "The Data freshness window for apple workouts can be extended to 48 hours. Data
+> freshness window for Withings can be extended to 7 days"
+
+`src/lib/freshness.ts`: `apple_workouts` 24h -> 48h, `withings` 24h -> 168h.
+
+Deliberate: **`apple_health` stays at 24h.** It and `apple_workouts` are the two
+halves of the same Health Auto Export source but they fail differently — HAE is run
+by hand and its workout payload is sparse by design (latest `apple_health` workout
+row is 2026-10-13, which Kieron confirmed is normal), while the metrics half pushes
+thousands of points on every run, so a quiet day there is a real fault worth a red
+badge. Grading them together would have meant either hiding a real metrics outage or
+crying wolf on every workout gap.
+
+`STALENESS_THRESHOLD_HOURS` is the single source of truth — `SyncHealthWidget` reads
+both the status and its "stale after Nh" tooltip through `stalenessThresholdHours()`,
+so no second copy needed updating. Two tests that happened to use `withings` as their
+24h example were repointed at `apple_health`, and the withings boundary now has its
+own 5-day-good / 8-day-stale case. 837/837 pass, typecheck clean.
