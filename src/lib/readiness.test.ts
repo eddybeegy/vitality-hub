@@ -67,4 +67,36 @@ describe('calculateReadinessScore', () => {
     )!;
     expect(r.components[0].score).toBeLessThan(40);
   });
+
+  describe('sleep duration source', () => {
+    // 2026-10-23, verbatim: 6 h 39 m recorded asleep, 5 h 14 m of classified stages.
+    const night = (extra: any[]) => [
+      ...series('hrv', '2026-10-21', [...alternating(14, 48, 52), 50]),
+      ...series('active_energy', '2026-10-20', [500, 500]),
+      ...extra,
+    ];
+    const stages = [
+      ...series('sleep_core', '2026-10-21', [10778.1845703125]),
+      ...series('sleep_rem', '2026-10-21', [5209.4931640625]),
+      ...series('sleep_deep', '2026-10-21', [2844.308349609375]),
+    ];
+    const label = (metrics: any[]) =>
+      calculateReadinessScore(metrics, [], LONDON)!.components.find(c => c.name === "Sleep")!.label;
+
+    it('prefers the recorded total over an undercounting stage breakdown', () => {
+      expect(label(night([...stages, ...series('sleep_total', '2026-10-21', [23951.71875])]))).toBe('6.7h / 8h');
+    });
+
+    it('still uses the stage sum when there is no recorded total', () => {
+      expect(label(night(stages))).toBe('5.2h / 8h');
+    });
+
+    it('discards an implausible recorded total in favour of the stages', () => {
+      expect(label(night([...stages, ...series('sleep_total', '2026-10-21', [13 * 3600])]))).toBe('5.2h / 8h');
+    });
+
+    it('falls back to 8h when the only figure is an implausible total', () => {
+      expect(label(night(series('sleep_total', '2026-10-21', [13 * 3600])))).toBe('8.0h / 8h');
+    });
+  });
 });

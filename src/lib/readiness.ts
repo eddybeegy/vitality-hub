@@ -132,17 +132,24 @@ export function calculateReadinessScore(
     const latestDay = sortedDays[0];
     const data = sleepDays[latestDay];
     
-    // Priority:
-    // 1. Explicit 'sleep' metric (ideal)
-    // 2. Sum of stages (very accurate)
-    // 3. 'sleep_total' if it's within a reasonable "asleep" range (< 11-12h)
-    let actualSleepSeconds = data.total || data.stages;
-    
-    // If we have neither 'sleep' nor stages, but have sleep_total
-    if (actualSleepSeconds === 0 && data.totalRecord > 0) {
-      // Use sleep_total as a fallback if it looks like an asleep duration rather than "time in bed"
-      // If it's over 12 hours, it's weighted down or capped because it's likely "Time in Bed"
-      actualSleepSeconds = data.totalRecord > 43200 ? 28800 : data.totalRecord; 
+    // The recorded whole-night total wins over the stage breakdown (Kieron,
+    // 2026-10-24). HealthKit's core/deep/rem classification has gaps, so the stage
+    // sum is a FLOOR on time asleep, not a measurement of it: the night of
+    // 2026-10-23 was 6 h 39 m asleep with only 5 h 14 m of classified stages, and
+    // this card reported "5.2h / 8h" -- which then went into the AI payload and
+    // Smart Adjustments. `total` ('sleep') and `totalRecord` ('sleep_total') are two
+    // names for the same recorded figure depending on which side of METRIC_MAP the
+    // rows came from, so both count as recorded.
+    //
+    // A recorded figure over 12 h is not plausible as time asleep -- it is Apple's
+    // "time in bed" leaking into the total -- so it is discarded in favour of the
+    // stages, and only if there are no stages either does it fall back to the
+    // long-standing 8 h stand-in rather than scoring the night as 12 h+.
+    const recorded = Math.max(data.total, data.totalRecord);
+    let actualSleepSeconds = Math.max(recorded > 43200 ? 0 : recorded, data.stages);
+
+    if (actualSleepSeconds === 0 && recorded > 0) {
+      actualSleepSeconds = 28800;
     }
     
     if (actualSleepSeconds > 0) {
