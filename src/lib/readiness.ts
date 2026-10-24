@@ -109,12 +109,17 @@ export function calculateReadinessScore(
     
     if (!sleepDays[day]) sleepDays[day] = { total: 0, stages: 0, totalRecord: 0 };
     
+    // MAX, not +=, for the two whole-night figures -- same reason as
+    // getSleepDurationData: a day bucket is one night, and `sleep` / `sleep_total`
+    // are two representations of it (METRIC_MAP folds `sleep` into `sleep_total`
+    // client-side), not two sleeps. Summing them is what put 11.9 h on the Sleep
+    // Duration card. Stages are genuine parts and still add.
     if (m.type === 'sleep') {
-      sleepDays[day].total += m.value;
+      sleepDays[day].total = Math.max(sleepDays[day].total, m.value);
     } else if (['sleep_core', 'sleep_deep', 'sleep_rem'].includes(m.type)) {
       sleepDays[day].stages += m.value;
     } else if (m.type === 'sleep_total' || m.type === 'sleep_analysis') {
-      sleepDays[day].totalRecord += m.value;
+      sleepDays[day].totalRecord = Math.max(sleepDays[day].totalRecord, m.value);
     }
   });
 

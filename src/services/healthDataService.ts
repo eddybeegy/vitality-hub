@@ -337,9 +337,22 @@ export const getSleepDurationData = (metrics: StandardizedMetric[], timezone: st
     const val = (m.unit === 's' || m.unit === 'sec' || valObj > 100) ? valObj / 3600 : 
                 (m.unit === 'min' || m.unit === 'minutes') ? valObj / 60 : valObj;
                 
-    if (m.type === 'sleep') grouped[dateStr].direct += val;
+    // MAX, not +=, for `direct` and `total`. One day bucket is one night, and the
+    // rows reaching here are the server's daily roll-ups -- so two entries landing in
+    // the same bucket are never two sleeps to add up, they are two REPRESENTATIONS of
+    // the same night. /api/data/summary emits both an aggregated `sleep_total` row and
+    // a synthetic `sleep` row (server.ts aggregateDailyMetrics' stage reconciliation),
+    // and `standardizeMetrics` maps `sleep` -> `sleep_total` via METRIC_MAP, so both
+    // arrive here typed `sleep_total` and `+=` summed them. That was hidden for as long
+    // as the two agreed: `deduplicateMetrics` drops the second of two same-type values
+    // within 1% of each other, and until 2026-10-23 the recorded total always equalled
+    // the stage sum exactly. The night of 2026-10-23 was the first to diverge (6.65 h
+    // asleep vs a 5.23 h stage breakdown, matching Apple Health's own 6h40m / 5h16m),
+    // the 1% guard no longer applied, and the card read 11.9 h -- the two added
+    // together. Stages still sum: core/deep/rem are distinct parts of one night.
+    if (m.type === 'sleep') grouped[dateStr].direct = Math.max(grouped[dateStr].direct, val);
     else if (['sleep_core', 'sleep_deep', 'sleep_rem'].includes(m.type)) grouped[dateStr].stages += val;
-    else if (m.type === 'sleep_total' || m.type === 'sleep_analysis') grouped[dateStr].total += val;
+    else if (m.type === 'sleep_total' || m.type === 'sleep_analysis') grouped[dateStr].total = Math.max(grouped[dateStr].total, val);
   });
   
   return Object.values(grouped).map((d: any) => {
